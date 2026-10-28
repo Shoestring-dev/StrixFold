@@ -1,0 +1,14 @@
+{
+ "rows": 65536,
+ "half": 32,
+ "derived_from": {
+  "creator_kit": "bertholomus/deepseek-v4.1-tensorfold-tp2-2xgb10@1b5ebbee3cc8b63b8b875e46a314135eb6d669db kit/rope.json",
+  "creator_rows": 1114112,
+  "creator_hashes_matched": true
+ },
+ "rope-plain-cos.f32": "9639bbad662fcadae0ae92c705ecaaf7107533ced8b02c340a8593766575159d",
+ "rope-plain-sin.f32": "6d4e48394aad2d717c2b4f81b89bc2a1886f5e8f917573040441ad542bb148a5",
+ "rope-compressed-cos.f32": "b615afd493ad12bffdd9733be80d4be78ce69931aa576dee570a284eab4eef1b",
+ "rope-compressed-sin.f32": "92c74c4985cd2c001ca9707360433395e74ff833f518c29af4ad76b3358a5b24",
+ "note": "rope_reference.py output for 65,536 rows (the prepared bundle inputs-tp2-c178a012, 2026-10-19): the first 65,536 rows of tables whose full 1,114,112 rows hash equal to the creator kit v0.6.1 rope.json (creator_kit_v0.6.1_rope.json)"
+}

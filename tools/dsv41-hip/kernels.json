@@ -1,0 +1,1262 @@
+[
+ {
+  "id": "tri._embed_init",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_basic.zig:40"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_partial",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_basic.zig:20"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_finish",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_basic.zig:21",
+   "tri_hc.zig:171"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_finish_s",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 5,
+  "sites": [
+   "tri_hc.zig:105"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_sinkhorn",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_hc.zig:113"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_mix_part",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 15,
+  "sites": [
+   "tri_hc.zig:91",
+   "tri_hc.zig:95"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_mix_pf",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_hc.zig:154",
+   "tri_hc.zig:161"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_post",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 3,
+  "sites": [
+   "tri_basic.zig:30"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_post_only",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_hc.zig:125"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._collapse",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_basic.zig:55"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._collapse_norm",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "mhc",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_basic.zig:50"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._tap",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "draft",
+  "reach": "drafts",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_basic.zig:45"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rmsnorm",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "norm",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 8,
+  "sites": [
+   "tri_basic.zig:35"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rmsnorm_rot",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "norm",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_norm.zig:61"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._q_kv_norm",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "norm/rope",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_norm.zig:50"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._kv_norm_rope",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "norm/rope",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 6,
+  "sites": [
+   "tri_norm.zig:69"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rope_heads",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "rope",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 10,
+  "sites": [
+   "tri_norm.zig:78"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._engram_gate",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "engram",
+  "reach": "engram",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_basic.zig:60"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rowmm2",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "router/small-gemm",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_norm.zig:92",
+   "tri_norm.zig:105"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rowmm2r",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "router/small-gemm",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 5,
+  "sites": [
+   "tri_norm.zig:87"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rowmm_parts",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "router/small-gemm",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 16,
+  "sites": [
+   "tri_norm.zig:129"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._route",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "router",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_norm.zig:139"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._route_parts",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "router",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 5,
+  "sites": [
+   "tri_norm.zig:135"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._index_score",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 16,
+  "sites": [
+   "tri_index.zig:76",
+   "tri_index.zig:105"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._index_score_rows",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 16,
+  "sites": [
+   "tri_index.zig:86"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._index_score_cand",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 1,
+  "sites": [
+   "tri_index.zig:119"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._score_keys",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 6,
+  "sites": [
+   "tri_index.zig:166"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._gather_tiles",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_index.zig:158"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._topk_sel",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 10,
+  "sites": [
+   "tri_index.zig:137"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._topk_finish",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_index.zig:140"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._sparse_attn_part",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "attention",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 15,
+  "sites": [
+   "tri_attn.zig:107"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._sparse_attn_merge",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "attention",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_attn.zig:130"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._sparse_attn_merge_rot2",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "attention",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_attn.zig:122",
+   "tri_attn.zig:220"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._fp4_store",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "cache",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_attn.zig:136"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._fp4qd_p2",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "cache",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 2,
+  "sites": [
+   "tri_attn.zig:143"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._bias",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "markov",
+  "reach": "drafts",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 5,
+  "sites": [
+   "tri_markov.zig:93"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._score",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "markov",
+  "reach": "drafts",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_markov.zig:116"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._finish",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "markov",
+  "reach": "drafts",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_markov.zig:122"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._pick",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "markov",
+  "reach": "drafts",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 4,
+  "sites": [
+   "tri_markov.zig:131"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._gemm",
+  "kind": "triton",
+  "owner": "w-exl3",
+  "group": "exl3-prefill",
+  "reach": "always",
+  "cuda": "captured Triton cubin (kit aot/)",
+  "recorded_variants": 8,
+  "sites": [
+   "tri_markov.zig:161"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._hc_finish_u",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "fallback",
+  "reach": "unreached",
+  "cuda": "hidden 5120 is a multiple of 1024 (tri_hc.zig:137)",
+  "recorded_variants": 0,
+  "sites": [
+   "tri_hc.zig:142",
+   "tri_hc.zig:314"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._sparse_attn_merge_rot",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "fallback",
+  "reach": "unreached",
+  "cuda": "head_dim 512 is a power of two (tri_attn.zig:122)",
+  "recorded_variants": 0,
+  "sites": [
+   "tri_attn.zig:122"
+  ],
+  "specs": null
+ },
+ {
+  "id": "tri._rowmm",
+  "kind": "triton",
+  "owner": "w-tri",
+  "group": "fallback",
+  "reach": "unreached",
+  "cuda": "rowmm2's fallback, never recorded (tri_norm.zig:97)",
+  "recorded_variants": 0,
+  "sites": [
+   "tri_norm.zig:99"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_bf16_to_f32",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/torch_ops/pointwise.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:92"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_f32_to_bf16",
+  "kind": "native",
+  "owner": null,
+  "group": "unused",
+  "reach": "unused",
+  "cuda": "zig/kernels/cuda/torch_ops/pointwise.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:257"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_strided_copy",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/torch_ops/movement.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:280"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_gather_rows",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/torch_ops/movement.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:317"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_f16_to_f32",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:102"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_add2_bf16",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue (rank-ordered add)",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:113"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_scatter_rows",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:158"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_copy_rows16",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:272"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_argmax_rows",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:292"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_clock",
+  "kind": "native",
+  "owner": "w-arch",
+  "group": "glue",
+  "reach": "profile",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:302"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_l2_prefetch",
+  "kind": "native",
+  "owner": null,
+  "group": "nvidia-l2",
+  "reach": "cuda-only",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:187"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_topk_i64",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:127"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_topk_indices",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:143"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_cand_fast",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:173"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_iota_vis",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:198"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_block_max",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:216"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_pool_pick",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:233"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_apply_pool",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_ops.cu",
+  "recorded_variants": null,
+  "sites": [
+   "ops.zig:247"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_rms_norm",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "norm",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_torch.cu",
+  "recorded_variants": null,
+  "sites": [
+   "exact.zig:75"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_compress2",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "cache",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_torch.cu",
+  "recorded_variants": null,
+  "sites": [
+   "exact.zig:87"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_rope",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "rope",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_torch.cu",
+  "recorded_variants": null,
+  "sites": [
+   "exact.zig:104"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_bf16_scale",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "indexer",
+  "reach": "always",
+  "cuda": "zig/kernels/cuda/dsv41_torch.cu",
+  "recorded_variants": null,
+  "sites": [
+   "exact.zig:115"
+  ],
+  "specs": null
+ },
+ {
+  "id": "native.tf_ds_hc_mean4",
+  "kind": "native",
+  "owner": "w-tri",
+  "group": "draft",
+  "reach": "drafts",
+  "cuda": "zig/kernels/cuda/dsv41_torch.cu",
+  "recorded_variants": null,
+  "sites": [
+   "exact.zig:127"
+  ],
+  "specs": null
+ },
+ {
+  "id": "exl3.rot_many",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "dense-decode",
+  "reach": "always",
+  "cuda": "linear_grouped.cubin rot_many_kernel",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_linear.zig:172"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.glinear",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "dense-decode",
+  "reach": "always",
+  "cuda": "linear_grouped.cubin glinear_kernel<K2,CB,W>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_linear.zig:219"
+  ],
+  "specs": [
+   {
+    "k2": 8,
+    "cb": 2,
+    "warps": 4
+   },
+   {
+    "k2": 8,
+    "cb": 2,
+    "warps": 8
+   },
+   {
+    "k2": 10,
+    "cb": 2,
+    "warps": 4
+   },
+   {
+    "k2": 10,
+    "cb": 2,
+    "warps": 8
+   },
+   {
+    "k2": 12,
+    "cb": 2,
+    "warps": 4
+   },
+   {
+    "k2": 12,
+    "cb": 2,
+    "warps": 8
+   },
+   {
+    "k2": 16,
+    "cb": 2,
+    "warps": 4
+   },
+   {
+    "k2": 16,
+    "cb": 2,
+    "warps": 8
+   }
+  ]
+ },
+ {
+  "id": "exl3.rot_in",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "dense-prefill",
+  "reach": "always",
+  "cuda": "linear.cubin rot_in_kernel",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_prefill.zig:74"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.unpack",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "dense-prefill",
+  "reach": "always",
+  "cuda": "linear.cubin unpack_kernel<K2,CB>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_prefill.zig:87"
+  ],
+  "specs": [
+   {
+    "k2": 8,
+    "cb": 2
+   },
+   {
+    "k2": 10,
+    "cb": 2
+   },
+   {
+    "k2": 12,
+    "cb": 2
+   },
+   {
+    "k2": 16,
+    "cb": 2
+   }
+  ]
+ },
+ {
+  "id": "exl3.experts.group_count",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:219"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.group_place",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:224"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.work_list",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:236"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.rot_in",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin rot_in_kernel<bf16>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:243"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.gateup_epilogue",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:257"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.down_combine",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:269"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.decode_prep",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts",
+  "reach": "always",
+  "cuda": "experts.cubin decode_prep_kernel<bf16>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:359,363"
+  ],
+  "specs": [
+   {}
+  ]
+ },
+ {
+  "id": "exl3.experts.grouped_mma",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts-prompt",
+  "reach": "always",
+  "cuda": "experts_cb.cubin grouped_mma_kernel<CB,LO,HI,1,4>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:212"
+  ],
+  "specs": [
+   {
+    "cb": 2,
+    "lo": 2,
+    "hi": 10
+   },
+   {
+    "cb": 2,
+    "lo": 8,
+    "hi": 8
+   }
+  ]
+ },
+ {
+  "id": "exl3.experts.grouped_rows",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts-prompt",
+  "reach": "always",
+  "cuda": "experts_cb.cubin grouped_rows_kernel<CB,8,4,1,LO,HI,2,0>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:213"
+  ],
+  "specs": [
+   {
+    "cb": 2,
+    "lo": 2,
+    "hi": 10
+   },
+   {
+    "cb": 2,
+    "lo": 8,
+    "hi": 8
+   }
+  ]
+ },
+ {
+  "id": "exl3.experts.grouped_cp",
+  "kind": "exl3",
+  "owner": "w-exl3",
+  "group": "experts-decode",
+  "reach": "always",
+  "cuda": "experts_cb.cubin grouped_cp_kernel<CB,8,4,3,LO,HI,EPI>",
+  "recorded_variants": null,
+  "sites": [
+   "exl3_experts.zig:360-363"
+  ],
+  "specs": [
+   {
+    "cb": 2,
+    "lo": 2,
+    "hi": 10,
+    "epi": 1
+   },
+   {
+    "cb": 2,
+    "lo": 2,
+    "hi": 10,
+    "epi": 2
+   },
+   {
+    "cb": 2,
+    "lo": 8,
+    "hi": 8,
+    "epi": 1
+   },
+   {
+    "cb": 2,
+    "lo": 8,
+    "hi": 8,
+    "epi": 2
+   }
+  ]
+ },
+ {
+  "id": "blas.sgemm_xwT",
+  "kind": "library",
+  "owner": "w-arch (binding) / w-tri (routing+indexer numerics)",
+  "group": "fp32 GEMM",
+  "reach": "always",
+  "cuda": "cublasSgemm_v2 T,N",
+  "recorded_variants": null,
+  "sites": [
+   "prompt.zig:946 indexer weights",
+   "prompt.zig:1041 MoE gate logits",
+   "draft.zig:631 draft gate"
+  ],
+  "specs": null
+ },
+ {
+  "id": "blas.sgemm_xv",
+  "kind": "library",
+  "owner": "w-arch (binding) / w-tri (numerics)",
+  "group": "fp32 GEMV",
+  "reach": "drafts",
+  "cuda": "cublasSgemm_v2 N,N m=1",
+  "recorded_variants": null,
+  "sites": [
+   "draft.zig:541 confidence head"
+  ],
+  "specs": null
+ },
+ {
+  "id": "coll.bootstrap",
+  "kind": "library",
+  "owner": "w-link",
+  "group": "collective",
+  "reach": "always",
+  "cuda": "ncclGetUniqueId + ncclCommInitRank over the TCP link",
+  "recorded_variants": null,
+  "sites": [
+   "model.zig:206 Fan.open",
+   "model.zig:208 fan.comm -> prompt2d.zig:66-84",
+   "model.zig:378 comm.deinit"
+  ],
+  "specs": null
+ },
+ {
+  "id": "coll.allgather_prompt",
+  "kind": "library",
+  "owner": "w-link",
+  "group": "collective",
+  "reach": "always",
+  "cuda": "ncclAllGather fp32 [world, n, D]",
+  "recorded_variants": null,
+  "sites": [
+   "prompt.zig:1012 attention/MoE partials (model.zig:632,638)",
+   "prompt.zig:1232 Engram wkv",
+   "prompt.zig:1348 head"
+  ],
+  "specs": null
+ },
+ {
+  "id": "coll.allgather_decode",
+  "kind": "library",
+  "owner": "w-link",
+  "group": "collective",
+  "reach": "always",
+  "cuda": "Engine.gatherF32 -> ncclAllGather (or verbs ring)",
+  "recorded_variants": null,
+  "sites": [
+   "round.zig:978 Engram",
+   "round.zig:998 attention",
+   "round.zig:1008 MoE",
+   "round.zig:1027 head",
+   "draft.zig:504 block attention",
+   "draft.zig:511 block MoE",
+   "draft.zig:108 Markov gather"
+  ],
+  "specs": null
+ },
+ {
+  "id": "coll.device_proxy",
+  "kind": "library",
+  "owner": "w-link",
+  "group": "collective (graphs)",
+  "reach": "graphs",
+  "cuda": "rdma_gather.cu dsv41_rdma_stage/collect/collect_into",
+  "recorded_variants": null,
+  "sites": [
+   "rdma.zig:448,487,512 (verbs ring; replaced by a TCP proxy with the same stage/collect kernel pair)"
+  ],
+  "specs": null
+ }
+]

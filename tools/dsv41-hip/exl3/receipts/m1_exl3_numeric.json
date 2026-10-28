@@ -1,0 +1,1736 @@
+{
+ "schema": "kdec.m1.exl3-numeric/1",
+ "utc": "2026-10-20T10:42:54.991622Z",
+ "host": "node1",
+ "deploy": "~/tfp/deploy/b010ee4ae317",
+ "objects": {
+  "exl3": {
+   "path": "~/tfp/deploy/b010ee4ae317/native-hip/share/tensorfold/hip/gfx1151/dsv41/objects/d639fcc6e3acb98d78873958562e7bbf9b8c036c56532c1158da5688e9a7335b.hsaco",
+   "sha256": "d639fcc6e3acb98d78873958562e7bbf9b8c036c56532c1158da5688e9a7335b"
+  },
+  "exl3_pf": {
+   "path": "~/tfp/deploy/b010ee4ae317/native-hip/share/tensorfold/hip/gfx1151/dsv41/objects/b7f94ce9196255330ee49e31273308a8bed63388fe6ab07878135d0370ab3f62.hsaco",
+   "sha256": "b7f94ce9196255330ee49e31273308a8bed63388fe6ab07878135d0370ab3f62"
+  }
+ },
+ "harness": "kdec branch tools/dsv41-hip/exl3/kdec/harness.hip (hip/kdec_r), modes glinear / dexperts / pfexperts / pgemm",
+ "contract": "w-ref's exl3.linear contract (fp64 reference of the decoded weights; bound ratio, probabilistic exceedances, nrmse <= 1e-3 fp32 out / 3.5e-3 bf16 out) per layer; experts: nrmse <= 2e-3, worst row <= 8e-3, no non-finite, decode scratch protocol clean",
+ "not_reached": [
+  "exl3.glinear k2 4 / 6 (no dense tensor of those K2)",
+  "exl3.glinear k2 16 warps 8, k2 8 warps 4 (no such shape)",
+  "exl3.experts.grouped_cp lo8_hi8 (no layer whose experts are all K2 8)",
+  "exl3.pf_experts gu / down nm 128 (needs slots x rows >= 48 x experts: >= 2,640 rows a chunk at 385 experts; chunks are <= 2,048)",
+  "exl3.unpack (the prompt path's gemm reads the trellis directly; unpack is graded bit-exact by the M1.exl3-exact receipt)"
+ ],
+ "matrix": [
+  {
+   "kernel": "exl3.experts.decode_prep",
+   "spec": "-",
+   "rows": "1",
+   "records": 5,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl rows 1",
+    "r2_x20.jsonl rows 1",
+    "r2_x29.jsonl rows 1",
+    "r2_x39.jsonl rows 1",
+    "r2_xm0.jsonl rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.decode_prep",
+   "spec": "-",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 15,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl rows 17",
+    "r2_x11.jsonl rows 33",
+    "r2_x11.jsonl rows 63",
+    "r2_x20.jsonl rows 17",
+    "r2_x20.jsonl rows 33",
+    "r2_x20.jsonl rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.decode_prep",
+   "spec": "-",
+   "rows": "2-6 (verify)",
+   "records": 15,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl rows 2",
+    "r2_x11.jsonl rows 5",
+    "r2_x11.jsonl rows 6",
+    "r2_x20.jsonl rows 2",
+    "r2_x20.jsonl rows 5",
+    "r2_x20.jsonl rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.decode_prep",
+   "spec": "-",
+   "rows": "7-16 (round rows)",
+   "records": 10,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl rows 8",
+    "r2_x11.jsonl rows 16",
+    "r2_x20.jsonl rows 8",
+    "r2_x20.jsonl rows 16",
+    "r2_x29.jsonl rows 8",
+    "r2_x29.jsonl rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 4/8",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 4/8",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 17",
+    "r2_x20.jsonl:layer 20 rows 33",
+    "r2_x20.jsonl:layer 20 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 4/8",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 2",
+    "r2_x20.jsonl:layer 20 rows 5",
+    "r2_x20.jsonl:layer 20 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 4/8",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 8",
+    "r2_x20.jsonl:layer 20 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/10",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/10",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 17",
+    "r2_x39.jsonl:layer 39 rows 33",
+    "r2_x39.jsonl:layer 39 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/10",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 2",
+    "r2_x39.jsonl:layer 39 rows 5",
+    "r2_x39.jsonl:layer 39 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/10",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 8",
+    "r2_x39.jsonl:layer 39 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 17",
+    "r2_x11.jsonl:layer 11 rows 33",
+    "r2_x11.jsonl:layer 11 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 2",
+    "r2_x11.jsonl:layer 11 rows 5",
+    "r2_x11.jsonl:layer 11 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 8",
+    "r2_x11.jsonl:layer 11 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8/10",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8/10",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 17",
+    "r2_x29.jsonl:layer 29 rows 33",
+    "r2_x29.jsonl:layer 29 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8/10",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 2",
+    "r2_x29.jsonl:layer 29 rows 5",
+    "r2_x29.jsonl:layer 29 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 1, K2 6/8/10",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 8",
+    "r2_x29.jsonl:layer 29 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 4/8",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 4/8",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 17",
+    "r2_x20.jsonl:layer 20 rows 33",
+    "r2_x20.jsonl:layer 20 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 4/8",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 2",
+    "r2_x20.jsonl:layer 20 rows 5",
+    "r2_x20.jsonl:layer 20 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 4/8",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x20.jsonl:layer 20 rows 8",
+    "r2_x20.jsonl:layer 20 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/10",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/10",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 17",
+    "r2_x39.jsonl:layer 39 rows 33",
+    "r2_x39.jsonl:layer 39 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/10",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 2",
+    "r2_x39.jsonl:layer 39 rows 5",
+    "r2_x39.jsonl:layer 39 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/10",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x39.jsonl:layer 39 rows 8",
+    "r2_x39.jsonl:layer 39 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 17",
+    "r2_x11.jsonl:layer 11 rows 33",
+    "r2_x11.jsonl:layer 11 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 2",
+    "r2_x11.jsonl:layer 11 rows 5",
+    "r2_x11.jsonl:layer 11 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x11.jsonl:layer 11 rows 8",
+    "r2_x11.jsonl:layer 11 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8/10",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8/10",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 17",
+    "r2_x29.jsonl:layer 29 rows 33",
+    "r2_x29.jsonl:layer 29 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8/10",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 2",
+    "r2_x29.jsonl:layer 29 rows 5",
+    "r2_x29.jsonl:layer 29 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi10 epi 2, K2 6/8/10",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_x29.jsonl:layer 29 rows 8",
+    "r2_x29.jsonl:layer 29 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 1, K2 8/12",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 1, K2 8/12",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 17",
+    "r2_xm0.jsonl:layer mtp.0 rows 33",
+    "r2_xm0.jsonl:layer mtp.0 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 1, K2 8/12",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 2",
+    "r2_xm0.jsonl:layer mtp.0 rows 5",
+    "r2_xm0.jsonl:layer mtp.0 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 1, K2 8/12",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 8",
+    "r2_xm0.jsonl:layer mtp.0 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 2, K2 8/12",
+   "rows": "1",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 2, K2 8/12",
+   "rows": "17-63 (short prompt chunks)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 17",
+    "r2_xm0.jsonl:layer mtp.0 rows 33",
+    "r2_xm0.jsonl:layer mtp.0 rows 63"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 2, K2 8/12",
+   "rows": "2-6 (verify)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 2",
+    "r2_xm0.jsonl:layer mtp.0 rows 5",
+    "r2_xm0.jsonl:layer mtp.0 rows 6"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_cp",
+   "spec": "lo2_hi16 epi 2, K2 8/12",
+   "rows": "7-16 (round rows)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_xm0.jsonl:layer mtp.0 rows 8",
+    "r2_xm0.jsonl:layer mtp.0 rows 16"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_mma",
+   "spec": "lo2_hi10 (the fallback when pf_experts cannot plan)",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512 (same routes)",
+    "r2_pf11.jsonl:layer 11 rows 1000 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 512 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 1000 (same routes)",
+    "r2_pf29.jsonl:layer 29 rows 512 (same routes)",
+    "r2_pf29.jsonl:layer 29 rows 1000 (same routes)"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_mma",
+   "spec": "lo2_hi10 (the fallback when pf_experts cannot plan)",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 2048 (same routes)",
+    "r2_pf29.jsonl:layer 29 rows 2048 (same routes)",
+    "r2_pf39.jsonl:layer 39 rows 2048 (same routes)"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_mma",
+   "spec": "lo2_hi10 (the fallback when pf_experts cannot plan)",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64 (same routes)",
+    "r2_pf11.jsonl:layer 11 rows 100 (same routes)",
+    "r2_pf11.jsonl:layer 11 rows 128 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 64 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 100 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 128 (same routes)"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_rows",
+   "spec": "lo2_hi10 (the fallback when pf_experts cannot plan)",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512 (same routes)",
+    "r2_pf11.jsonl:layer 11 rows 1000 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 512 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 1000 (same routes)",
+    "r2_pf29.jsonl:layer 29 rows 512 (same routes)",
+    "r2_pf29.jsonl:layer 29 rows 1000 (same routes)"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_rows",
+   "spec": "lo2_hi10 (the fallback when pf_experts cannot plan)",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 2048 (same routes)",
+    "r2_pf29.jsonl:layer 29 rows 2048 (same routes)",
+    "r2_pf39.jsonl:layer 39 rows 2048 (same routes)"
+   ]
+  },
+  {
+   "kernel": "exl3.experts.grouped_rows",
+   "spec": "lo2_hi10 (the fallback when pf_experts cannot plan)",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64 (same routes)",
+    "r2_pf11.jsonl:layer 11 rows 100 (same routes)",
+    "r2_pf11.jsonl:layer 11 rows 128 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 64 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 100 (same routes)",
+    "r2_pf20.jsonl:layer 20 rows 128 (same routes)"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 10 bm 128",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 16,
+   "pass": true,
+   "evidence": [
+    "r2_pg1000.jsonl:layers.20.attn.wq_a rows 1000",
+    "r2_pg1000.jsonl:layers.20.attn.wkv rows 1000",
+    "r2_pg1000.jsonl:layers.39.attn.wo_a.slice.0 rows 1000",
+    "r2_pg1000.jsonl:layers.20.attn.compressor.wkv rows 1000",
+    "r2_pg129.jsonl:layers.20.attn.wq_a rows 129",
+    "r2_pg129.jsonl:layers.20.attn.wkv rows 129"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 10 bm 128",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pg2048.jsonl:layers.20.attn.wq_a rows 2048",
+    "r2_pg2048.jsonl:layers.20.attn.wkv rows 2048",
+    "r2_pg2048.jsonl:layers.39.attn.wo_a.slice.0 rows 2048",
+    "r2_pg2048.jsonl:layers.20.attn.compressor.wkv rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 10 bm 256",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pg1000.jsonl:layers.20.attn.wq_b rows 1000",
+    "r2_pg1000.jsonl:layers.20.attn.indexer.wq_b rows 1000",
+    "r2_pg1000.jsonl:layers.39.attn.wo_b rows 1000",
+    "r2_pg1000.jsonl:layers.1.engram.wkv rows 1000",
+    "r2_pg129.jsonl:layers.20.attn.wq_b rows 129",
+    "r2_pg129.jsonl:layers.1.engram.wkv rows 129"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 10 bm 256",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pg2048.jsonl:layers.20.attn.wq_b rows 2048",
+    "r2_pg2048.jsonl:layers.20.attn.indexer.wq_b rows 2048",
+    "r2_pg2048.jsonl:layers.39.attn.wo_b rows 2048",
+    "r2_pg2048.jsonl:layers.1.engram.wkv rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 12 bm 128",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_pg1000.jsonl:layers.0.attn.wq_a rows 1000",
+    "r2_pg1000.jsonl:layers.0.attn.wkv rows 1000",
+    "r2_pg129.jsonl:layers.0.attn.wq_a rows 129",
+    "r2_pg129.jsonl:layers.0.attn.wkv rows 129",
+    "r2_pg512.jsonl:layers.0.attn.wq_a rows 512",
+    "r2_pg512.jsonl:layers.0.attn.wkv rows 512"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 12 bm 128",
+   "rows": "2048 (full prompt chunk)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_pg2048.jsonl:layers.0.attn.wq_a rows 2048",
+    "r2_pg2048.jsonl:layers.0.attn.wkv rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 16 bm 128",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pg1000.jsonl:layers.20.attn.indexer.wk rows 1000",
+    "r2_pg129.jsonl:layers.20.attn.indexer.wk rows 129",
+    "r2_pg512.jsonl:layers.20.attn.indexer.wk rows 512"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 16 bm 128",
+   "rows": "2048 (full prompt chunk)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_pg2048.jsonl:layers.20.attn.indexer.wk rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 8 bm 256",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pg1000.jsonl:layers.14.engram.wkv rows 1000",
+    "r2_pg129.jsonl:layers.14.engram.wkv rows 129",
+    "r2_pg512.jsonl:layers.14.engram.wkv rows 512"
+   ]
+  },
+  {
+   "kernel": "exl3.gemm",
+   "spec": "k2 8 bm 256",
+   "rows": "2048 (full prompt chunk)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_pg2048.jsonl:layers.14.engram.wkv rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 4",
+   "rows": "1 (decode)",
+   "records": 9,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv rows 1 (layers.20.attn.wq_a)",
+    "r2_gl_a.jsonl:qa_kv rows 1 (layers.20.attn.wkv)",
+    "r2_gl_a.jsonl:woa rows 1 (layers.39.attn.wo_a.slice.0)",
+    "r2_gl_a.jsonl:woa rows 1 (layers.39.attn.wo_a.slice.1)",
+    "r2_gl_a.jsonl:woa rows 1 (layers.39.attn.wo_a.slice.2)",
+    "r2_gl_a.jsonl:woa rows 1 (layers.39.attn.wo_a.slice.3)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 4",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 27,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:qa_kv rows 17 (layers.20.attn.wq_a)",
+    "r2_gl_b.jsonl:qa_kv rows 17 (layers.20.attn.wkv)",
+    "r2_gl_b.jsonl:woa rows 17 (layers.39.attn.wo_a.slice.0)",
+    "r2_gl_b.jsonl:woa rows 17 (layers.39.attn.wo_a.slice.1)",
+    "r2_gl_b.jsonl:woa rows 17 (layers.39.attn.wo_a.slice.2)",
+    "r2_gl_b.jsonl:woa rows 17 (layers.39.attn.wo_a.slice.3)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 4",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 36,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv rows 2 (layers.20.attn.wq_a)",
+    "r2_gl_a.jsonl:qa_kv rows 2 (layers.20.attn.wkv)",
+    "r2_gl_a.jsonl:woa rows 2 (layers.39.attn.wo_a.slice.0)",
+    "r2_gl_a.jsonl:woa rows 2 (layers.39.attn.wo_a.slice.1)",
+    "r2_gl_a.jsonl:woa rows 2 (layers.39.attn.wo_a.slice.2)",
+    "r2_gl_a.jsonl:woa rows 2 (layers.39.attn.wo_a.slice.3)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 4",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 27,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:qa_kv rows 64 (layers.20.attn.wq_a)",
+    "r2_gl_c.jsonl:qa_kv rows 64 (layers.20.attn.wkv)",
+    "r2_gl_c.jsonl:woa rows 64 (layers.39.attn.wo_a.slice.0)",
+    "r2_gl_c.jsonl:woa rows 64 (layers.39.attn.wo_a.slice.1)",
+    "r2_gl_c.jsonl:woa rows 64 (layers.39.attn.wo_a.slice.2)",
+    "r2_gl_c.jsonl:woa rows 64 (layers.39.attn.wo_a.slice.3)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 4",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 18,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv rows 9 (layers.20.attn.wq_a)",
+    "r2_gl_a.jsonl:qa_kv rows 9 (layers.20.attn.wkv)",
+    "r2_gl_a.jsonl:woa rows 9 (layers.39.attn.wo_a.slice.0)",
+    "r2_gl_a.jsonl:woa rows 9 (layers.39.attn.wo_a.slice.1)",
+    "r2_gl_a.jsonl:woa rows 9 (layers.39.attn.wo_a.slice.2)",
+    "r2_gl_a.jsonl:woa rows 9 (layers.39.attn.wo_a.slice.3)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 8",
+   "rows": "1 (decode)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qb rows 1 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:eng1 rows 1 (layers.1.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 8",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:qb rows 17 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_b.jsonl:eng1 rows 17 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_b.jsonl:qb rows 33 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_b.jsonl:eng1 rows 33 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_c.jsonl:qb rows 63 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_c.jsonl:eng1 rows 63 (layers.1.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 8",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qb rows 2 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:eng1 rows 2 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_a.jsonl:qb rows 5 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:eng1 rows 5 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_a.jsonl:qb rows 6 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:eng1 rows 6 (layers.1.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 8",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:qb rows 64 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_c.jsonl:eng1 rows 64 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_d.jsonl:qb rows 100 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_d.jsonl:eng1 rows 100 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_d.jsonl:qb rows 128 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_d.jsonl:eng1 rows 128 (layers.1.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 10 warps 8",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qb rows 9 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:eng1 rows 9 (layers.1.engram.wkv[0:3072,:])",
+    "r2_gl_b.jsonl:qb rows 16 (layers.20.attn.wq_b[:,0:16384])",
+    "r2_gl_b.jsonl:eng1 rows 16 (layers.1.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 4",
+   "rows": "1 (decode)",
+   "records": 5,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv0 rows 1 (layers.0.attn.wq_a)",
+    "r2_gl_a.jsonl:qa_kv0 rows 1 (layers.0.attn.wkv)",
+    "r2_gl_a.jsonl:mtp_qa rows 1 (mtp.0.attn.wq_a)",
+    "r2_gl_a.jsonl:mtp_qa rows 1 (mtp.0.attn.wkv)",
+    "r2_gl_a.jsonl:main_proj rows 1 (mtp.0.main_proj)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 4",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 15,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:qa_kv0 rows 17 (layers.0.attn.wq_a)",
+    "r2_gl_b.jsonl:qa_kv0 rows 17 (layers.0.attn.wkv)",
+    "r2_gl_b.jsonl:mtp_qa rows 17 (mtp.0.attn.wq_a)",
+    "r2_gl_b.jsonl:mtp_qa rows 17 (mtp.0.attn.wkv)",
+    "r2_gl_b.jsonl:main_proj rows 17 (mtp.0.main_proj)",
+    "r2_gl_b.jsonl:qa_kv0 rows 33 (layers.0.attn.wq_a)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 4",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 20,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv0 rows 2 (layers.0.attn.wq_a)",
+    "r2_gl_a.jsonl:qa_kv0 rows 2 (layers.0.attn.wkv)",
+    "r2_gl_a.jsonl:mtp_qa rows 2 (mtp.0.attn.wq_a)",
+    "r2_gl_a.jsonl:mtp_qa rows 2 (mtp.0.attn.wkv)",
+    "r2_gl_a.jsonl:main_proj rows 2 (mtp.0.main_proj)",
+    "r2_gl_a.jsonl:qa_kv0 rows 5 (layers.0.attn.wq_a)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 4",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 15,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:qa_kv0 rows 64 (layers.0.attn.wq_a)",
+    "r2_gl_c.jsonl:qa_kv0 rows 64 (layers.0.attn.wkv)",
+    "r2_gl_c.jsonl:mtp_qa rows 64 (mtp.0.attn.wq_a)",
+    "r2_gl_c.jsonl:mtp_qa rows 64 (mtp.0.attn.wkv)",
+    "r2_gl_c.jsonl:main_proj rows 64 (mtp.0.main_proj)",
+    "r2_gl_d.jsonl:qa_kv0 rows 100 (layers.0.attn.wq_a)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 4",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 10,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv0 rows 9 (layers.0.attn.wq_a)",
+    "r2_gl_a.jsonl:qa_kv0 rows 9 (layers.0.attn.wkv)",
+    "r2_gl_a.jsonl:mtp_qa rows 9 (mtp.0.attn.wq_a)",
+    "r2_gl_a.jsonl:mtp_qa rows 9 (mtp.0.attn.wkv)",
+    "r2_gl_a.jsonl:main_proj rows 9 (mtp.0.main_proj)",
+    "r2_gl_b.jsonl:qa_kv0 rows 16 (layers.0.attn.wq_a)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 8",
+   "rows": "1 (decode)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:head rows 1 (head[:,0:64640])",
+    "r2_gl_a.jsonl:mtp_qb rows 1 (mtp.0.attn.wq_b[:,0:16384])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 8",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:head rows 17 (head[:,0:64640])",
+    "r2_gl_b.jsonl:mtp_qb rows 17 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_b.jsonl:head rows 33 (head[:,0:64640])",
+    "r2_gl_b.jsonl:mtp_qb rows 33 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_c.jsonl:head rows 63 (head[:,0:64640])",
+    "r2_gl_c.jsonl:mtp_qb rows 63 (mtp.0.attn.wq_b[:,0:16384])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 8",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:head rows 2 (head[:,0:64640])",
+    "r2_gl_a.jsonl:mtp_qb rows 2 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:head rows 5 (head[:,0:64640])",
+    "r2_gl_a.jsonl:mtp_qb rows 5 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_a.jsonl:head rows 6 (head[:,0:64640])",
+    "r2_gl_a.jsonl:mtp_qb rows 6 (mtp.0.attn.wq_b[:,0:16384])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 8",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:head rows 64 (head[:,0:64640])",
+    "r2_gl_c.jsonl:mtp_qb rows 64 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_d.jsonl:head rows 100 (head[:,0:64640])",
+    "r2_gl_d.jsonl:mtp_qb rows 100 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_d.jsonl:head rows 128 (head[:,0:64640])",
+    "r2_gl_d.jsonl:mtp_qb rows 128 (mtp.0.attn.wq_b[:,0:16384])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 12 warps 8",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:head rows 9 (head[:,0:64640])",
+    "r2_gl_a.jsonl:mtp_qb rows 9 (mtp.0.attn.wq_b[:,0:16384])",
+    "r2_gl_b.jsonl:head rows 16 (head[:,0:64640])",
+    "r2_gl_b.jsonl:mtp_qb rows 16 (mtp.0.attn.wq_b[:,0:16384])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 16 warps 4",
+   "rows": "1 (decode)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:idx rows 1 (layers.20.attn.indexer.wk)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 16 warps 4",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:idx rows 17 (layers.20.attn.indexer.wk)",
+    "r2_gl_b.jsonl:idx rows 33 (layers.20.attn.indexer.wk)",
+    "r2_gl_c.jsonl:idx rows 63 (layers.20.attn.indexer.wk)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 16 warps 4",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:idx rows 2 (layers.20.attn.indexer.wk)",
+    "r2_gl_a.jsonl:idx rows 5 (layers.20.attn.indexer.wk)",
+    "r2_gl_a.jsonl:idx rows 6 (layers.20.attn.indexer.wk)",
+    "r2_gl_a.jsonl:idx rows 8 (layers.20.attn.indexer.wk)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 16 warps 4",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:idx rows 64 (layers.20.attn.indexer.wk)",
+    "r2_gl_d.jsonl:idx rows 100 (layers.20.attn.indexer.wk)",
+    "r2_gl_d.jsonl:idx rows 128 (layers.20.attn.indexer.wk)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 16 warps 4",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:idx rows 9 (layers.20.attn.indexer.wk)",
+    "r2_gl_b.jsonl:idx rows 16 (layers.20.attn.indexer.wk)"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 8 warps 8",
+   "rows": "1 (decode)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:eng14 rows 1 (layers.14.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 8 warps 8",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:eng14 rows 17 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_b.jsonl:eng14 rows 33 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_c.jsonl:eng14 rows 63 (layers.14.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 8 warps 8",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:eng14 rows 2 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_a.jsonl:eng14 rows 5 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_a.jsonl:eng14 rows 6 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_a.jsonl:eng14 rows 8 (layers.14.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 8 warps 8",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:eng14 rows 64 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_d.jsonl:eng14 rows 100 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_d.jsonl:eng14 rows 128 (layers.14.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.glinear",
+   "spec": "k2 8 warps 8",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:eng14 rows 9 (layers.14.engram.wkv[0:3072,:])",
+    "r2_gl_b.jsonl:eng14 rows 16 (layers.14.engram.wkv[0:3072,:])"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.combine",
+   "spec": "-",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.combine",
+   "spec": "-",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf20.jsonl:layer 20 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.combine",
+   "spec": "-",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.count",
+   "spec": "-",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.count",
+   "spec": "-",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf20.jsonl:layer 20 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.count",
+   "spec": "-",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 10 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000",
+    "r2_pf39.jsonl:layer 39 rows 512",
+    "r2_pf39.jsonl:layer 39 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 10 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 10 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_pf29.jsonl:layer 29 rows 64",
+    "r2_pf29.jsonl:layer 29 rows 100",
+    "r2_pf29.jsonl:layer 29 rows 128",
+    "r2_pf39.jsonl:layer 39 rows 64",
+    "r2_pf39.jsonl:layer 39 rows 100",
+    "r2_pf39.jsonl:layer 39 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 4 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 4 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_pf20.jsonl:layer 20 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 4 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 6 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000",
+    "r2_pf39.jsonl:layer 39 rows 512",
+    "r2_pf39.jsonl:layer 39 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 6 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 6 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 9,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf29.jsonl:layer 29 rows 64",
+    "r2_pf29.jsonl:layer 29 rows 100",
+    "r2_pf29.jsonl:layer 29 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 8 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 8 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf20.jsonl:layer 20 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.down",
+   "spec": "k2 8 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 10 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_pf39.jsonl:layer 39 rows 512",
+    "r2_pf39.jsonl:layer 39 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 10 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 10 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pf39.jsonl:layer 39 rows 64",
+    "r2_pf39.jsonl:layer 39 rows 100",
+    "r2_pf39.jsonl:layer 39 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 4 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 2,
+   "pass": true,
+   "evidence": [
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 4 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 1,
+   "pass": true,
+   "evidence": [
+    "r2_pf20.jsonl:layer 20 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 4 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 6 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000",
+    "r2_pf39.jsonl:layer 39 rows 512",
+    "r2_pf39.jsonl:layer 39 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 6 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 6 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 9,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf29.jsonl:layer 29 rows 64",
+    "r2_pf29.jsonl:layer 29 rows 100",
+    "r2_pf29.jsonl:layer 29 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 8 nm 64",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 6,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 8 nm 64",
+   "rows": "2048 (full prompt chunk)",
+   "records": 3,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf20.jsonl:layer 20 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.gu",
+   "spec": "k2 8 nm 64",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 9,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.place",
+   "spec": "-",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.place",
+   "spec": "-",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf20.jsonl:layer 20 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.place",
+   "spec": "-",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.rot",
+   "spec": "-",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 8,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 512",
+    "r2_pf11.jsonl:layer 11 rows 1000",
+    "r2_pf20.jsonl:layer 20 rows 512",
+    "r2_pf20.jsonl:layer 20 rows 1000",
+    "r2_pf29.jsonl:layer 29 rows 512",
+    "r2_pf29.jsonl:layer 29 rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.rot",
+   "spec": "-",
+   "rows": "2048 (full prompt chunk)",
+   "records": 4,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 2048",
+    "r2_pf20.jsonl:layer 20 rows 2048",
+    "r2_pf29.jsonl:layer 29 rows 2048",
+    "r2_pf39.jsonl:layer 39 rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.pf_experts.rot",
+   "spec": "-",
+   "rows": "64-128 (prompt chunk tails)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pf11.jsonl:layer 11 rows 64",
+    "r2_pf11.jsonl:layer 11 rows 100",
+    "r2_pf11.jsonl:layer 11 rows 128",
+    "r2_pf20.jsonl:layer 20 rows 64",
+    "r2_pf20.jsonl:layer 20 rows 100",
+    "r2_pf20.jsonl:layer 20 rows 128"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_in",
+   "spec": "-",
+   "rows": "129-2047 (prompt chunk tails)",
+   "records": 36,
+   "pass": true,
+   "evidence": [
+    "r2_pg1000.jsonl:layers.20.attn.wq_a rows 1000",
+    "r2_pg1000.jsonl:layers.20.attn.wkv rows 1000",
+    "r2_pg1000.jsonl:layers.20.attn.wq_b rows 1000",
+    "r2_pg1000.jsonl:layers.20.attn.indexer.wq_b rows 1000",
+    "r2_pg1000.jsonl:layers.39.attn.wo_a.slice.0 rows 1000",
+    "r2_pg1000.jsonl:layers.39.attn.wo_b rows 1000"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_in",
+   "spec": "-",
+   "rows": "2048 (full prompt chunk)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_pg2048.jsonl:layers.20.attn.wq_a rows 2048",
+    "r2_pg2048.jsonl:layers.20.attn.wkv rows 2048",
+    "r2_pg2048.jsonl:layers.20.attn.wq_b rows 2048",
+    "r2_pg2048.jsonl:layers.20.attn.indexer.wq_b rows 2048",
+    "r2_pg2048.jsonl:layers.39.attn.wo_a.slice.0 rows 2048",
+    "r2_pg2048.jsonl:layers.39.attn.wo_b rows 2048"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_many",
+   "spec": "-",
+   "rows": "1 (decode)",
+   "records": 12,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv rows 1",
+    "r2_gl_a.jsonl:qb rows 1",
+    "r2_gl_a.jsonl:woa rows 1",
+    "r2_gl_a.jsonl:wob rows 1",
+    "r2_gl_a.jsonl:idx rows 1",
+    "r2_gl_a.jsonl:head rows 1"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_many",
+   "spec": "-",
+   "rows": "17-63 (16-row passes, tail pass)",
+   "records": 36,
+   "pass": true,
+   "evidence": [
+    "r2_gl_b.jsonl:qa_kv rows 17",
+    "r2_gl_b.jsonl:qb rows 17",
+    "r2_gl_b.jsonl:woa rows 17",
+    "r2_gl_b.jsonl:wob rows 17",
+    "r2_gl_b.jsonl:idx rows 17",
+    "r2_gl_b.jsonl:head rows 17"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_many",
+   "spec": "-",
+   "rows": "2-8 (verify; rows path, one part)",
+   "records": 48,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv rows 2",
+    "r2_gl_a.jsonl:qb rows 2",
+    "r2_gl_a.jsonl:woa rows 2",
+    "r2_gl_a.jsonl:wob rows 2",
+    "r2_gl_a.jsonl:idx rows 2",
+    "r2_gl_a.jsonl:head rows 2"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_many",
+   "spec": "-",
+   "rows": "64-128 (wide WMMA path)",
+   "records": 36,
+   "pass": true,
+   "evidence": [
+    "r2_gl_c.jsonl:qa_kv rows 64",
+    "r2_gl_c.jsonl:qb rows 64",
+    "r2_gl_c.jsonl:woa rows 64",
+    "r2_gl_c.jsonl:wob rows 64",
+    "r2_gl_c.jsonl:idx rows 64",
+    "r2_gl_c.jsonl:head rows 64"
+   ]
+  },
+  {
+   "kernel": "exl3.rot_many",
+   "spec": "-",
+   "rows": "9-16 (rows path, two parts)",
+   "records": 24,
+   "pass": true,
+   "evidence": [
+    "r2_gl_a.jsonl:qa_kv rows 9",
+    "r2_gl_a.jsonl:qb rows 9",
+    "r2_gl_a.jsonl:woa rows 9",
+    "r2_gl_a.jsonl:wob rows 9",
+    "r2_gl_a.jsonl:idx rows 9",
+    "r2_gl_a.jsonl:head rows 9"
+   ]
+  }
+ ],
+ "cells": 133,
+ "cells_pass": 133,
+ "records": 273,
+ "failures": [],
+ "pass": true
+}
