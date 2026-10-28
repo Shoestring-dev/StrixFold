@@ -50,3 +50,11 @@ Modified upstream files:
   THIRD_PARTY_NOTICES.md           the DeepSeek-V4.1 section
 
 The "git log" of this branch and tools/dsv41-zig/ATTRIBUTION.md describe the changes and their sources.
+
+----------------------------------------------------------------------------------------------------------------------
+Changes in this fork: StrixFold (Apache License 2.0, section 4(b))
+
+This is a fork of the fork above, at commit 3ff3b2ac, by the StrixFold contributors, Copyright 2026. It
+adds an AMD HIP backend for TensorFold's native Zig engine, kernels for AMD Strix Halo (gfx1151), and tensor parallel
+over two Strix Halo boxes over USB4 networking. Everything above this section is unchanged. CHANGES.md lists the added
+and modified files.

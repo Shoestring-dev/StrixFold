@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" font-family="IBM Plex Sans, Helvetica, Arial, sans-serif">
+<rect width="760" height="380" rx="14" fill="#ffffff" stroke="#dde1e8"/>
+<text x="28" y="44" font-size="22" font-weight="700" fill="#1b2130">Several chats at once: total tokens per second</text>
+<text x="28" y="68" font-size="14" fill="#5d6576">The two boxes serving 1 to 8 conversations together. Higher is better.</text>
+<line x1="70" x2="730" y1="316.0" y2="316.0" stroke="#dde1e8"/>
+<text x="60" y="320.0" font-size="12" fill="#5d6576" text-anchor="end">0</text>
+<line x1="70" x2="730" y1="242.7" y2="242.7" stroke="#dde1e8"/>
+<text x="60" y="246.7" font-size="12" fill="#5d6576" text-anchor="end">40</text>
+<line x1="70" x2="730" y1="169.3" y2="169.3" stroke="#dde1e8"/>
+<text x="60" y="173.3" font-size="12" fill="#5d6576" text-anchor="end">80</text>
+<line x1="70" x2="730" y1="96.0" y2="96.0" stroke="#dde1e8"/>
+<text x="60" y="100.0" font-size="12" fill="#5d6576" text-anchor="end">120</text>
+<rect x="84.8" y="219.1" width="52.8" height="96.9" rx="3" fill="#b4632c"/>
+<text x="111.2" y="211.1" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">52.8</text>
+<text x="111.2" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">1</text>
+<rect x="167.3" y="183.5" width="52.8" height="132.5" rx="3" fill="#b4632c"/>
+<text x="193.8" y="175.5" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">72.3</text>
+<text x="193.8" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">2</text>
+<rect x="249.8" y="161.7" width="52.8" height="154.3" rx="3" fill="#b4632c"/>
+<text x="276.2" y="153.7" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">84.2</text>
+<text x="276.2" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">3</text>
+<rect x="332.4" y="153.7" width="52.8" height="162.3" rx="3" fill="#b4632c"/>
+<text x="358.8" y="145.7" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">88.5</text>
+<text x="358.8" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">4</text>
+<rect x="414.9" y="149.1" width="52.8" height="166.9" rx="3" fill="#b4632c"/>
+<text x="441.2" y="141.1" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">91.0</text>
+<text x="441.2" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">5</text>
+<rect x="497.4" y="141.7" width="52.8" height="174.3" rx="3" fill="#b4632c"/>
+<text x="523.8" y="133.7" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">95.1</text>
+<text x="523.8" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">6</text>
+<rect x="579.9" y="130.8" width="52.8" height="185.2" rx="3" fill="#b4632c"/>
+<text x="606.2" y="122.8" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">101.0</text>
+<text x="606.2" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">7</text>
+<rect x="662.4" y="118.1" width="52.8" height="197.9" rx="3" fill="#b4632c"/>
+<text x="688.8" y="110.1" font-size="13" font-weight="600" fill="#1b2130" text-anchor="middle">108.0</text>
+<text x="688.8" y="336.0" font-size="13" fill="#5d6576" text-anchor="middle">8</text>
+<text x="400.0" y="364" font-size="12" fill="#5d6576" text-anchor="middle">Chats at once · mean of eight category medians, five repetitions, drafts on with the drafting switch</text>
+</svg>

@@ -1,0 +1,65 @@
+# Results
+
+Measured on the two boxes described in the README, 18–22 October 2026. Nothing here is projected.
+
+## How we measure
+
+- **Prompt set:** the same eight categories and prompts as the published two-DGX-Spark run: coding, json, narrative,
+  prose, math, reasoning, summary and format.
+- **Settings:** temperature 0, thinking off, every prompt cold, five repetitions, and the quiet windows on both boxes.
+- **One chat (decode):** completion tokens minus one, divided by the time from the first content event to the end. We
+  report the mean of the eight category medians.
+- **Prompt reading:** one output token, the whole request timed.
+- **Several chats:** the same prompts sent as 1 to 8 conversations at once. The total tokens per second is the mean of
+  the eight category medians.
+- **Raw data:** every run writes a manifest with the commit, binaries, kit objects, configuration, toolchain and the
+  prompt token ids.
+
+## One chat
+
+![One chat](img/one-chat.svg)
+
+| Engine | Date | Tokens per second | Against 2 × DGX Spark |
+|---|---|---:|---:|
+| DwarfStar (kyuz0's ROCm port of ds4), Q2 GGUF | 18 Oct | 13.3 | |
+| This port, first working run | 19 Oct | 20.6 | |
+| This port, two-cable build | 20 Oct | **52.84** | **72.3%** |
+
+DwarfStar reaches 14.7 tok/s with the CPU set to its performance setting. The boxes serve at the default balanced
+power setting.
+
+## Prompt reading
+
+![Prompt reading](img/prompt-reading.svg)
+
+| Engine | Prompt | Tokens per second | Against 2 × DGX Spark |
+|---|---:|---:|---:|
+| DwarfStar | 8,159 tokens | ~268–285 | |
+| This port, first run | 8,165 tokens | 829 | |
+| This port now | 2,952 tokens | 1,413.8 | 73.6% (Spark 1,921.6) |
+| This port now | 11,594 tokens | **1,543.4** | **70.8%** (Spark 2,180.2) |
+
+## Several chats at once
+
+![Several chats at once](img/several-chats.svg)
+
+| Chats at once | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Total tokens per second | 52.84 | 72.26 | 84.15 | 88.51 | 91.04 | 95.07 | 101.01 | 107.96 |
+
+Drafting is on. From six chats at once, the drafting switch stops drafting, which gives the 7- and 8-chat numbers
+their lift (+5.5% and +10.4%). Spark's published run has single batches for 1–4 chats and no data for 5–8, so we only
+compare one chat and prompt reading against it.
+
+## Quality
+
+The same weights give the same quality as the Spark build: MMLU-Pro 84.8% and HumanEval+ 92%. The output checks
+(`tools/dsv41-hip/gates.json`, `qualify.sh`) hold the logits hashes and decode receipts each build must match.
+Drafts on gives exactly the same text as drafts off.
+
+## Long context
+
+Context windows from 16K up to 1M tokens. At 1M, a needle test found all three needles (run on a fine-tune with the same layout). The first read of a 1M
+prompt takes 948 s; asking again with the prompt cached takes 2.3 s.
+
+The older, more detailed engineering results (19 Oct, per-category tables) are in `tools/dsv41-hip/RESULTS.md`.

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="332" viewBox="0 0 760 332" font-family="IBM Plex Sans, Helvetica, Arial, sans-serif">
+<rect width="760" height="332" rx="14" fill="#ffffff" stroke="#dde1e8"/>
+<text x="28" y="44" font-size="22" font-weight="700" fill="#1b2130">Prompt reading: tokens per second</text>
+<text x="28" y="68" font-size="14" fill="#5d6576">Time to read a long prompt before the first reply token. Higher is better.</text>
+<text x="28" y="110" font-size="15" font-weight="600" fill="#1b2130">DwarfStar</text>
+<text x="28" y="127" font-size="12" fill="#5d6576">8,159-token prompt</text>
+<rect x="210" y="98" width="44.3" height="26" rx="4" fill="#9aa3b4"/>
+<text x="264.3" y="116" font-size="15" font-weight="500" fill="#1b2130">~270</text>
+<text x="28" y="156" font-size="15" font-weight="600" fill="#1b2130">This port, first run</text>
+<text x="28" y="173" font-size="12" fill="#5d6576">8,165-token prompt</text>
+<rect x="210" y="144" width="133.1" height="26" rx="4" fill="#9aa3b4"/>
+<text x="353.1" y="162" font-size="15" font-weight="500" fill="#1b2130">829</text>
+<text x="28" y="202" font-size="15" font-weight="600" fill="#1b2130">This port now</text>
+<text x="28" y="219" font-size="12" fill="#5d6576">11,594-token prompt</text>
+<rect x="210" y="190" width="247.8" height="26" rx="4" fill="#b4632c"/>
+<text x="467.8" y="208" font-size="15" font-weight="700" fill="#1b2130">1,543</text>
+<text x="28" y="248" font-size="15" font-weight="600" fill="#1b2130">2 × DGX Spark</text>
+<text x="28" y="265" font-size="12" fill="#5d6576">reference, 11,592 tokens</text>
+<rect x="210" y="236" width="350.0" height="26" rx="4" fill="none" stroke="#9aa3b4" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="570.0" y="254" font-size="15" font-weight="500" fill="#1b2130">2,180 (we reach 70.8%)</text>
+<text x="28" y="310" font-size="12" fill="#5d6576">One output token, whole request, cold prompt, five repetitions.</text>
+</svg>
