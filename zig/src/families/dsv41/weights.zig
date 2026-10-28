@@ -2,7 +2,7 @@
 //! linears in strips, each layer's experts in one trellis buffer with pointer, width and scale tables, the rest as the
 //! loader keeps it. Every device tensor is listed by the Python engine's name for digests against its weights.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const Config = @import("config.zig").Config;
 const plan = @import("plan.zig");
 const rank_cache = @import("rank_cache.zig");
@@ -17,7 +17,13 @@ const span_piece = 64 << 20;
 /// An EXL3 linear in the strips layout: words int32 [N/128, K/16, 8, 8 * bits], fp16 suh [K] and svh [N].
 /// plan_n: the N its decode plan is made for, when not n: a 2D node's column part of a TP2 slice keeps that slice's
 /// plan (linear.py pinned plans), so its columns sum in the slice's K order.
-pub const Linear = struct { words: u64, suh: u64, svh: u64, k: u32, n: u32, k2: u32, plan_n: u32 = 0 };
+/// dense: a projection the checkpoint stores as a bf16 weight [N, K] (a fine-tuned pack's wo_b and shared
+/// w2; checkpoint.zig part "dense"): its rows on the device, words / suh / svh / k2 zero; dense.zig runs it.
+pub const Linear = struct { words: u64, suh: u64, svh: u64, k: u32, n: u32, k2: u32, plan_n: u32 = 0, dense: u64 = 0 };
+
+/// A block's shared expert run alone (its w2 dense, so not in the grouped experts' table): gate and up EXL3 by output
+/// columns as the table's entries are split, down the dense slice by input rows.
+pub const SharedFfn = struct { w1: Linear, w3: Linear, w2: Linear };
 
 /// A layer's routed experts and its shared expert (the last entry), as exl3_experts.prepare lays them out. On a 2D node
 /// (exl3/experts2d.py prepare) gate / up hold its intermediate blocks (width of the half's down_k) and down its
@@ -41,6 +47,9 @@ pub const Experts = struct {
     width: u32,
     k2_gu: [2]u32,
     k2_d: [2]u32,
+    /// The K2 values the experts' gate / up (bit K2 of [0]) and down ([1]) hold, when every expert's gate and up share
+    /// one (the AMD kit's prompt experts launch gu and down once a K2: exl3_experts.pfPlan); else null.
+    k2_masks: ?[2]u32 = null,
     down_k: u32, // down's K: the rank's whole intermediate (width but on a 2D node)
     down_n: u32, // down's output columns here (dims but on a 2D node)
     shared_gate: [2]u64 = .{ 0, 0 }, // the shared expert's gate trellis: its first byte and length (the paced L2 prefetch)
@@ -75,7 +84,8 @@ pub const Layer = struct {
     gate_w: u64 = 0, // [E, d] f16
     gate_b: u64 = 0, // [E] f32
     gate_b_vl: u64 = 0, // [E] f32: the routing bias of image-span tokens (the checkpoint's extra gate_bias_vl)
-    experts: Experts = undefined,
+    experts: Experts = undefined, // the routed experts and, unless `shared` is set, the shared one last
+    shared: ?SharedFfn = null, // the shared expert alone (its w2 dense): experts.count is then the routed experts'
     engram_wkv: ?Linear = null, // this rank's hash columns' input rows
     engram_qk: u64 = 0, // q_weight * k_weight [hc, d] f32
 };
@@ -94,7 +104,7 @@ pub const Weights = struct {
     vocab_hi: usize = 0,
     layers: []Layer = &.{},
     dspark: ?DSpark = null,
-    buffers: std.ArrayList(cuda.DeviceBuffer) = .empty,
+    buffers: std.ArrayList(gpu.DeviceBuffer) = .empty,
     named: std.ArrayList(Named) = .empty,
     bytes: u64 = 0,
 
@@ -155,7 +165,7 @@ fn readWhole(f: dio.File, buf: dio.Buffer, base: u64, piece: usize) !void {
 
 const Loader = struct {
     gpa: std.mem.Allocator,
-    d: *const cuda.Driver,
+    d: *const gpu.Driver,
     src: Source,
     w: *Weights,
     host: std.ArrayList(u8) = .empty,
@@ -176,7 +186,7 @@ const Loader = struct {
     }
 
     fn upload(L: *Loader, name: []const u8, bytes: []const u8) !u64 {
-        var b = try cuda.DeviceBuffer.alloc(L.d, bytes.len);
+        var b = try gpu.DeviceBuffer.alloc(L.d, bytes.len);
         errdefer b.free();
         try b.upload(0, bytes);
         try L.w.buffers.append(L.gpa, b);
@@ -283,6 +293,35 @@ const Loader = struct {
         return .{ .words = words, .suh = suh, .svh = svh, .k = @intCast(kt * 16), .n = @intCast(nt * 16), .k2 = @intCast(w16 / 8) };
     }
 
+    /// Whether the source holds `key`.
+    fn has(L: *const Loader, key: []const u8) bool {
+        return switch (L.src) {
+            .cache => |c| c.index.get(key) != null,
+            .shards => |sh| if (checkpoint.describe(sh, key)) |_| true else |_| false,
+        };
+    }
+
+    /// A dense projection's slice (plan.zig Builder.dense: `prefix|cols|rows|dense`, bf16 [N, K]) as it is.
+    fn dense(L: *Loader, prefix: []const u8, cols: ?[2]usize, rows: ?[2]usize) !Linear {
+        var kb: [256]u8 = undefined;
+        var nb: [256]u8 = undefined;
+        const key = try plan.partKey(&kb, prefix, cols, rows, "dense");
+        const nk: [2]usize = switch (L.src) {
+            .cache => |c| blk: {
+                const e = c.index.get(key) orelse return error.MissingEntry;
+                if (e.rank != 2 or e.dtype != .bf16) return error.UnexpectedTensor;
+                break :blk .{ e.shape[0], e.shape[1] };
+            },
+            .shards => |sh| blk: {
+                const d = try checkpoint.describe(sh, key);
+                if (d.rank != 2 or d.dtype != .bf16) return error.UnexpectedTensor;
+                break :blk .{ d.shape[0], d.shape[1] };
+            },
+        };
+        const ptr = try L.upload(try std.fmt.bufPrint(&nb, "{s}.dense", .{prefix}), try L.entry(key));
+        return .{ .words = 0, .suh = 0, .svh = 0, .k = @intCast(nk[1]), .n = @intCast(nk[0]), .k2 = 0, .dense = ptr };
+    }
+
     /// A trellis entry's [kt, nt, w16].
     fn shape(L: *Loader, key: []const u8) ![3]usize {
         return switch (L.src) {
@@ -302,8 +341,9 @@ const Loader = struct {
     /// load_block's experts: exl3_parts of w1 / w3 by output columns and w2 by input rows for every expert and the
     /// shared one, packed as pack_trellises packs them, with prepare's tables. `half`: the rank's intermediate; `gu`:
     /// gate / up's columns of it here (the half, or a 2D node's blocks); `dcols`: down's output columns (null: all).
-    fn experts(L: *Loader, p: []const u8, n: usize, half: [2]usize, gu: [2]usize, dcols: ?[2]usize, d: usize) !Experts {
-        const e_count = n + 1;
+    /// `shared_alone`: the shared expert is loaded apart (Layer.shared), the table holds the routed experts only.
+    fn experts(L: *Loader, p: []const u8, n: usize, half: [2]usize, gu: [2]usize, dcols: ?[2]usize, d: usize, shared_alone: bool) !Experts {
+        const e_count = if (shared_alone) n else n + 1;
         const width = gu[1] - gu[0];
         const down_k = half[1] - half[0];
         const down_n = if (dcols) |dc| dc[1] - dc[0] else d;
@@ -344,7 +384,7 @@ const Loader = struct {
             sizes[j * e_count + e] = try L.src.size(key);
             total += sizes[j * e_count + e];
         };
-        var buf = try cuda.DeviceBuffer.alloc(L.d, total);
+        var buf = try gpu.DeviceBuffer.alloc(L.d, total);
         errdefer buf.free();
         const ptrs = try L.gpa.alloc(u64, 3 * e_count);
         defer L.gpa.free(ptrs);
@@ -365,9 +405,15 @@ const Loader = struct {
         L.w.bytes += total;
         var x: Experts = undefined;
         x.trellis = buf.ptr;
-        x.shared_gate = .{ ptrs[n], sizes[n] }; // j = 0 (gate), e = n (the shared expert)
-        x.shared_up = .{ ptrs[e_count + n], sizes[e_count + n] };
-        x.shared_down = .{ ptrs[2 * e_count + n], sizes[2 * e_count + n] };
+        if (shared_alone) {
+            x.shared_gate = .{ 0, 0 };
+            x.shared_up = .{ 0, 0 };
+            x.shared_down = .{ 0, 0 };
+        } else {
+            x.shared_gate = .{ ptrs[n], sizes[n] }; // j = 0 (gate), e = n (the shared expert)
+            x.shared_up = .{ ptrs[e_count + n], sizes[e_count + n] };
+            x.shared_down = .{ ptrs[2 * e_count + n], sizes[2 * e_count + n] };
+        }
         x.count = @intCast(e_count);
         x.dims = @intCast(d);
         x.width = @intCast(width);
@@ -383,6 +429,13 @@ const Loader = struct {
         x.k2_d = .{ std.math.maxInt(u32), 0 };
         for (k2s[0 .. 2 * e_count]) |v| x.k2_gu = .{ @min(x.k2_gu[0], @as(u32, @intCast(v))), @max(x.k2_gu[1], @as(u32, @intCast(v))) };
         for (k2s[2 * e_count ..]) |v| x.k2_d = .{ @min(x.k2_d[0], @as(u32, @intCast(v))), @max(x.k2_d[1], @as(u32, @intCast(v))) };
+        x.k2_masks = .{ 0, 0 };
+        for (0..e_count) |e| {
+            if (k2s[e] != k2s[e_count + e]) x.k2_masks = null;
+            if (x.k2_masks == null) break;
+            x.k2_masks.?[0] |= @as(u32, 1) << @intCast(k2s[e]);
+            x.k2_masks.?[1] |= @as(u32, 1) << @intCast(k2s[2 * e_count + e]);
+        }
         // stack(mats, j, n): every expert's scale row in order; suh_d is down's input signs on gate / up's blocks
         // (experts2d.prepare: the half's [gu - half), all of it but on a 2D node)
         const off = gu[0] - half[0];
@@ -432,7 +485,14 @@ const Loader = struct {
         const ga = s.woAGroups(c);
         for (0..ga[1]) |g| lay.wo_a[g] = try L.linear(try std.fmt.bufPrint(&nb, "{s}.attn.wo_a.slice.{d}", .{ p, ga[0] + g }), null, null);
         lay.groups = @intCast(ga[1]);
-        lay.wo_b = try L.linear(try std.fmt.bufPrint(&nb, "{s}.attn.wo_b", .{p}), s.woBCols(c), s.range(gl * c.o_lora));
+        {
+            const wp = try std.fmt.bufPrint(&nb, "{s}.attn.wo_b", .{p});
+            var kb: [256]u8 = undefined;
+            lay.wo_b = if (L.has(try plan.partKey(&kb, wp, s.woBCols(c), s.range(gl * c.o_lora), "dense")))
+                try L.dense(wp, s.woBCols(c), s.range(gl * c.o_lora))
+            else
+                try L.linear(wp, s.woBCols(c), s.range(gl * c.o_lora));
+        }
         if (s.pair != null) {
             // the 2D column parts keep their TP2 slices' decode plans
             lay.wq_b.plan_n = @intCast(s.heads(c) * c.head_dim);
@@ -464,7 +524,18 @@ const Loader = struct {
         lay.gate_w = try L.plain(try std.fmt.bufPrint(&nb, "{s}.ffn.gate.weight", .{p}), .f16);
         lay.gate_b = try L.plain(try std.fmt.bufPrint(&nb, "{s}.ffn.gate.bias", .{p}), .f32);
         const xp = s.expertParts(c);
-        lay.experts = try L.experts(p, n_experts, xp.half, xp.gu, xp.dcols, c.hidden);
+        var kb2: [256]u8 = undefined;
+        var sb: [256]u8 = undefined;
+        const shared_alone = L.has(try plan.partKey(&kb2, try std.fmt.bufPrint(&sb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half, "dense"));
+        lay.experts = try L.experts(p, n_experts, xp.half, xp.gu, xp.dcols, c.hidden, shared_alone);
+        if (shared_alone) {
+            var pb: [256]u8 = undefined;
+            lay.shared = .{
+                .w1 = try L.linear(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w1", .{p}), xp.gu, null),
+                .w3 = try L.linear(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w3", .{p}), xp.gu, null),
+                .w2 = try L.dense(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half),
+            };
+        }
         if (c.engram_layers.has(i)) {
             lay.engram_wkv = try L.linear(try std.fmt.bufPrint(&nb, "{s}.engram.wkv", .{p}), s.engramCols(c), s.range(s.engramRows(c)));
             if (s.pair != null) lay.engram_wkv.?.plan_n = @intCast((c.hc + 1) * c.hidden);
@@ -486,7 +557,7 @@ const Loader = struct {
 };
 
 /// Every tensor of rank `s` on device `d`, from `src` (weights.py _load, in its order).
-pub fn load(gpa: std.mem.Allocator, d: *const cuda.Driver, src: Source, c: Config, s: plan.Split, dspark: bool) !Weights {
+pub fn load(gpa: std.mem.Allocator, d: *const gpu.Driver, src: Source, c: Config, s: plan.Split, dspark: bool) !Weights {
     var w: Weights = .{ .gpa = gpa };
     errdefer w.deinit();
     var L: Loader = .{ .gpa = gpa, .d = d, .src = src, .w = &w };

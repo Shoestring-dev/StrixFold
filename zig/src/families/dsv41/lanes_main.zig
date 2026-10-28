@@ -9,11 +9,11 @@
 //! line a request, then the summary. FILE: zrec_lanereq.py's requests (prompt ids, max_tokens, sampling, expect_sha).
 //! KIT_DIR: a gate dir's aot/, cubins/, RoPE tables (as many rows as the pool) and engram.json.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const dsv41 = @import("dsv41");
 const lanes = @import("lanes");
 
-const usage = "usage: tf-dsv41-lanes MODEL_DIR CACHE_DIR RANK WORLD MASTER_IP PORT KIT_DIR --requests FILE [--parallel N] [--pool P] [--drafts 0|1] [--arena-gib G] [--engram DIR --token-map FILE] [--rdma DEVICES --rdma-kernels FATBIN] [--fix-k K] [--round-rows R] [--streams S]\n";
+const usage = "usage: tf-dsv41-lanes MODEL_DIR CACHE_DIR RANK WORLD MASTER_IP PORT KIT_DIR --requests FILE [--parallel N] [--pool P] [--drafts 0|1] [--arena-gib G] [--engram DIR --token-map FILE] [--rdma DEVICES --rdma-kernels FATBIN] [--fix-k K] [--round-rows R] [--round-ms MS,...] [--draft-ms MS] [--streams S] [--modalities text|text_image] [--hip-kit DIR] [--aio 0|1] [--side 0|1] [--logits-sha 0|1] [--logits-dump DIR]\n";
 
 const Request = struct {
     name: []const u8 = "",
@@ -56,6 +56,7 @@ pub fn main(init: std.process.Init) !u8 {
         .master = try dsv41.link.parseIp(args[5]),
         .port = try std.fmt.parseInt(u16, args[6], 10),
         .kit_dir = args[7],
+        .open_coll = if (gpu.backend == .hip) dsv41.tcp_coll.open else null,
     };
     var requests_file: ?[]const u8 = null;
     var parallel: ?usize = null; // default: every stream of the pool
@@ -79,6 +80,8 @@ pub fn main(init: std.process.Init) !u8 {
             o.round_rows = try std.fmt.parseInt(usize, val, 10);
         } else if (std.mem.eql(u8, key, "--round-ms")) {
             o.round_ms = try dsv41.lanes.parseMs(a, val);
+        } else if (std.mem.eql(u8, key, "--draft-ms")) {
+            o.draft_ms = try dsv41.scheduler_costs.parseDraft(val);
         } else if (std.mem.eql(u8, key, "--streams")) {
             o.streams = try std.fmt.parseInt(usize, val, 10);
         } else if (std.mem.eql(u8, key, "--pool")) {
@@ -112,26 +115,35 @@ pub fn main(init: std.process.Init) !u8 {
             o.rdma_kernels = val;
         } else if (std.mem.eql(u8, key, "--vision-bias")) {
             o.vision_bias = val;
+        } else if (std.mem.eql(u8, key, "--modalities")) {
+            o.modalities = std.meta.stringToEnum(dsv41.model.Modalities, val) orelse return error.BadArgument;
+        } else if (std.mem.eql(u8, key, "--hip-kit")) {
+            o.hip_kit = val;
         } else if (std.mem.eql(u8, key, "--logits-sha")) {
             dsv41.lanes.logits_sha = !std.mem.eql(u8, val, "0");
+        } else if (std.mem.eql(u8, key, "--logits-dump")) {
+            dsv41.lanes.logits_dump = val;
         } else return error.BadArgument;
     }
     const par = parallel orelse o.streams;
     if (par == 0 or par > o.streams or o.streams > dsv41.model.max_streams) return error.BadArgument;
     o.arena_bytes = (arena_gib orelse 0) << 30; // (0: the arena grows as the buffers ask)
+    o.phase_timer = phases; // (in the pair handshake: a timed chunk runs its halves apart)
 
     var out_buf: [1 << 14]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &out_buf);
     const w = &out.interface;
 
-    var driver = try cuda.Driver.open();
+    var driver = try gpu.Driver.open();
     defer driver.close();
-    var ctx = try cuda.Context.init(&driver, 0);
+    var ctx = try gpu.Context.init(&driver, 0);
     defer ctx.deinit();
     const t0 = std.Io.Timestamp.now(io, .awake);
     const m = try dsv41.model.Model.open(gpa, io, &ctx, o);
     defer m.close();
-    try w.print("{{\"rank\": {d}, \"loaded_s\": {d:.1}, \"pool\": {d}, \"drafts\": {}, \"arena_used\": {d}, \"arena_reserved\": {d}}}\n", .{ o.rank, seconds(t0, io), o.pool, m.drafting(), m.arena.used, m.arena.reserved });
+    // the settings a run's evidence depends on: replay_floor (TF_DS_REPLAY_FLOOR, in the peers' handshake), side and
+    // engram_aio (rank-local: --side, --aio; engram_aio only with the Engram tables)
+    try w.print("{{\"rank\": {d}, \"loaded_s\": {d:.1}, \"pool\": {d}, \"drafts\": {}, \"arena_used\": {d}, \"arena_reserved\": {d}, \"replay_floor\": {}, \"side\": {}, \"engram_aio\": {}}}\n", .{ o.rank, seconds(t0, io), o.pool, m.drafting(), m.arena.used, m.arena.reserved, dsv41.prompt.replay_floor, o.side, m.aio != null });
     try w.flush();
 
     if (o.rank != 0) {
@@ -187,6 +199,7 @@ pub fn main(init: std.process.Init) !u8 {
     const rows: u32 = @intCast(m.eng.round_rows);
     var cfg = try lanes.Config.init(gpa, ln.facts(), rows, rows - 1);
     defer cfg.deinit(gpa);
+    if (std.c.getenv("TF_DS_DRAFT_BYPASS_AT")) |v| try cfg.setDraftBypassAt(try std.fmt.parseInt(u32, std.mem.span(v), 10));
     var clock: lanes.backend.WallClock = .{ .io = io };
     var core = lanes.Engine.init(gpa, &cfg, ln.backend(), clock.clock());
     defer core.deinit();

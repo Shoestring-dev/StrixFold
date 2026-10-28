@@ -4,7 +4,7 @@
 //! that same cubin (extracted from the served image's libtorch_cuda.so, BSD-3, see THIRD_PARTY_NOTICES) with the
 //! Params torch fills (kernel_forward.h; the recorded launch's 272 bytes, field for field), so the output is torch's.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 
 pub const kernel_name = "_Z39fmha_cutlassF_f32_aligned_64x64_rf_sm80N22PyTorchMemEffAttention15AttentionKernelIfN7cutlass4arch4Sm80ELb1ELi64ELi64ELi64ELb1ELb1EE6ParamsE";
 /// The cubin's file in the kit (TF_DS_KIT/vision/).
@@ -74,11 +74,11 @@ comptime {
 }
 
 pub const Fmha = struct {
-    module: cuda.Module,
-    f: cuda.Function,
+    module: gpu.Module,
+    f: gpu.Function,
 
-    pub fn load(d: *const cuda.Driver, cubin: []const u8) !Fmha {
-        var m = try cuda.Module.load(d, cubin);
+    pub fn load(d: *const gpu.Driver, cubin: []const u8) !Fmha {
+        var m = try gpu.Module.load(d, cubin);
         errdefer m.unload();
         return .{ .module = m, .f = try m.function(kernel_name) };
     }
@@ -89,7 +89,7 @@ pub const Fmha = struct {
 
     /// Non-causal attention of one image: q, k, v fp32 [n, heads, 64] (row stride heads * 64), out fp32 [n, heads, 64];
     /// scale 1 / sqrt(64), torch's launch grid (ceil(n / 64), heads, 1), 128 threads, 36,352 bytes of shared memory.
-    pub fn run(x: *const Fmha, s: cuda.Stream, q: u64, k: u64, v: u64, out: u64, n: usize, heads: usize) !void {
+    pub fn run(x: *const Fmha, s: gpu.Stream, q: u64, k: u64, v: u64, out: u64, n: usize, heads: usize) !void {
         const hd: i32 = 64;
         const row: i32 = @intCast(heads * 64);
         const p: Params = .{
@@ -115,8 +115,8 @@ pub const Fmha = struct {
             .num_batches = 1,
             .num_heads = @intCast(heads),
         };
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(p);
-        try cuda.launch.launch(x.f, .{ .grid = .{ .x = @intCast((n + 63) / 64), .y = @intCast(heads) }, .block = .{ .x = 32, .y = 4 }, .shared = 36352 }, s, &a);
+        try gpu.launch.launch(x.f, .{ .grid = .{ .x = @intCast((n + 63) / 64), .y = @intCast(heads) }, .block = .{ .x = 32, .y = 4 }, .shared = 36352 }, s, &a);
     }
 };

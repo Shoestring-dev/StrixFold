@@ -100,14 +100,21 @@ pub fn argmax(row: []const f32) usize {
 /// sample_rows for one row of fp32 logits at absolute position `position`: the token.
 pub fn sampleRow(row: []const f32, position: u64, s: Sampling) !i64 {
     if (s.temperature <= 0) return @intCast(argmax(row));
-    if (s.top_k == 0) return error.NotPortedYet; // the nucleus path (top_k off: a model setting only top_p)
+    if (s.top_k == 0) return error.NeedsTopK; // the nucleus path (top_k off: a model setting only top_p), not ported
     const count = @min(row.len, s.top_k + margin);
     if (count > max_candidates) return error.TooManyCandidates;
     var values: [max_candidates]f32 = undefined;
     var ids: [max_candidates]i64 = undefined;
     const width = topCandidates(row, count, &values, &ids);
-    // choose_rows on the candidates (already in lexsort's order)
     const k = @max(1, @min(s.top_k, width));
+    return chooseAmong(values[0..k], ids[0..k], position, s);
+}
+
+/// choose_rows on a row's first top_k candidates, already in lexsort's order (a constrained draw passes the best
+/// tokens its grammar allows): the token.
+pub fn chooseAmong(values: []const f32, ids: []const i64, position: u64, s: Sampling) i64 {
+    const k = values.len;
+    std.debug.assert(k >= 1 and k <= max_candidates and ids.len == k);
     const t = @max(s.temperature, 1e-6);
     var scaled: [max_candidates]f64 = undefined;
     var score: [max_candidates]f64 = undefined;

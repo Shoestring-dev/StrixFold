@@ -92,6 +92,18 @@ pub const Split = struct {
 
 pub const ExpertParts = struct { half: [2]usize, gu: [2]usize, dcols: ?[2]usize };
 
+/// The blocks whose attn.wo_b and ffn.shared_experts.w2 the checkpoint stores dense (a `.weight` tensor, bf16 [N, K],
+/// in place of the EXL3 parts: a dense pack's layers 10-36): bit i for block i (a DSpark stage j is
+/// block layers + j). checkpoint.denseOf reads it off the shards; the EXL3 pack has none.
+pub const Dense = struct {
+    wo_b: u64 = 0,
+    shared_w2: u64 = 0,
+
+    pub fn has(set: u64, i: usize) bool {
+        return i < 64 and (set >> @intCast(i)) & 1 != 0;
+    }
+};
+
 /// One tensor a rank loads: the loader's key, the dtype it is stored in (null: the checkpoint's own), and for an EXL3
 /// trellis its K / 16 and N / 16 when the split fixes them.
 pub const Want = struct {
@@ -140,13 +152,19 @@ const Builder = struct {
         }
     }
 
+    /// A dense projection's slice: `prefix|cols|rows|dense`, bf16 [N, K] of its output columns (N) and input rows (K).
+    fn dense(b: *Builder, prefix: []const u8, cols: ?[2]usize, rows: ?[2]usize) !void {
+        var buf: [256]u8 = undefined;
+        try b.out.append(b.a, .{ .key = try b.a.dupe(u8, try partKey(&buf, prefix, cols, rows, "dense")), .dtype = .bf16 });
+    }
+
     fn fmt(b: *Builder, comptime f: []const u8, args: anytype) ![]const u8 {
         return std.fmt.allocPrint(b.a, f, args);
     }
 };
 
 /// One block, a target layer (`layers.i`) or a DSpark stage (`mtp.j`, i = layers + j), as load_block takes it.
-fn block(b: *Builder, c: Config, s: Split, p: []const u8, i: usize, experts: usize) !void {
+fn block(b: *Builder, c: Config, s: Split, p: []const u8, i: usize, experts: usize, dn: Dense) !void {
     const d = c.hidden;
     const gl = s.groups(c);
     for ([_][]const u8{ "hc_attn", "hc_ffn" }) |hc| for ([_][]const u8{ "fn", "scale", "base" }) |part| {
@@ -165,7 +183,9 @@ fn block(b: *Builder, c: Config, s: Split, p: []const u8, i: usize, experts: usi
     for (ga[0]..ga[0] + ga[1]) |g| {
         try b.exl3(try b.fmt("{s}.attn.wo_a.slice.{d}", .{ p, g }), null, null, c.heads / c.o_groups * c.head_dim, c.o_lora);
     }
-    try b.exl3(try b.fmt("{s}.attn.wo_b", .{p}), s.woBCols(c), s.range(gl * c.o_lora), null, d);
+    if (Dense.has(dn.wo_b, i)) {
+        try b.dense(try b.fmt("{s}.attn.wo_b", .{p}), s.woBCols(c), s.range(gl * c.o_lora));
+    } else try b.exl3(try b.fmt("{s}.attn.wo_b", .{p}), s.woBCols(c), s.range(gl * c.o_lora), null, d);
     if (c.kv_sources.has(i)) {
         try b.exl3(try b.fmt("{s}.attn.compressor.wkv", .{p}), null, null, d, null);
         try b.plain(try b.fmt("{s}.attn.compressor.norm.weight", .{p}), null);
@@ -187,7 +207,9 @@ fn block(b: *Builder, c: Config, s: Split, p: []const u8, i: usize, experts: usi
         const ep = if (e < experts) try b.fmt("{s}.ffn.experts.{d}", .{ p, e }) else try b.fmt("{s}.ffn.shared_experts", .{p});
         try b.exl3(try b.fmt("{s}.w1", .{ep}), xp.gu, null, d, null);
         try b.exl3(try b.fmt("{s}.w3", .{ep}), xp.gu, null, d, null);
-        try b.exl3(try b.fmt("{s}.w2", .{ep}), xp.dcols, xp.half, null, d);
+        if (e == experts and Dense.has(dn.shared_w2, i)) {
+            try b.dense(try b.fmt("{s}.w2", .{ep}), xp.dcols, xp.half);
+        } else try b.exl3(try b.fmt("{s}.w2", .{ep}), xp.dcols, xp.half, null, d);
     }
     if (c.engram_layers.has(i)) {
         try b.exl3(try b.fmt("{s}.engram.wkv", .{p}), s.engramCols(c), s.range(s.engramRows(c)), null, null);
@@ -196,17 +218,18 @@ fn block(b: *Builder, c: Config, s: Split, p: []const u8, i: usize, experts: usi
     }
 }
 
-/// Every tensor rank `s` loads, in load order (`dspark`: the DSpark stages and heads too). Keys live in `a`.
-pub fn wants(a: std.mem.Allocator, c: Config, s: Split, dspark: bool) ![]Want {
+/// Every tensor rank `s` loads, in load order (`dspark`: the DSpark stages and heads too; `dn`: the blocks with dense
+/// projections). Keys live in `a`.
+pub fn wants(a: std.mem.Allocator, c: Config, s: Split, dspark: bool, dn: Dense) ![]Want {
     var b: Builder = .{ .a = a };
     try b.plain("embed.weight", null);
     try b.plain("norm.weight", null);
     try b.exl3("head", s.headCols(c), null, c.hidden, null);
-    for (0..c.layers) |i| try block(&b, c, s, try b.fmt("layers.{d}", .{i}), i, c.experts);
+    for (0..c.layers) |i| try block(&b, c, s, try b.fmt("layers.{d}", .{i}), i, c.experts, dn);
     if (dspark and c.dspark_block > 0) {
         // DSpark stays TP2 inside the pair on a 2D split (weights.py _load_2d: load_block at world 2)
         const tp2: Split = .{ .rank = s.rank, .world = s.world };
-        for (0..c.draft_layers) |j| try block(&b, c, tp2, try b.fmt("mtp.{d}", .{j}), c.layers + j, c.draft_experts);
+        for (0..c.draft_layers) |j| try block(&b, c, tp2, try b.fmt("mtp.{d}", .{j}), c.layers + j, c.draft_experts, dn);
         const last = try b.fmt("mtp.{d}", .{c.draft_layers - 1});
         try b.exl3("mtp.0.main_proj", null, null, c.dspark_taps.len * c.hidden, c.hidden);
         try b.plain("mtp.0.main_norm.weight", null);
@@ -224,7 +247,7 @@ test "a rank's tensors in load order: the split's ranges, keys as Python prints 
     const a = arena.allocator();
     var why: @import("config.zig").Why = .{};
     const c = try @import("config.zig").parse(a, @import("config.zig").test_config, &why);
-    const w = try wants(a, c, .{ .rank = 1, .world = 2 }, true);
+    const w = try wants(a, c, .{ .rank = 1, .world = 2 }, true, .{});
     try std.testing.expectEqualStrings("embed.weight|None", w[0].key);
     try std.testing.expectEqualStrings("head|(64640, 129280)|None|tr", w[2].key);
     try std.testing.expectEqual(@as(?usize, 4040), w[2].n16);
@@ -279,8 +302,8 @@ test "the 2D split: node 2 (rank 0 of pair 1) keeps pair 1's blocks, DSpark stay
     const a = arena.allocator();
     var why: @import("config.zig").Why = .{};
     const c = try @import("config.zig").parse(a, @import("config.zig").test_config, &why);
-    const w = try wants(a, c, .{ .rank = 0, .world = 2, .pair = 1 }, true);
-    const tp2 = try wants(a, c, .{ .rank = 0, .world = 2 }, true);
+    const w = try wants(a, c, .{ .rank = 0, .world = 2, .pair = 1 }, true, .{});
+    const tp2 = try wants(a, c, .{ .rank = 0, .world = 2 }, true, .{});
     try std.testing.expectEqual(tp2.len - 2 * 3 * c.layers, w.len); // two wo_a groups a layer, not four
     try std.testing.expectEqualStrings("head|(32384, 64640)|None|tr", w[2].key);
     const expect = [_][]const u8{
@@ -301,8 +324,39 @@ test "the 2D split: node 2 (rank 0 of pair 1) keeps pair 1's blocks, DSpark stay
         try std.testing.expect(found);
     }
     for (w) |x| try std.testing.expect(!std.mem.eql(u8, x.key, "layers.0.attn.wo_a.slice.1|None|None|tr"));
-    const p0 = try wants(a, c, .{ .rank = 1, .world = 2, .pair = 0 }, false);
+    const p0 = try wants(a, c, .{ .rank = 1, .world = 2, .pair = 0 }, false, .{});
     var down0 = false;
     for (p0) |x| down0 = down0 or std.mem.eql(u8, x.key, "layers.5.ffn.shared_experts.w2|(0, 2560)|(1152, 2304)|tr");
     try std.testing.expect(down0);
+}
+
+test "dense blocks: wo_b and the shared expert's w2 as one bf16 slice each, by the same rows; the rest unchanged" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var why: @import("config.zig").Why = .{};
+    const c = try @import("config.zig").parse(a, @import("config.zig").test_config, &why);
+    const plain = try wants(a, c, .{ .rank = 1, .world = 2 }, true, .{});
+    const dn: Dense = .{ .wo_b = 1 << 3, .shared_w2 = 1 << 3 };
+    const w = try wants(a, c, .{ .rank = 1, .world = 2 }, true, dn);
+    // each dense projection replaces its three parts with one entry
+    try std.testing.expectEqual(plain.len - 2 * 2, w.len);
+    var wo_b = false;
+    var w2 = false;
+    for (w) |x| {
+        if (std.mem.eql(u8, x.key, "layers.3.attn.wo_b|None|(4096, 8192)|dense")) wo_b = x.dtype.? == .bf16 and x.k16 == null;
+        if (std.mem.eql(u8, x.key, "layers.3.ffn.shared_experts.w2|None|(1152, 2304)|dense")) w2 = x.dtype.? == .bf16;
+        try std.testing.expect(!std.mem.startsWith(u8, x.key, "layers.3.attn.wo_b|None|(4096, 8192)|tr"));
+        try std.testing.expect(!std.mem.startsWith(u8, x.key, "layers.3.ffn.shared_experts.w2|None|(1152, 2304)|s"));
+    }
+    try std.testing.expect(wo_b and w2);
+    // other blocks keep their EXL3 parts, and the routed experts' down stays EXL3 in a dense block
+    var other = false;
+    var routed = false;
+    for (w) |x| {
+        other = other or std.mem.eql(u8, x.key, "layers.4.attn.wo_b|None|(4096, 8192)|tr");
+        routed = routed or std.mem.eql(u8, x.key, "layers.3.ffn.experts.0.w2|None|(1152, 2304)|tr");
+    }
+    try std.testing.expect(other and routed);
+    try std.testing.expect(Dense.has(dn.wo_b, 3) and !Dense.has(dn.wo_b, 4) and !Dense.has(dn.wo_b, 70));
 }

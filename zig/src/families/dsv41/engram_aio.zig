@@ -80,6 +80,8 @@ pub const Aio = struct {
         errdefer gpa.destroy(a);
         a.* = .{ .gpa = gpa, .io = io, .ring = try gpa.alignedAlloc(u8, .fromByteUnits(block), slots * slot), .slots = slots };
         errdefer gpa.free(a.ring);
+        // pre-faulted: an O_DIRECT read into never-touched pages went through the page cache (the M0 preflight's probe)
+        @memset(a.ring, 0);
         if (linux.errno(ioSetup(@intCast(@min(slots, 65536)), &a.ctx)) != .SUCCESS) return error.AioUnavailable;
         return a;
     }

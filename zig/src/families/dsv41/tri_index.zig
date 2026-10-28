@@ -1,9 +1,10 @@
 //! kernels.py's indexer launches: the compressed keys' scores (a row a program in decode windows, row tiles in prompt
 //! chunks), their top-k keys and tile maxima, the pool-only keys and the selection, each as its Python wrapper does.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const tri = @import("tri.zig");
-const aot = cuda.aot;
+const tri_aux = @import("tri_aux.zig");
+const aot = gpu.aot;
 const Tri = tri.Tri;
 const u = tri.u;
 const p = aot.ptr;
@@ -66,6 +67,14 @@ pub const Cand = struct { mask: u64, stride: usize };
 /// index_score: q [R, IH, ID], k, w [R, IH], vis [R] -> out [R, n] fp32 scores; `keys`: int64 keys; `tmax`: tile maxima.
 pub fn indexScore(t: Tri, q: u64, k: IndexK, w: u64, vis: u64, n: usize, out: u64, base: ?u64, keys: bool, tmax: ?u64, rowwise: bool, rows: usize, ih: usize, id: usize) !void {
     const nt = tri.cdiv(n, tile);
+    if (t.aux) |x| if (x.index) |f| if (base == null and !rowwise and k == .fp4 and ih == tri_aux.index_heads and id == tri_aux.index_dim) {
+        // aux.index_rows: the same scores (or keys and tile maxima) a row, whatever the row count
+        const flags = @as(i32, @intFromBool(keys)) | @as(i32, @intFromBool(keys and tmax != null)) << 1;
+        return t.runHip("aux.index_rows", f, tri_aux.indexGrid(rows, nt), tri_aux.IndexArgs{
+            .q = q, .k = k.codes(), .ks = k.scales(), .w = w, .vis = vis, .out = out, .tmax = tmax orelse out,
+            .rows = @intCast(rows), .n = @intCast(n), .nt = @intCast(nt), .flags = flags,
+        });
+    };
     const ot: []const u8 = if (keys) "*i64" else "*fp32";
     // tmax [R, cdiv(n, 64)] int64 (its maxima only with keys); without it the kernel gets out there
     const tm = p("TMAX", if (tmax != null) "*i64" else ot, tmax orelse out);
@@ -267,4 +276,32 @@ test "score_keys launches _score_keys as recorded" {
             try scoreKeys(t, c.ptr("S"), tmax, c.ptr("OUT"), c.dim("S", 0), c.dim("S", 1));
         }
     }.call);
+}
+
+test "aux.index_rows takes the scores without a base at any row count, and leaves the rest to Triton" {
+    var log: tri.Log = .{ .gpa = std.testing.allocator };
+    defer log.deinit();
+    const f: gpu.Function = undefined; // a logging Tri launches nothing
+    const aux: tri_aux.Aux = .{ .index = f };
+    const t: Tri = .{ .log = &log, .aux = &aux };
+    const k: IndexK = .{ .fp4 = .{ .codes = 0x200, .scales = 0x300 } };
+    // a prompt chunk's keys and tile maxima; a small chunk's scores
+    try indexScore(t, 0x100, k, 0x400, 0x500, 8192, 0x600, null, true, 0x700, false, 2048, 32, 128);
+    try indexScore(t, 0x100, k, 0x400, 0x500, 300, 0x600, null, false, null, false, 4, 32, 128);
+    // a round's (a base), bf16 keys, other head shapes: Triton
+    try indexScore(t, 0x100, k, 0x400, 0x500, 300, 0x600, 0x800, false, null, false, 4, 32, 128);
+    try indexScore(t, 0x100, .{ .bf16 = 0x200 }, 0x400, 0x500, 8192, 0x600, null, true, 0x700, false, 2048, 32, 128);
+    try indexScore(t, 0x100, k, 0x400, 0x500, 8192, 0x600, null, true, 0x700, false, 2048, 64, 128);
+    const it = log.items.items;
+    try std.testing.expectEqual(@as(usize, 5), it.len);
+    try std.testing.expectEqualStrings("aux.index_rows", it[0].name);
+    try std.testing.expectEqual(tri_aux.indexGrid(2048, 128), it[0].grid);
+    const a = log.hipArgs(tri_aux.IndexArgs, 0);
+    try std.testing.expect(a.flags == 3 and a.tmax == 0x700 and a.n == 8192 and a.nt == 128 and a.rows == 2048 and a.k == 0x200 and a.ks == 0x300);
+    try std.testing.expectEqualStrings("aux.index_rows", it[1].name);
+    const b = log.hipArgs(tri_aux.IndexArgs, 1);
+    try std.testing.expect(b.flags == 0 and b.tmax == 0x600 and b.nt == 5);
+    try std.testing.expectEqualStrings("_index_score", it[2].name);
+    try std.testing.expectEqualStrings("_index_score_rows", it[3].name);
+    try std.testing.expectEqualStrings("_index_score_rows", it[4].name);
 }

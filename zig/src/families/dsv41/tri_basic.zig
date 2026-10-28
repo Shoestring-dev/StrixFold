@@ -1,9 +1,9 @@
 //! kernels.py's row kernels around the layers: mHC pre / post of prompt chunks, the embedding, taps, the collapse
 //! before the head, Engram's gate and the plain RMSNorm, each launched as its Python wrapper launches it.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const tri = @import("tri.zig");
-const aot = cuda.aot;
+const aot = gpu.aot;
 const Tri = tri.Tri;
 const u = tri.u;
 const p = aot.ptr;

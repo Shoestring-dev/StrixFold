@@ -2,7 +2,7 @@
 //! rot_many launch rotating every layer's input rows, one glinear launch for each (bits, codebook, warps) set, from
 //! the served build's own cubin. Each output has its layer's own plan, K ranges and reduction order.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const weights = @import("weights.zig");
 const elf = @import("elf.zig");
 
@@ -89,13 +89,15 @@ comptime {
 
 /// The cubin's kernels: glinear_kernel<K2, codebook, warps> by name, and rot_many_kernel.
 pub const Kernels = struct {
-    module: cuda.Module,
-    rot_many: cuda.Function,
-    glinear: [17][3][2]?cuda.Function = @splat(@splat(@splat(null))),
+    module: gpu.Module,
+    rot_many: gpu.Function,
+    glinear: [17][3][2]?gpu.Function = @splat(@splat(@splat(null))),
+    /// The functions are the AMD kit's (hip_load.zig): unload leaves its modules alone.
+    kit_owned: bool = false,
 
     /// The served build's linear_grouped cubin (cuobjdump of tensorfold_exl3_linear_v7's .so).
-    pub fn load(d: *const cuda.Driver, cubin: []const u8) !Kernels {
-        var k: Kernels = .{ .module = try cuda.Module.load(d, cubin), .rot_many = undefined };
+    pub fn load(d: *const gpu.Driver, cubin: []const u8) !Kernels {
+        var k: Kernels = .{ .module = try gpu.Module.load(d, cubin), .rot_many = undefined };
         errdefer k.module.unload();
         var names = elf.Symbols.init(cubin) orelse return error.BadCubin;
         var found_rot = false;
@@ -116,7 +118,7 @@ pub const Kernels = struct {
     }
 
     pub fn unload(k: *Kernels) void {
-        k.module.unload();
+        if (!k.kit_owned) k.module.unload();
         k.* = undefined;
     }
 };
@@ -160,21 +162,21 @@ pub const Call = struct {
 };
 
 /// rot_many: every layer's input rows rotated into its xh rows [M, K] fp16, one launch.
-pub fn rotMany(k: *const Kernels, stream: cuda.Stream, calls: []const Call, m: usize, pdl: bool) !void {
+pub fn rotMany(k: *const Kernels, stream: gpu.Stream, calls: []const Call, m: usize, pdl: bool) !void {
     var a: RArgs = .{ .n = @intCast(calls.len), .M = @intCast(m) };
     var warps: usize = 0;
     for (calls, 0..) |c, i| {
         a.l[i] = .{ .x = c.x, .suh = c.layer.suh, .xh = c.xh, .ldx = c.ldx, .x_dtype = @intFromEnum(c.x_dtype), .K = @intCast(c.layer.k), .first = @intCast(warps) };
         warps += m * (c.layer.k / 128);
     }
-    var args: cuda.Args = .{};
+    var args: gpu.Args = .{};
     args.add(a);
-    try cuda.launch.launch(k.rot_many, .{ .grid = .{ .x = @intCast((warps + 3) / 4) }, .block = .{ .x = 128 }, .pdl = pdl }, stream, &args);
+    try gpu.launch.launch(k.rot_many, .{ .grid = .{ .x = @intCast((warps + 3) / 4) }, .block = .{ .x = 128 }, .pdl = pdl and gpu.features.pdl }, stream, &args);
 }
 
 /// The glinear launches of a group (Exl3Group.rotated, with each call's folds): each (bits, codebook, warps) set in
 /// first-seen order, its split layers' partials in z (fp32, SK * M * N floats each, in order).
-pub fn glinear(k: *const Kernels, stream: cuda.Stream, calls: []const Call, m: usize, z: u64, pdl: bool, discard: bool) !void {
+pub fn glinear(k: *const Kernels, stream: gpu.Stream, calls: []const Call, m: usize, z: u64, pdl: bool, discard: bool) !void {
     var done: [gmax]bool = @splat(false);
     for (calls, 0..) |first, i| {
         if (done[i]) continue;
@@ -213,10 +215,10 @@ pub fn glinear(k: *const Kernels, stream: cuda.Stream, calls: []const Call, m: u
         }
         a.discard = @intFromBool(discard and any_z);
         const f = k.glinear[first.layer.k2][codebook_mul1][if (pf.wk == 8) 1 else 0] orelse return error.MissingKernel;
-        var args: cuda.Args = .{};
+        var args: gpu.Args = .{};
         args.add(a);
         const smem: u32 = @intCast(pf.wk * @min(m, 8) * 128 * 4);
-        try cuda.launch.launch(f, .{ .grid = .{ .x = @intCast(blocks) }, .block = .{ .x = pf.wk * 32 }, .shared = smem, .pdl = pdl }, stream, &args);
+        try gpu.launch.launch(f, .{ .grid = .{ .x = @intCast(blocks) }, .block = .{ .x = pf.wk * 32 }, .shared = smem, .pdl = pdl and gpu.features.pdl }, stream, &args);
     }
 }
 

@@ -3,7 +3,7 @@
 //! them, picture.zig), and the picture into its span's rows on the lane host's thread at the prompt pass (the tower's
 //! encode and span rows, vit.zig), which lanes.zig then hands to the text model and to the other ranks.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const lanes = @import("lanes");
 const picture = @import("picture.zig");
 const vit = @import("vit.zig");
@@ -23,8 +23,8 @@ pub const Vision = struct {
     m: *model.Model,
     cfg: picture.Config = .{},
     tower: vit.Tower,
-    span: cuda.DeviceBuffer, // bf16 [max_span, 5120]: a picture's span rows
-    scratch: cuda.DeviceBuffer, // the span's types and rows (Tower.spanRows)
+    span: gpu.DeviceBuffer, // bf16 [max_span, 5120]: a picture's span rows
+    scratch: gpu.DeviceBuffer, // the span's types and rows (Tower.spanRows)
     pil: ?*pil.Pil = null, // the formats picture.zig does not decode (null: no python3 with Pillow here)
 
     /// The tower on `m`'s stream (its exact kernels and cuBLAS handle, as the tower gate ran them), its weights from
@@ -39,12 +39,12 @@ pub const Vision = struct {
         errdefer gpa.destroy(v);
         v.* = .{ .gpa = gpa, .m = m, .tower = undefined, .span = undefined, .scratch = undefined };
         const d = m.ctx.d;
-        v.tower = try vit.Tower.open(gpa, io, d, m.stream, model_dir, cubin, cuda.kernels.dsv41_ops, &m.ex, &m.blas, m.ch.blas_ws);
+        v.tower = try vit.Tower.open(gpa, io, d, m.stream, model_dir, cubin, gpu.kernels.dsv41_ops, &m.ex, &m.blas, m.ch.blas_ws);
         errdefer v.tower.close();
         try v.tower.reserve(v.cfg.max_tokens * v.cfg.ratio * v.cfg.ratio, v.cfg.max_tokens);
-        v.span = try cuda.DeviceBuffer.alloc(d, max_span * vit.model_dim * 2);
+        v.span = try gpu.DeviceBuffer.alloc(d, max_span * vit.model_dim * 2);
         errdefer v.span.free();
-        v.scratch = try cuda.DeviceBuffer.alloc(d, max_span * 8 + 4096);
+        v.scratch = try gpu.DeviceBuffer.alloc(d, max_span * 8 + 4096);
         errdefer v.scratch.free();
         v.pil = pil.Pil.start(gpa, io) catch |err| blk: {
             std.debug.print("{{\"vision\": \"no Pillow ({s}): images other than PNG are refused\"}}\n", .{@errorName(err)});

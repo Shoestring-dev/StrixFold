@@ -1,12 +1,12 @@
 //! markov.py's Markov loop of the DSpark drafter (_bias, _score, _finish, _pick) and exl3/prefill.py's prompt GEMM
 //! (_gemm), each launched as its Python wrapper launches it.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const tri = @import("tri.zig");
 const config = @import("config.zig");
 const Config = config.Config;
 const Split = @import("plan.zig").Split;
-const aot = cuda.aot;
+const aot = gpu.aot;
 const Tri = tri.Tri;
 const u = tri.u;
 const p = aot.ptr;
@@ -33,10 +33,11 @@ fn int(name: []const u8, v: usize) aot.Arg {
 /// Markov._scratch(N): pv fp32 and pi int32 [N, n_part], send fp32 [N, 4] (zeroed), the staging rows fp16 [N, cols].
 pub const Scratch = struct { pv: u64, pi: u64, send: u64, stage: u64 };
 
-/// comm.gather for steps: every rank's (value, index) bests [rows, 4] fp32 gathered; returns the [world, rows, 4] address.
+/// comm.gather for steps: every rank's (value, index) bests [rows, 4] fp32 gathered at step `step`; returns the
+/// [world, rows, 4] address.
 pub const Gather = struct {
     ctx: *anyopaque,
-    run: *const fn (ctx: *anyopaque, send: u64, rows: usize) anyerror!u64,
+    run: *const fn (ctx: *anyopaque, send: u64, rows: usize, step: usize) anyerror!u64,
 };
 
 /// markov.Markov: one drafter's Markov loop on one rank: the head rows it scores, the cached bias rows, every token's slot.
@@ -135,7 +136,7 @@ pub const Markov = struct {
     pub fn steps(m: Markov, t: Tri, lg: u64, out: u64, ts: usize, n: usize, block: usize, count: usize, sc: Scratch, gather: Gather) !void {
         for (0..count) |i| {
             const send = try m.localBest(t, lg, out, ts, n, block, i, sc) orelse continue;
-            try m.pick(t, try gather.run(gather.ctx, send, n), m.world, out, ts, n, i);
+            try m.pick(t, try gather.run(gather.ctx, send, n, i), m.world, out, ts, n, i);
         }
     }
 };
@@ -259,10 +260,11 @@ test "steps: each step's bias, score and finish, then the pick of the ranks' gat
     const m = try Markov.init(cfg, .{ .rank = 1, .world = tp }, elsewhere, elsewhere, elsewhere);
     const Ranks = struct {
         gathered: u64 = 0,
-        fn run(ctx: *anyopaque, send: u64, rows: usize) anyerror!u64 {
+        fn run(ctx: *anyopaque, send: u64, rows: usize, step: usize) anyerror!u64 {
             const r: *@This() = @ptrCast(@alignCast(ctx));
             try std.testing.expectEqual(@as(u64, 0x7c00_0000_0200), send);
             try std.testing.expectEqual(@as(usize, 3), rows);
+            try std.testing.expectEqual(@as(usize, r.gathered), step); // the step, for the collective's site
             r.gathered += 1;
             return 0x7d00_0000_0000 + 0x1000 * r.gathered;
         }

@@ -1,9 +1,10 @@
 //! kernels.py's sparse attention and packed FP4 rows: sparse_attn (the split keys and their merge, the merge with the
 //! inverse RoPE and wo_a's input rotation, or one pass for prompt chunks), fp4_store and fp4_qd_p2, as Python launches them.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const tri = @import("tri.zig");
-const aot = cuda.aot;
+const tri_aux = @import("tri_aux.zig");
+const aot = gpu.aot;
 const Tri = tri.Tri;
 const u = tri.u;
 const p = aot.ptr;
@@ -104,7 +105,18 @@ pub fn sparseAttn(t: Tri, a: Attn) !void {
     const cbase = if (based) a.cbase orelse a.wbase.? else a.pos;
     // switch "attn_pf" (on in the served build): a split's window keys into L2 before its PDL wait
     const wpf = a.ring and !final;
-    try t.run("_sparse_attn_part", .{ u(a.rows), u(groups), u(sp) }, &.{
+    const hip = if (t.aux) |x| x.attn else null;
+    if (hip != null and a.h == tri_aux.attn_heads and a.hd == tri_aux.attn_hd and a.window == tri_aux.attn_window and n_idx <= tri_aux.attn_max_idx) {
+        // aux.sparse_attn: the same keys (and picks list) in one pass, or the same split partials for the merge below
+        const flags = @as(i32, @intFromBool(a.ring)) | @as(i32, @intFromBool(has)) << 1 | @as(i32, @intFromBool(pack)) << 2 |
+            @as(i32, @intFromBool(final)) << 3 | @as(i32, @intFromBool(based)) << 4;
+        try t.runHip("aux.sparse_attn", hip.?, .{ u(a.rows), 1, u(sp) }, tri_aux.AttnArgs{
+            .q = a.q, .wsrc = a.wsrc, .wlo = a.wlo, .comp = codes, .csc = csc, .idx = if (has) a.idx else a.pos, .pos = a.pos,
+            .pm = pp.pm, .pl = pp.pl, .po = pp.po, .sink = a.sink, .out = a.out, .rbase = rbase, .cbase = cbase,
+            .ring_size = @intCast(ring_size), .n_idx = @intCast(n_idx), .rows = @intCast(a.rows), .heads = @intCast(a.h),
+            .win = @intCast(a.window), .splits = @intCast(sp), .flags = flags, .scale = a.scale,
+        });
+    } else try t.run("_sparse_attn_part", .{ u(a.rows), u(groups), u(sp) }, &.{
         p("Q", "*bf16", a.q),              p("WSRC", "*bf16", a.wsrc),                  p("WLO", "*i64", a.wlo),    p("COMP", ct, codes),
         p("CSC", ct, csc),                 p("IDX", "*i64", if (has) a.idx else a.pos), p("POS", "*i64", a.pos),    p("PM", pt, pp.pm),
         p("PL", pt, pp.pl),                p("PO", pt, pp.po),                          p("SINK", "*fp32", a.sink), p("OUT", "*bf16", a.out),
@@ -258,4 +270,61 @@ test "fp4_qd_p2 launches as recorded" {
             try fp4QdP2(t, c.ptr("X"), c.ptr("OUT"), numel);
         }
     }.call);
+}
+
+test "aux.sparse_attn takes the part launch it fits (the merge stays Triton), and leaves the rest to Triton" {
+    var log: tri.Log = .{ .gpa = std.testing.allocator };
+    defer log.deinit();
+    const f: gpu.Function = undefined; // a logging Tri launches nothing
+    const aux: tri_aux.Aux = .{ .attn = f };
+    const t: Tri = .{ .log = &log, .aux = &aux };
+    const fp4: Comp = .{ .fp4 = .{ .codes = 0x600, .scales = 0x700 } };
+    const prompt: Attn = .{ .q = 0x100, .out = 0x200, .rows = 2048, .h = 32, .hd = 512, .sink = 0x300, .wsrc = 0x400, .wsrc_rows = 2048, .wlo = 0x500, .ring = false, .comp = fp4, .idx = 0x800, .n_idx = 500, .pos = 0x900, .scale = 0.044194173, .window = 128 };
+    // a prompt chunk: one pass, the picks list as Triton reads it (500 padded to 512), straight into out
+    try sparseAttn(t, prompt);
+    try std.testing.expectEqual(@as(usize, 1), log.items.items.len);
+    try std.testing.expectEqualStrings("aux.sparse_attn", log.items.items[0].name);
+    try std.testing.expectEqual([3]u32{ 2048, 1, 1 }, log.items.items[0].grid);
+    var a = log.hipArgs(tri_aux.AttnArgs, 0);
+    try std.testing.expectEqual(@as(i32, 512), a.n_idx);
+    try std.testing.expectEqual(@as(i32, 2 | 4 | 8), a.flags);
+    try std.testing.expectEqual(@as(u64, 0x200), a.out);
+    try std.testing.expect(a.idx == 0x800 and a.comp == 0x600 and a.csc == 0x700 and a.splits == 1 and a.heads == 32 and a.win == 128);
+    log.deinit();
+    log.items = .empty;
+    // a decode window on a pool's rings with per-row bases: 8 splits into the partials, then Triton's merge
+    var dec = prompt;
+    dec.rows = 4;
+    dec.ring = true;
+    dec.ring_rows = 256;
+    dec.wbase = 0xa00;
+    dec.cbase = 0xb00;
+    dec.n_idx = 64;
+    dec.parts = .{ .pm = 0xc00, .pl = 0xd00, .po = 0xe00 };
+    try sparseAttn(t, dec);
+    try std.testing.expectEqual(@as(usize, 2), log.items.items.len);
+    try std.testing.expectEqualStrings("aux.sparse_attn", log.items.items[0].name);
+    try std.testing.expectEqual([3]u32{ 4, 1, attn_splits }, log.items.items[0].grid);
+    a = log.hipArgs(tri_aux.AttnArgs, 0);
+    try std.testing.expectEqual(@as(i32, 1 | 2 | 4 | 16), a.flags);
+    try std.testing.expect(a.pm == 0xc00 and a.pl == 0xd00 and a.po == 0xe00 and a.rbase == 0xa00 and a.cbase == 0xb00);
+    try std.testing.expect(a.ring_size == 256 and a.n_idx == 64 and a.splits == attn_splits);
+    try std.testing.expectEqualStrings("_sparse_attn_merge", log.items.items[1].name);
+    log.deinit();
+    log.items = .empty;
+    // more picks than the kernel reads, another head count, no compressed keys at all
+    var long = prompt;
+    long.n_idx = 1024;
+    var heads = prompt;
+    heads.h = 16;
+    var plain = prompt;
+    plain.comp = .none;
+    try sparseAttn(t, long);
+    try sparseAttn(t, heads);
+    try sparseAttn(t, plain);
+    try std.testing.expectEqualStrings("_sparse_attn_part", log.items.items[0].name);
+    try std.testing.expectEqualStrings("_sparse_attn_part", log.items.items[1].name);
+    try std.testing.expectEqualStrings("aux.sparse_attn", log.items.items[2].name);
+    try std.testing.expectEqual(@as(i32, 8), log.hipArgs(tri_aux.AttnArgs, 2).flags);
+    try std.testing.expectEqual(@as(i32, 0), log.hipArgs(tri_aux.AttnArgs, 2).n_idx);
 }

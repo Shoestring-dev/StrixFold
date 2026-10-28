@@ -3,7 +3,7 @@
 //! reduction order, _compress's ratio-2 softmax and weighted sum, ops.rope_'s complex multiply, the indexer's bf16
 //! head weights and the DSpark taps' mean over the streams.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 
 /// launch_shape.h's tf_launch_blocks: a block a `threads` elements, at most 65535.
 fn blocks(count: usize, threads: usize) u32 {
@@ -26,16 +26,18 @@ pub fn rmsLanes(d: usize, rows: usize) usize {
 }
 
 pub const Exact = struct {
-    module: cuda.Module,
-    k_rms_norm: cuda.Function,
-    k_compress2: cuda.Function,
-    k_rope: cuda.Function,
-    k_bf16_scale: cuda.Function,
-    k_hc_mean4: cuda.Function,
+    module: gpu.Module,
+    k_rms_norm: gpu.Function,
+    k_compress2: gpu.Function,
+    k_rope: gpu.Function,
+    k_bf16_scale: gpu.Function,
+    k_hc_mean4: gpu.Function,
+    /// The functions are the AMD kit's (hip_load.zig): unload leaves its module alone.
+    kit_owned: bool = false,
 
     /// cuda.kernels.dsv41_torch (or the fatbin's bytes).
-    pub fn load(d: *const cuda.Driver, image: []const u8) !Exact {
-        var m = try cuda.Module.load(d, image);
+    pub fn load(d: *const gpu.Driver, image: []const u8) !Exact {
+        var m = try gpu.Module.load(d, image);
         errdefer m.unload();
         return .{
             .module = m,
@@ -48,20 +50,20 @@ pub const Exact = struct {
     }
 
     pub fn unload(x: *Exact) void {
-        x.module.unload();
+        if (!x.kit_owned) x.module.unload();
         x.* = undefined;
     }
 
     /// ops.rms_norm(x, w, eps): out bf16 [rows, d] (row stride ldo) from x bf16 [rows, d] (row stride ldx), w bf16 [d];
     /// d a multiple of 4, at least 128 (torch's vectorized mean).
-    pub fn rmsNorm(e: *const Exact, s: cuda.Stream, x: u64, ldx: usize, w: u64, out: u64, ldo: usize, rows: usize, d: usize, eps: f32) !void {
+    pub fn rmsNorm(e: *const Exact, s: gpu.Stream, x: u64, ldx: usize, w: u64, out: u64, ldo: usize, rows: usize, d: usize, eps: f32) !void {
         if (rows == 0) return;
         if (d % 4 != 0 or d < 128) return error.UnsupportedShape;
         const lanes = rmsLanes(d, rows);
         const h: usize = @max(1, @min(512 / lanes, 64));
         // torch's mean factor: float(outputs) / numel
         const factor: f32 = @as(f32, @floatFromInt(rows)) / @as(f32, @floatFromInt(rows * d));
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(x);
         a.add(@as(c_longlong, @intCast(ldx)));
         a.add(w);
@@ -72,26 +74,26 @@ pub const Exact = struct {
         a.add(factor);
         a.add(eps);
         const smem: u32 = if (lanes > 32) @intCast(lanes * h * 4) else 0;
-        try cuda.launch.launch(e.k_rms_norm, .{ .grid = .{ .x = @intCast((rows + h - 1) / h) }, .block = .{ .x = @intCast(lanes), .y = @intCast(h) }, .shared = smem }, s, &a);
+        try gpu.launch.launch(e.k_rms_norm, .{ .grid = .{ .x = @intCast((rows + h - 1) / h) }, .block = .{ .x = @intCast(lanes), .y = @intCast(h) }, .shared = smem }, s, &a);
     }
 
     /// _compress at ratio 2: kv, score fp32 [g, 2, c] -> out bf16 [g, c] = bf16((kv * score.softmax(dim=1)).sum(1)).
-    pub fn compress2(e: *const Exact, s: cuda.Stream, kv: u64, score: u64, out: u64, g: usize, c: usize) !void {
+    pub fn compress2(e: *const Exact, s: gpu.Stream, kv: u64, score: u64, out: u64, g: usize, c: usize) !void {
         if (g == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(kv);
         a.add(score);
         a.add(out);
         a.add(@as(c_int, @intCast(g)));
         a.add(@as(c_int, @intCast(c)));
-        try cuda.launch.launch(e.k_compress2, .{ .grid = .{ .x = @min(4096, blocks(g * c, 256)) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(e.k_compress2, .{ .grid = .{ .x = @min(4096, blocks(g * c, 256)) }, .block = .{ .x = 256 } }, s, &a);
     }
 
     /// ops.rope_(x[..., off : off + 2 * half], complex(cos, sin)[pos]) of n rows of x bf16 (row stride ldx), in place;
     /// `inverse` rotates back (f.conj()).
-    pub fn rope(e: *const Exact, s: cuda.Stream, x: u64, ldx: usize, off: usize, cos: u64, sin: u64, pos: u64, n: usize, half: usize, inverse: bool) !void {
+    pub fn rope(e: *const Exact, s: gpu.Stream, x: u64, ldx: usize, off: usize, cos: u64, sin: u64, pos: u64, n: usize, half: usize, inverse: bool) !void {
         if (n == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(x);
         a.add(@as(c_longlong, @intCast(ldx)));
         a.add(@as(c_int, @intCast(off)));
@@ -101,30 +103,30 @@ pub const Exact = struct {
         a.add(@as(c_int, @intCast(n)));
         a.add(@as(c_int, @intCast(half)));
         a.add(@as(c_int, @intFromBool(inverse)));
-        try cuda.launch.launch(e.k_rope, .{ .grid = .{ .x = @min(4096, blocks(n * half, 256)) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(e.k_rope, .{ .grid = .{ .x = @min(4096, blocks(n * half, 256)) }, .block = .{ .x = 256 } }, s, &a);
     }
 
     /// wl.to(bf16) * scale of `count` fp32 values (the indexer's head weights).
-    pub fn bf16Scale(e: *const Exact, s: cuda.Stream, in: u64, out: u64, count: usize, scale: f32) !void {
+    pub fn bf16Scale(e: *const Exact, s: gpu.Stream, in: u64, out: u64, count: usize, scale: f32) !void {
         if (count == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(in);
         a.add(out);
         a.add(@as(u64, count));
         a.add(scale);
-        try cuda.launch.launch(e.k_bf16_scale, .{ .grid = .{ .x = blocks(count, 256) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(e.k_bf16_scale, .{ .grid = .{ .x = blocks(count, 256) }, .block = .{ .x = 256 } }, s, &a);
     }
 
     /// h.to(fp32).mean(1).to(bf16) of the streams h [rows, 4, d] bf16 into out [rows, d] (row stride os): a DSpark tap.
-    pub fn hcMean4(e: *const Exact, s: cuda.Stream, h: u64, out: u64, os: usize, rows: usize, d: usize) !void {
+    pub fn hcMean4(e: *const Exact, s: gpu.Stream, h: u64, out: u64, os: usize, rows: usize, d: usize) !void {
         if (rows == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(h);
         a.add(out);
         a.add(@as(c_longlong, @intCast(os)));
         a.add(@as(c_int, @intCast(rows)));
         a.add(@as(c_int, @intCast(d)));
-        try cuda.launch.launch(e.k_hc_mean4, .{ .grid = .{ .x = @min(4096, blocks(rows * d, 256)) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(e.k_hc_mean4, .{ .grid = .{ .x = @min(4096, blocks(rows * d, 256)) }, .block = .{ .x = 256 } }, s, &a);
     }
 };
 

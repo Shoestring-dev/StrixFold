@@ -28,7 +28,9 @@ pub const Link = struct {
     }
 
     /// Rank 0: listen on `ip`:`port` and take the one peer's connection.
-    pub fn listen(ip: [4]u8, port: u16) !Link {
+    /// Rank 0: the follower's connection, waiting at most `seconds` for it (a follower that died while loading
+    /// never connects: rank 0 then fails its open instead of waiting forever, U47).
+    pub fn listen(ip: [4]u8, port: u16, seconds: u32) !Link {
         const fd = try socket();
         errdefer _ = c.close(fd);
         const one: c_int = 1;
@@ -36,6 +38,13 @@ pub const Link = struct {
         var a = addr(ip, port);
         if (c.bind(fd, @ptrCast(&a), @sizeOf(c.sockaddr.in)) != 0) return error.BindFailed;
         if (c.listen(fd, 1) != 0) return error.ListenFailed;
+        var pfd = [1]c.pollfd{.{ .fd = fd, .events = c.POLL.IN, .revents = 0 }};
+        while (true) {
+            const r = c.poll(&pfd, 1, @intCast(@as(u64, seconds) * 1000));
+            if (r > 0) break;
+            if (r == 0) return error.PeerNeverLinked;
+            if (c.errno(r) != .INTR) return error.AcceptFailed;
+        }
         const peer = c.accept(fd, null, null);
         if (peer < 0) return error.AcceptFailed;
         _ = c.close(fd);
@@ -169,7 +178,7 @@ test "frames cross a loopback link in order" {
         }
     };
     const t = try std.Thread.spawn(.{}, Peer.run, .{port});
-    var l = try Link.listen(.{ 127, 0, 0, 1 }, port);
+    var l = try Link.listen(.{ 127, 0, 0, 1 }, port, 10);
     defer l.close();
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("step 1", try l.recv(&buf));
@@ -177,4 +186,9 @@ test "frames cross a loopback link in order" {
     try std.testing.expectEqualStrings("polled", try l.recvSpin(&buf, 1000 * std.time.ns_per_ms));
     try std.testing.expectEqualStrings("late", try l.recvSpin(&buf, 0));
     t.join();
+}
+
+test "rank 0 stops waiting for a follower that never connects" {
+    const port: u16 = 29500 + @as(u16, @intCast(@mod(std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds, 400)));
+    try std.testing.expectError(error.PeerNeverLinked, Link.listen(.{ 127, 0, 0, 1 }, port, 1));
 }

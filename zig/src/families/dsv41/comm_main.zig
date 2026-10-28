@@ -21,7 +21,7 @@ pub fn main(init: std.process.Init) !u8 {
     defer driver.close();
     var ctx = try cuda.Context.init(&driver, 0);
     defer ctx.deinit();
-    var link = if (rank == 0) try dsv41.link.Link.listen(ip, port) else try dsv41.link.Link.connect(io, ip, port, 120);
+    var link = if (rank == 0) try dsv41.link.Link.listen(ip, port, 120) else try dsv41.link.Link.connect(io, ip, port, 120);
     defer link.close();
     var comm = try dsv41.comm.Comm.init(link, rank, 2);
     defer comm.deinit();

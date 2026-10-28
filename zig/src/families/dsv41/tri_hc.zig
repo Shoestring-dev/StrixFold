@@ -1,9 +1,10 @@
 //! kernels.py's mHC steps of decode windows (hc_pre2, on the posted, deferred and split paths the served build takes)
 //! and of prompt chunks (hc_mix_pf, hc_pre_pf), each launched as its Python wrapper launches it.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const tri = @import("tri.zig");
-const aot = cuda.aot;
+const tri_aux = @import("tri_aux.zig");
+const aot = gpu.aot;
 const Tri = tri.Tri;
 const u = tri.u;
 const p = aot.ptr;
@@ -51,7 +52,13 @@ pub fn hcPf2Ok(d: usize) bool {
 pub const Posted = struct { gathered: u64, world: usize, h_out: u64 };
 
 /// hc_pre2's `sink` (only if hcDeferOn(d)): a side stream and the event forking it; the caller joins it (rounds.py).
-pub const Sink = struct { s: cuda.Stream, fork: cuda.Event };
+/// cnt: _hc_fused's arrival counters (int32, at least cdiv(rows, hcRb(rows)), zero; each launch leaves them zero), or 0.
+pub const Sink = struct { s: gpu.Stream, fork: gpu.Event, cnt: u64 = 0 };
+
+/// TF_HC_FUSE=1 (read by Round.init, every rank alike; default off): on hc_dots' path the finish's collapse + RMSNorm, the
+/// mixes of the stored streams and the Sinkhorn as one launch, _hc_fused (tools/dsv41-hip/exl3/kdec/hc_fuse.py: their
+/// own code, the same bits), on this stream; nothing goes to the side stream.
+pub var fuse = false;
 
 /// sink.wait_stream(current stream): a Tri on the side stream after the work queued so far; no PDL (no _pdl() there).
 fn sinkTri(t: Tri, sk: Sink) !Tri {
@@ -116,6 +123,18 @@ fn sinkhorn(t: Tri, part: u64, base: u64, scale: u64, pre_out: u64, post: u64, c
     }, &.{ ci("D", d), ci("NB", hc_blocks), ci("ITERS", iters) });
 }
 
+/// _hc_fused: _hc_finish_s's role 1 (programs (g, NB, 0)), _hc_mix_part of x (programs (g, b < NB, mg)) and, by the
+/// last of a row group's mix programs to arrive (counter cnt[g]), _hc_sinkhorn, for rows in groups of hcRb(rows).
+fn fused(t: Tri, x: u64, fn_w: u64, part: u64, cnt: u64, base: u64, scale: u64, pre_in: u64, norm_w: u64, out: u64, pre_out: u64, post: u64, comb: u64, eps: f32, hc_eps: f32, iters: usize, rows: usize, d: usize) !void {
+    const rb = hcRb(rows);
+    try runRows(t, "_hc_fused", .{ tri.cdiv(rows, rb), hc_blocks + 1, 3 }, &.{
+        p("X", "*bf16", x),             p("FN", "*fp32", fn_w),          p("PART", "*fp32", part),         p("CNT", "*i32", cnt),
+        p("BASE", "*fp32", base),       p("SCALE", "*fp32", scale),      p("PRE_IN", "*fp32", pre_in),     p("NW", "*bf16", norm_w),
+        p("OUT", "*bf16", out),         p("PRE_OUT", "*fp32", pre_out),  p("POST", "*fp32", post),         p("COMB", "*fp32", comb),
+        aot.float("eps", eps),          aot.float("hc_eps", hc_eps),
+    }, &.{ ci("WIDE", 4 * d), ci("D", d), ci("NB", hc_blocks), ci("SUB", 128), ci("MB", 8), ci("RB", rb), ci("ITERS", iters), ci("BLOCK", 1024), ci("SST", 1) }, rows);
+}
+
 /// hc_pre2: hc_pre's outputs for a decode window (the same bits), the last post fused in if `posted`; returns the src.
 pub fn hcPre2(t: Tri, h: u64, fn_w: u64, scale: u64, base: u64, pre_in: u64, norm_w: u64, eps: f32, hc_eps: f32, iters: usize, out: u64, pre_out: u64, post: u64, comb: u64, part: u64, posted: ?Posted, sink: ?Sink, rows: usize, d: usize) !u64 {
     if (posted) |ps| std.debug.assert(ps.h_out != h);
@@ -126,6 +145,10 @@ pub fn hcPre2(t: Tri, h: u64, fn_w: u64, scale: u64, base: u64, pre_in: u64, nor
             p("X", "*bf16", h),       p("XO", "*bf16", ps.h_out), p("G", "*fp32", ps.gathered), aot.int("RS", @intCast(rows * d)),
             p("POST", "*fp32", post), p("COMB", "*fp32", comb),
         }, &.{ ci("WIDE", 4 * d), ci("D", d), ci("KB", 4 * d / hc_blocks), ci("WORLD", ps.world), t.pdlConst() });
+        if (fuse and sink.?.cnt != 0) {
+            try fused(t, ps.h_out, fn_w, part, sink.?.cnt, base, scale, pre_in, norm_w, out, pre_out, post, comb, eps, hc_eps, iters, rows, d);
+            return ps.h_out;
+        }
         try finishSplit(t, ps.h_out, part, base, scale, pre_in, norm_w, out, pre_out, post, comb, eps, hc_eps, iters, true, rows, d);
         const st = try sinkTri(t, sink.?);
         try mixPart(st, ps.h_out, null, post, comb, fn_w, part, rows, d);
@@ -146,6 +169,16 @@ pub fn hcPre2(t: Tri, h: u64, fn_w: u64, scale: u64, base: u64, pre_in: u64, nor
 
 /// hc_mix_pf: a prompt chunk's mixes' partial dots of h, or of the post written to h_out if `posted`; returns the src.
 pub fn hcMixPf(t: Tri, h: u64, fn_w: u64, part: u64, posted: ?Posted, post: u64, comb: u64, rows: usize, d: usize) !u64 {
+    if (t.aux) |x| if (x.hc_mix) |f| if (d == tri_aux.hc_d and hc_blocks == tri_aux.hc_nb and (if (posted) |ps| ps.world <= 2 else true)) {
+        // aux.hc_mix_pf: the same posted streams and PART slots (_hc_finish reads them unchanged)
+        var a: tri_aux.HcMixArgs = .{ .x = h, .xo = h, .g = h, .post = part, .comb = part, .@"fn" = fn_w, .part = part, .rs = 0, .rows = @intCast(rows), .world = 1, .flags = 0 };
+        if (posted) |ps| {
+            std.debug.assert(ps.h_out != h);
+            a = .{ .x = h, .xo = ps.h_out, .g = ps.gathered, .post = post, .comb = comb, .@"fn" = fn_w, .part = part, .rs = @intCast(rows * d), .rows = @intCast(rows), .world = @intCast(ps.world), .flags = 1 };
+        }
+        try t.runHip("aux.hc_mix_pf", f, tri_aux.hcGrid(rows), a);
+        return if (posted) |ps| ps.h_out else h;
+    };
     const rb = @max(1, @min(hc_pf_rb, rows));
     const grid: [3]u32 = .{ tri.cdiv(rows, rb) * hc_blocks, 1, 1 };
     const consts = [_]aot.Const{ ci("WIDE", 4 * d), ci("D", d), ci("NB", hc_blocks), ci("SUB", 128), ci("MB", 8), ci("RB", rb) };
@@ -315,4 +348,57 @@ test "hc_pre2 and hc_pre_pf launch in kernels.py's order, each kernel on the str
     // hc_pre_pf with the post: hc_mix_pf's posted dots, then hc_pre's finish of h_out
     try std.testing.expectEqual(ps.h_out, try hcPrePf(t, h, stand(5), stand(6), stand(7), stand(8), stand(9), 1e-20, 1e-6, 20, stand(10), stand(11), stand(12), stand(13), part, ps, 2048, 5120));
     try expectLog(&log, &.{ "_hc_mix_pf", "_hc_finish" }, &(posted ++ [_]Wire{.{ 1, "X", ps.h_out }}));
+}
+
+test "TF_HC_FUSE: hc_dots' finish, mixes and Sinkhorn as one launch on this stream, wired as the three were" {
+    var log: tri.Log = .{ .gpa = std.testing.allocator };
+    defer log.deinit();
+    const t: Tri = .{ .log = &log };
+    const h = stand(1);
+    const part = stand(2);
+    const ps: Posted = .{ .gathered = stand(3), .world = 2, .h_out = stand(4) };
+    var sk = side;
+    sk.cnt = stand(14);
+    fuse = true;
+    defer fuse = false;
+    try std.testing.expectEqual(ps.h_out, try hcPre2(t, h, stand(5), stand(6), stand(7), stand(8), stand(9), 1e-20, 1e-6, 20, stand(10), stand(11), stand(12), stand(13), part, ps, sk, 3, 5120));
+    try std.testing.expectEqual(tri.cdiv(3, 3), log.items.items[1].grid[0]);
+    try std.testing.expectEqual(@as(u32, hc_blocks + 1), log.items.items[1].grid[1]);
+    try expectLog(&log, &.{ "_hc_post_only", "_hc_fused" }, &.{
+        .{ 0, "XO", ps.h_out }, .{ 1, "X", ps.h_out }, .{ 1, "FN", stand(5) }, .{ 1, "PART", part }, .{ 1, "CNT", stand(14) },
+        .{ 1, "SCALE", stand(6) }, .{ 1, "BASE", stand(7) }, .{ 1, "PRE_IN", stand(8) }, .{ 1, "NW", stand(9) }, .{ 1, "OUT", stand(10) },
+        .{ 1, "PRE_OUT", stand(11) }, .{ 1, "POST", stand(12) }, .{ 1, "COMB", stand(13) },
+    });
+    // no counters (the drafter's rounds, a test's side): the three launches as before, though the switch is on
+    _ = try hcPre2(t, h, stand(5), stand(6), stand(7), stand(8), stand(9), 1e-20, 1e-6, 20, stand(10), stand(11), stand(12), stand(13), part, ps, side, 3, 5120);
+    try expectLog(&log, &.{ "_hc_post_only", "_hc_finish_s", "_hc_mix_part", "_hc_sinkhorn" }, &.{});
+}
+
+test "aux.hc_mix_pf takes hc_mix_pf at every row count; Triton keeps another width or world" {
+    var log: tri.Log = .{ .gpa = std.testing.allocator };
+    defer log.deinit();
+    const f: gpu.Function = undefined; // a logging Tri launches nothing
+    const aux: tri_aux.Aux = .{ .hc_mix = f };
+    const t: Tri = .{ .log = &log, .aux = &aux };
+    const h = stand(1);
+    const part = stand(2);
+    const ps: Posted = .{ .gathered = stand(3), .world = 2, .h_out = stand(4) };
+    try std.testing.expectEqual(ps.h_out, try hcMixPf(t, h, stand(5), part, ps, stand(6), stand(7), 2048, 5120));
+    try std.testing.expectEqual(h, try hcMixPf(t, h, stand(5), part, null, stand(6), stand(7), 8, 5120));
+    try std.testing.expectEqual(ps.h_out, try hcMixPf(t, h, stand(5), part, ps, stand(6), stand(7), 64, 5120));
+    try std.testing.expectEqual(h, try hcMixPf(t, h, stand(5), part, null, stand(6), stand(7), 8, 2560));
+    const ps4: Posted = .{ .gathered = stand(3), .world = 4, .h_out = stand(4) };
+    try std.testing.expectEqual(ps4.h_out, try hcMixPf(t, h, stand(5), part, ps4, stand(6), stand(7), 64, 5120));
+    const it = log.items.items;
+    try std.testing.expectEqualStrings("aux.hc_mix_pf", it[0].name);
+    try std.testing.expectEqual(tri_aux.hcGrid(2048), it[0].grid);
+    const a = log.hipArgs(tri_aux.HcMixArgs, 0);
+    try std.testing.expect(a.flags == 1 and a.xo == ps.h_out and a.g == ps.gathered and a.rs == 2048 * 5120 and a.world == 2 and a.post == stand(6) and a.comb == stand(7) and a.@"fn" == stand(5) and a.part == part);
+    try std.testing.expectEqualStrings("aux.hc_mix_pf", it[1].name);
+    const b = log.hipArgs(tri_aux.HcMixArgs, 1);
+    try std.testing.expect(b.flags == 0 and b.rows == 8 and b.world == 1);
+    try std.testing.expectEqualStrings("aux.hc_mix_pf", it[2].name);
+    try std.testing.expectEqual(tri_aux.hcGrid(64), it[2].grid);
+    try std.testing.expectEqualStrings("_hc_mix_pf", it[3].name);
+    try std.testing.expectEqualStrings("_hc_mix_pf", it[4].name);
 }

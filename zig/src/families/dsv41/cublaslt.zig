@@ -5,7 +5,7 @@
 //! first heuristic result (the recording's cuBLASLt log, level 5); the same calls on the same library pick the same
 //! kernel, so the bytes are torch's.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const cublas = @import("cublas.zig");
 
 pub const Status = c_int;
@@ -43,7 +43,7 @@ pub const Api = struct {
     cublasLtMatmulPreferenceDestroy: *const fn (Ptr) callconv(.c) S,
     cublasLtMatmulPreferenceSetAttribute: *const fn (Ptr, c_int, *const anyopaque, usize) callconv(.c) S,
     cublasLtMatmulAlgoGetHeuristic: *const fn (Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, c_int, *Heuristic, *c_int) callconv(.c) S,
-    cublasLtMatmul: *const fn (Ptr, Ptr, *const f32, u64, Ptr, u64, Ptr, *const f32, u64, Ptr, u64, Ptr, *const [8]u64, u64, usize, cuda.abi.Stream) callconv(.c) S,
+    cublasLtMatmul: *const fn (Ptr, Ptr, *const f32, u64, Ptr, u64, Ptr, *const f32, u64, Ptr, u64, Ptr, *const [8]u64, u64, usize, gpu.abi.Stream) callconv(.c) S,
 };
 
 /// torch's cuBLASLt workspace for these calls (the log's workSpaceSizeInBytes).
@@ -53,10 +53,10 @@ pub const Lt = struct {
     lib: std.DynLib,
     api: Api,
     handle: Ptr, // the cuBLAS handle, as torch passes it
-    stream: cuda.Stream,
+    stream: gpu.Stream,
     workspace: u64,
 
-    pub fn open(b: *const cublas.Blas, stream: cuda.Stream, workspace: u64) Error!Lt {
+    pub fn open(b: *const cublas.Blas, stream: gpu.Stream, workspace: u64) Error!Lt {
         var lib = std.DynLib.open("libcublasLt.so.13") catch std.DynLib.open("libcublasLt.so") catch return error.LibraryUnavailable;
         errdefer lib.close();
         var api: Api = undefined;

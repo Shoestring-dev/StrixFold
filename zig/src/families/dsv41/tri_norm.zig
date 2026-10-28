@@ -1,9 +1,10 @@
 //! kernels.py's q and window-KV norms with their rotations and RoPE, RoPE on heads, the router's and the indexer's row
 //! matmuls (rowmm2, rowmm_wts, rowmm_gate) and the MoE routing, each launched as its Python wrapper launches it.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const tri = @import("tri.zig");
-const aot = cuda.aot;
+const tri_aux = @import("tri_aux.zig");
+const aot = gpu.aot;
 const Tri = tri.Tri;
 const u = tri.u;
 const p = aot.ptr;
@@ -73,7 +74,15 @@ pub fn kvNormRope(t: Tri, y: u64, w: u64, cos: u64, sin: u64, pos: u64, ring: u6
 }
 
 /// rope_heads: RoPE (inverse: the inverse rotation) on the last rd dims of every head of x [R, H, HD] bf16, in place.
+/// aux.rope_heads (TF_DS_AUX rope) at every row count, the same bits, when its 16-byte loads are aligned.
 pub fn ropeHeads(t: Tri, x: u64, cos: u64, sin: u64, pos: u64, rd: usize, inverse: bool, rows: usize, h: usize, hd: usize) !void {
+    const v = 2 * tri_aux.rope_pairs;
+    if (t.aux) |ax| if (ax.rope) |f| if (rd % v == 0 and rd <= hd and hd % v == 0 and (x | cos | sin) % 16 == 0) {
+        return t.runHip("aux.rope_heads", f, tri_aux.ropeGrid(rows, h, rd), tri_aux.RopeHeadsArgs{
+            .x = x, .cos = cos, .sin = sin, .pos = pos, .rows = @intCast(rows), .h = @intCast(h), .hd = @intCast(hd),
+            .rd = @intCast(rd), .flags = @intFromBool(inverse),
+        });
+    };
     const hb = @min(h, 16);
     try t.run("_rope_heads", .{ u(rows), u(h / hb), 1 }, &.{ p("X", "*bf16", x), p("COS", "*fp32", cos), p("SIN", "*fp32", sin), p("POS", "*i64", pos) }, &.{ ci("H", h), ci("HD", hd), ci("RD", rd), cb("INV", inverse), ci("HB", hb), t.pdlConst() });
 }
@@ -92,6 +101,24 @@ pub fn rowmm2(t: Tri, x: u64, xs: usize, w: u64, out: u64, rows: usize, k: usize
     try t.run("_rowmm2", .{ u(rows), tri.cdiv(n, bn), 1 }, &.{
         p("X", "*bf16", x), aot.int("xs", @intCast(xs)), p("W", "*fp16", w), p("OUT", "*fp32", out), aot.float("scale", 1.0),
     }, &.{ ci("K", k), ci("N", n), ci("BN", bn), ci("BK", 256), t.pdlConst(), cb("WTS", false) });
+}
+
+/// The fp32 GEMM of a prompt chunk's router gate or indexer head weights, out [R, N] = x [R, K] bf16 (row stride K) @
+/// w [N, K]^T fp16, by aux.gate_logits from the weight as stored (TF_DS_AUX gate: N a multiple of 64; idxw: N = 32) when
+/// it takes the shape: true when it ran, false for the caller's GEMM on fp32 copies (hipBLAS).
+pub fn gateLogits(t: Tri, x: u64, w: u64, out: u64, rows: usize, k: usize, n: usize) !bool {
+    const ax = t.aux orelse return false;
+    if (k != tri_aux.gate_d or (x | w) % 16 != 0) return false;
+    const a: tri_aux.GateArgs = .{ .x = x, .w = w, .out = out, .rows = @intCast(rows), .ne = @intCast(n) };
+    if (n == tri_aux.gate32_ne) {
+        const f = ax.gate32 orelse return false;
+        try t.runHipBlock("aux.gate_logits", f, tri_aux.gateGrid(rows, n), tri_aux.gate32_block, a);
+        return true;
+    }
+    if (n % tri_aux.gate_bn != 0) return false;
+    const f = ax.gate orelse return false;
+    try t.runHip("aux.gate_logits", f, tri_aux.gateGrid(rows, n), a);
+    return true;
 }
 
 /// rowmm: x [R, K] bf16 @ w [N, K]^T fp16 -> out [R, N] fp32, a row alone (rowmm2's fallback; no _rowmm launch is recorded).
@@ -115,12 +142,19 @@ pub fn rpTile(rows: usize) RpTile {
     return if (rows <= 6) .{ .bn = 16, .cpg = 1, .nw = 2 } else .{ .bn = 8, .cpg = 1, .nw = 2 };
 }
 
+/// The chunk sums rowmm_gate writes a row for `rows` rows of K = k, N = n: K / 256, or 0 when it falls back to rowmm2's
+/// plain logits (switch "rowmm_parts", on in the served build; the wrapper's dtype check, x bf16 and w fp16, holds by
+/// rowmmGate's pointer types).
+pub fn gateParts(rows: usize, k: usize, n: usize) usize {
+    const kc = k / 256;
+    return if (rowmm_parts_min <= rows and rows <= tri.decode_rows and k % 256 == 0 and kc % rpTile(rows).cpg == 0 and n >= 32) kc else 0;
+}
+
 /// rowmm_gate: the gate's logits as chunk sums out [R, K / 256, N] fp32 (decode windows) or rowmm2's [R, N]; returns route()'s kc (0: plain).
 pub fn rowmmGate(t: Tri, x: u64, xs: usize, w: u64, out: u64, rows: usize, k: usize, n: usize) !usize {
     const tile = rpTile(rows);
-    const kc = k / 256;
-    // switch "rowmm_parts" (on in the served build); the wrapper's dtype check (x bf16, w fp16) holds by these pointer types
-    if (!(rowmm_parts_min <= rows and rows <= tri.decode_rows and k % 256 == 0 and kc % tile.cpg == 0 and n >= 32)) {
+    const kc = gateParts(rows, k, n);
+    if (kc == 0) {
         try rowmm2(t, x, xs, w, out, rows, k, n);
         return 0;
     }
@@ -192,6 +226,31 @@ test "kv_norm_rope launches as recorded" {
     }.call);
 }
 
+test "a replay-cut chunk's positions (pos[first:], first odd or even) take the kit's variants" {
+    // prompt.replayCut: ch.pos becomes pos[first:], first * 8 bytes into its buffer; the chunk's later launches that
+    // take it: ropeHeads (the heads' q, the inverse on o, the indexer's q) and kvNormRope (ring mode or not)
+    const a = std.testing.allocator;
+    var log: tri.Log = .{ .gpa = a };
+    defer log.deinit();
+    const t: Tri = .{ .log = &log };
+    const at: u64 = 0x7f00_0000_0000;
+    for (0..4) |first| {
+        const pos = at + 0x10_0000 + first * 8;
+        for ([_]usize{ 1, 16, 17, 2048 }) |n| {
+            try ropeHeads(t, at, at + 0x1000, at + 0x2000, pos, 64, false, n, 32, 512);
+            try ropeHeads(t, at, at + 0x1000, at + 0x2000, pos, 64, true, n, 32, 512);
+            try ropeHeads(t, at, at + 0x1000, at + 0x2000, pos, 64, false, n, 32, 128);
+            try kvNormRope(t, at + 0x3000, at + 0x4000, at + 0x1000, at + 0x2000, pos, at + 0x5000, 144, at + 0x6000, 1e-20, true, 64, at + 0x7000, n, 512);
+        }
+    }
+    for (log.items.items) |k| if (!try tri.covered(a, k)) {
+        std.debug.print("{s}: no recorded or derived variant (POS at {x})\n", .{ k.name, for (k.args) |x| {
+            if (std.mem.eql(u8, x.name, "POS")) break x.value.ptr.addr;
+        } else 0 });
+        return error.TestUnexpectedResult;
+    };
+}
+
 test "rope_heads launches as recorded" {
     try tri.conform("_rope_heads", struct {
         fn call(t: Tri, c: Case) !void {
@@ -232,6 +291,64 @@ fn callRoute(t: Tri, c: Case) !void {
     const parts = c.has("S");
     const lg = if (parts) "S" else "L";
     try route(t, c.ptr(lg), if (parts) c.dim("S", 1) else 0, c.ptr("BIAS"), @intCast(c.constInt("TOPK")), c.float("scale"), @intCast(c.int("shared_id")), c.ptr("PICK"), c.ptr("WTS"), c.dim(lg, 0), c.dim(lg, c.rank(lg) - 1), c.dim("PICK", 1));
+}
+
+test "aux.rope_heads takes rope_heads at every row count; Triton keeps an unaligned or narrow shape" {
+    var log: tri.Log = .{ .gpa = std.testing.allocator };
+    defer log.deinit();
+    const f: gpu.Function = undefined; // a logging Tri launches nothing
+    const aux: tri_aux.Aux = .{ .rope = f };
+    const t: Tri = .{ .log = &log, .aux = &aux };
+    // the prompt chunk's q (inverse: o), a round's latents (one head), the indexer's q
+    try ropeHeads(t, 0x1000, 0x2000, 0x3000, 0x4000, 64, false, 2048, 32, 512);
+    try ropeHeads(t, 0x1000, 0x2000, 0x3000, 0x4000, 64, true, 1, 32, 512);
+    try ropeHeads(t, 0x1000, 0x2000, 0x3000, 0x4000, 64, false, 6, 1, 128);
+    const it = log.items.items;
+    try std.testing.expectEqual(@as(usize, 3), it.len);
+    for (it) |k| {
+        try std.testing.expectEqualStrings("aux.rope_heads", k.name);
+        try std.testing.expectEqual(@as(u32, 256), k.block);
+    }
+    try std.testing.expectEqual(tri_aux.ropeGrid(2048, 32, 64), it[0].grid);
+    const a = log.hipArgs(tri_aux.RopeHeadsArgs, 1);
+    try std.testing.expectEqual(tri_aux.RopeHeadsArgs{ .x = 0x1000, .cos = 0x2000, .sin = 0x3000, .pos = 0x4000, .rows = 1, .h = 32, .hd = 512, .rd = 64, .flags = 1 }, a);
+    try std.testing.expectEqual(@as(i32, 0), log.hipArgs(tri_aux.RopeHeadsArgs, 2).flags);
+    // x not 16-byte aligned, or rd not a multiple of 8: _rope_heads
+    try ropeHeads(t, 0x1008, 0x2000, 0x3000, 0x4000, 64, false, 2, 32, 512);
+    try ropeHeads(t, 0x1000, 0x2000, 0x3000, 0x4000, 4, false, 2, 32, 512);
+    try std.testing.expectEqualStrings("_rope_heads", log.items.items[3].name);
+    try std.testing.expectEqualStrings("_rope_heads", log.items.items[4].name);
+    // not bound (TF_DS_AUX without rope): _rope_heads
+    const none: tri_aux.Aux = .{};
+    const t2: Tri = .{ .log = &log, .aux = &none };
+    try ropeHeads(t2, 0x1000, 0x2000, 0x3000, 0x4000, 64, false, 2, 32, 512);
+    try std.testing.expectEqualStrings("_rope_heads", log.items.items[5].name);
+}
+
+test "gateLogits: the router build past 64-wide expert sets, the n32 build for 32 heads, else the caller's GEMM" {
+    var log: tri.Log = .{ .gpa = std.testing.allocator };
+    defer log.deinit();
+    const f: gpu.Function = undefined; // a logging Tri launches nothing
+    const aux: tri_aux.Aux = .{ .gate = f, .gate32 = f };
+    const t: Tri = .{ .log = &log, .aux = &aux };
+    try std.testing.expect(try gateLogits(t, 0x1000, 0x2000, 0x3000, 24, 5120, 384));
+    try std.testing.expect(try gateLogits(t, 0x1000, 0x2000, 0x3000, 2048, 5120, 32));
+    const it = log.items.items;
+    try std.testing.expectEqualStrings("aux.gate_logits", it[0].name);
+    try std.testing.expectEqual([3]u32{ 1, 6, 1 }, it[0].grid);
+    try std.testing.expectEqual(@as(u32, 256), it[0].block);
+    try std.testing.expectEqual(tri_aux.GateArgs{ .x = 0x1000, .w = 0x2000, .out = 0x3000, .rows = 24, .ne = 384 }, log.hipArgs(tri_aux.GateArgs, 0));
+    try std.testing.expectEqual([3]u32{ 64, 1, 1 }, it[1].grid);
+    try std.testing.expectEqual(@as(u32, 128), it[1].block);
+    try std.testing.expectEqual(@as(i32, 32), log.hipArgs(tri_aux.GateArgs, 1).ne);
+    // another width, an expert count that is not a multiple of 64, a misaligned x, a build not bound: no launch
+    try std.testing.expect(!try gateLogits(t, 0x1000, 0x2000, 0x3000, 24, 4096, 384));
+    try std.testing.expect(!try gateLogits(t, 0x1000, 0x2000, 0x3000, 24, 5120, 256 + 32));
+    try std.testing.expect(!try gateLogits(t, 0x1002, 0x2000, 0x3000, 24, 5120, 384));
+    const only32: tri_aux.Aux = .{ .gate32 = aux.gate32 };
+    try std.testing.expect(!try gateLogits(.{ .log = &log, .aux = &only32 }, 0x1000, 0x2000, 0x3000, 24, 5120, 384));
+    try std.testing.expect(!try gateLogits(.{ .log = &log }, 0x1000, 0x2000, 0x3000, 24, 5120, 32));
+    try std.testing.expectEqual(@as(usize, 2), log.items.items.len);
 }
 
 test "route (logits) launches _route as recorded" {

@@ -7,7 +7,7 @@
 //! columns on either; and a drafter window (an MTP layer: 129 experts, 4 slots, K2 8), which a 2D node runs as its TP2
 //! rank does (exl3_experts.decodeLaunches over the whole half). The helpers are exl3_experts_rec.zig's.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const xe = @import("exl3_experts.zig");
 const x2 = @import("exl3_experts2d.zig");
 const weights = @import("weights.zig");
@@ -108,7 +108,7 @@ const limit: f32 = 10; // the checkpoint's swiglu_limit, as recorded
 
 /// Parameters as the recorder prints them: "offset:bytes" a parameter, '|' between, the bytes in hex with each 8-byte
 /// word that holds a device address as <ptr>.
-fn masked(a: *const cuda.Args, buf: []u8) ![]const u8 {
+fn masked(a: *const gpu.Args, buf: []u8) ![]const u8 {
     var w: std.Io.Writer = .fixed(buf);
     for (a.offsets[0..a.count], a.sizes[0..a.count], 0..) |off, size, i| {
         if (i > 0) try w.writeByte('|');
@@ -211,7 +211,7 @@ test "a 2D node's decode passes each buffer where experts2d.py does" {
         try std.testing.expectEqualSlices(u64, ptrs, got[0..n]);
     }
     const epi = struct {
-        fn of(a: *const cuda.Args) xe.DecodeEpi {
+        fn of(a: *const gpu.Args) xe.DecodeEpi {
             return std.mem.bytesToValue(xe.DecodeEpi, a.storage[a.offsets[a.count - 1]..][0..@sizeOf(xe.DecodeEpi)]);
         }
     };

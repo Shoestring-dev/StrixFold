@@ -9,7 +9,7 @@
 //! grouped_cp_kernel for down with the rows' combine, the last two programmatic dependents.
 //! The map: pipeline/EXL3-EXPERTS-LAUNCHES.md.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const elf = @import("elf.zig");
 const weights = @import("weights.zig");
 
@@ -50,25 +50,29 @@ pub fn memberStride(r: usize) usize {
 }
 
 pub const Kernels = struct {
-    base: cuda.Module,
-    cb: cuda.Module,
-    group_count: cuda.Function,
-    group_place: cuda.Function,
-    work_list: cuda.Function,
-    rot_in: cuda.Function, // <__nv_bfloat16>
-    gateup_epilogue: cuda.Function,
-    down_combine: cuda.Function,
-    decode_prep: cuda.Function, // <__nv_bfloat16>
-    mma: [3]?cuda.Function = @splat(null), // grouped_mma_kernel<CB, LO, HI, FOLD true, KB 4> by range()
-    rows: [3]?cuda.Function = @splat(null), // grouped_rows_kernel<CB, 8, 4, 1, LO, HI, 2, FOLD false> by range()
-    cp: [3][2]?cuda.Function = @splat(@splat(null)), // grouped_cp_kernel<CB, 8, 4, 3, LO, HI, EPI> by range(), EPI - 1
+    base: gpu.Module,
+    cb: gpu.Module,
+    group_count: gpu.Function,
+    group_place: gpu.Function,
+    work_list: gpu.Function,
+    rot_in: gpu.Function, // <__nv_bfloat16>
+    gateup_epilogue: gpu.Function,
+    down_combine: gpu.Function,
+    decode_prep: gpu.Function, // <__nv_bfloat16>
+    mma: [3]?gpu.Function = @splat(null), // grouped_mma_kernel<CB, LO, HI, FOLD true, KB 4> by range()
+    rows: [3]?gpu.Function = @splat(null), // grouped_rows_kernel<CB, 8, 4, 1, LO, HI, 2, FOLD false> by range()
+    cp: [3][2]?gpu.Function = @splat(@splat(null)), // grouped_cp_kernel<CB, 8, 4, 3, LO, HI, EPI> by range(), EPI - 1
+    /// The AMD kit's prompt experts (exl3.pf_experts.*, hip_load.zig); null in a CUDA build or a kit without them.
+    pf: ?Pf = null,
+    /// The functions are the AMD kit's (hip_load.zig): unload leaves its modules alone.
+    kit_owned: bool = false,
 
     /// experts.cu's cubin and the codebook's (experts_cb<codebook>.cu); kernels by name (the anonymous namespace's
     /// hash changes with every build) and template arguments.
-    pub fn load(d: *const cuda.Driver, base_cubin: []const u8, cb_cubin: []const u8, codebook: u32) !Kernels {
-        var base = try cuda.Module.load(d, base_cubin);
+    pub fn load(d: *const gpu.Driver, base_cubin: []const u8, cb_cubin: []const u8, codebook: u32) !Kernels {
+        var base = try gpu.Module.load(d, base_cubin);
         errdefer base.unload();
-        var cb = try cuda.Module.load(d, cb_cubin);
+        var cb = try gpu.Module.load(d, cb_cubin);
         errdefer cb.unload();
         var k: Kernels = .{ .base = base, .cb = cb, .group_count = undefined, .group_place = undefined, .work_list = undefined, .rot_in = undefined, .gateup_epilogue = undefined, .down_combine = undefined, .decode_prep = undefined };
         var found: u7 = 0;
@@ -117,13 +121,143 @@ pub const Kernels = struct {
     }
 
     pub fn unload(k: *Kernels) void {
-        k.base.unload();
-        k.cb.unload();
+        if (!k.kit_owned) {
+            k.base.unload();
+            k.cb.unload();
+        }
         k.* = undefined;
     }
 };
 
-fn fnByName(m: cuda.Module, name: []const u8) !cuda.Function {
+/// w-pf's prompt experts (node0 ~/tfp/pf pf_moe.hip; the kit's exl3_pf.hip): one job an (expert, up to nm rows), each
+/// weight tile decoded once a job for all its rows, no K splits, no atomics in the sums. A gu / down kernel runs the jobs
+/// of the experts with its K2 only, so a layer's table (routed experts and the shared one, other bits) takes a gu and
+/// a down launch for each K2 it holds (pfPlan).
+pub const Pf = struct {
+    count: gpu.Function,
+    place: gpu.Function,
+    rot: gpu.Function,
+    combine: gpu.Function,
+    gu: [2][17]?gpu.Function = @splat(@splat(null)), // by nm (64, 128) and K2
+    down: [2][17]?gpu.Function = @splat(@splat(null)),
+};
+
+/// exl3.pf_experts' one by-value argument (abi.h tf_ds_exl3_pf_args).
+pub const PfArgs = extern struct {
+    gate_ptr: u64,
+    up_ptr: u64,
+    down_ptr: u64,
+    gate_k2: u64, // int32 [E]; the gu kernels read gate's (up's is the same, weights.Experts.k2_masks)
+    up_k2: u64,
+    down_k2: u64,
+    suh_g: u64,
+    suh_u: u64,
+    svh_g: u64,
+    svh_u: u64,
+    suh_d: u64,
+    svh_d: u64,
+    x: u64, // [r, ldx], x_fmt 1: bf16
+    ids: u64, // int32 [r, slots]: pick
+    wts: u64, // fp32 [r, slots]
+    xg: u64, // fp16 [r * slots, d]: rotated rows in sorted order
+    xu: u64,
+    xd: u64, // fp16 [r * slots, i]
+    z: u64, // fp32 [r * slots, d]: each slot's output
+    order: u64, // int32 [r * slots]
+    jobs: u64, // int32 [3 * maxjobs]
+    meta: u64, // int32 [2 * 1025]
+    out: u64, // fp32 [r, ldo]
+    r: u32,
+    slots: u32,
+    e: u32,
+    d: u32,
+    i: u32,
+    ldx: u32,
+    ldo: u32,
+    maxjobs: u32,
+    nmax: u32,
+    accumulate: u32, // 0: out = each row's slots, an fma chain from 0 in slot order
+    limit: f32,
+    x_fmt: u32, // 0 fp16, 1 bf16
+};
+
+comptime {
+    std.debug.assert(@sizeOf(PfArgs) == 232 and @offsetOf(PfArgs, "r") == 184 and @offsetOf(PfArgs, "limit") == 224 and @offsetOf(PfArgs, "x_fmt") == 228);
+}
+
+/// pfPlan's launches: count, place and rot, a gu launch for each K2 of gate / up and a down launch for each K2 of down
+/// (ascending), then combine; at most 4 + 2 * 8.
+pub const PfPlan = struct {
+    args: PfArgs,
+    nm: usize, // 0: 64 rows a job, 1: 128
+    k2_gu: [8]u32 = @splat(0),
+    n_gu: usize = 0,
+    k2_d: [8]u32 = @splat(0),
+    n_d: usize = 0,
+    grids: [4]usize, // count, place, rot, combine (gu and down: maxjobs * (i / 128), maxjobs * (d / 256))
+};
+
+/// The prompt experts on the AMD kit: null when ex's bits are not the kernels' (gate and up of an expert differing:
+/// weights.Experts.k2_masks) or the shapes are not (a 2D node's halves stay on exl3_experts2d).
+pub fn pfPlan(ex: weights.Experts, sc: Scratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) ?PfPlan {
+    const masks = ex.k2_masks orelse return null;
+    const d: usize = ex.dims;
+    const i: usize = ex.width;
+    const e: usize = ex.count;
+    const slots = sc.slots;
+    if (ex.down_k != i or ex.down_n != d) return null;
+    if (d % 256 != 0 or i % 128 != 0 or (d / 16) % 4 != 0 or (i / 16) % 4 != 0 or e > 1024 or x_stride % 4 != 0) return null;
+    const p = r * slots;
+    const nm: usize = if (p >= 48 * e) 128 else 64; // 128 rows a job when the experts average 48 rows or more
+    const maxjobs = p / nm + e;
+    var plan: PfPlan = .{
+        .args = .{
+            .gate_ptr = ex.gate_ptr, .up_ptr = ex.up_ptr, .down_ptr = ex.down_ptr, .gate_k2 = ex.gate_k2, .up_k2 = ex.up_k2, .down_k2 = ex.down_k2,
+            .suh_g = ex.suh_g, .suh_u = ex.suh_u, .svh_g = ex.svh_g, .svh_u = ex.svh_u, .suh_d = ex.suh_d, .svh_d = ex.svh_d,
+            .x = x, .ids = pick, .wts = wts, .xg = sc.xg, .xu = sc.xu, .xd = sc.xd, .z = sc.z, .order = sc.order, .jobs = sc.jobs, .meta = sc.meta, .out = out,
+            .r = @intCast(r), .slots = @intCast(slots), .e = @intCast(e), .d = @intCast(d), .i = @intCast(i), .ldx = @intCast(x_stride), .ldo = @intCast(d),
+            .maxjobs = @intCast(maxjobs), .nmax = @intCast(nm), .accumulate = 0, .limit = limit, .x_fmt = 1,
+        },
+        .nm = if (nm == 128) 1 else 0,
+        .grids = .{ 1, (e + 7) / 8, p, @min((r * (d / 4) + 255) / 256, 8192) },
+    };
+    for (0..17) |k2| {
+        if (masks[0] >> @intCast(k2) & 1 != 0) {
+            if (plan.n_gu == plan.k2_gu.len) return null;
+            plan.k2_gu[plan.n_gu] = @intCast(k2);
+            plan.n_gu += 1;
+        }
+        if (masks[1] >> @intCast(k2) & 1 != 0) {
+            if (plan.n_d == plan.k2_d.len) return null;
+            plan.k2_d[plan.n_d] = @intCast(k2);
+            plan.n_d += 1;
+        }
+    }
+    return plan;
+}
+
+/// pfPlan's launches on `s` (blocks of 1,024 threads for count, 256 for the others).
+pub fn promptPf(pf: *const Pf, s: gpu.Stream, plan: PfPlan) !void {
+    const i: usize = plan.args.i;
+    const d: usize = plan.args.d;
+    const mj: usize = plan.args.maxjobs;
+    for (plan.k2_gu[0..plan.n_gu]) |k2| _ = pf.gu[plan.nm][k2] orelse return error.MissingKernel;
+    for (plan.k2_d[0..plan.n_d]) |k2| _ = pf.down[plan.nm][k2] orelse return error.MissingKernel;
+    try pfLaunch(pf.count, s, plan.grids[0], 1024, plan.args);
+    try pfLaunch(pf.place, s, plan.grids[1], 256, plan.args);
+    try pfLaunch(pf.rot, s, plan.grids[2], 256, plan.args);
+    for (plan.k2_gu[0..plan.n_gu]) |k2| try pfLaunch(pf.gu[plan.nm][k2].?, s, mj * (i / 128), 256, plan.args);
+    for (plan.k2_d[0..plan.n_d]) |k2| try pfLaunch(pf.down[plan.nm][k2].?, s, mj * (d / 256), 256, plan.args);
+    try pfLaunch(pf.combine, s, plan.grids[3], 256, plan.args);
+}
+
+fn pfLaunch(f: gpu.Function, s: gpu.Stream, blocks: usize, threads: usize, args: PfArgs) !void {
+    var a: gpu.Args = .{};
+    a.add(args);
+    try launch(f, s, .{ blocks, 1, 1 }, threads, &a);
+}
+
+fn fnByName(m: gpu.Module, name: []const u8) !gpu.Function {
     var buf: [512]u8 = undefined;
     return m.function(try std.mem.printSentinel(&buf, "{s}", .{name}, 0));
 }
@@ -165,36 +299,41 @@ pub const Scratch = struct {
     members: u64, // int32 [min(rows * slots, E) * ceil(rows / 128) * 128], -1
     work_gu: u64, // int32 [listLen(rows * slots, maxu, 64) * 2]
     work_d: u64, // int32 [listLen(rows * slots, maxu, 32) * 2]
+    // the AMD kit's prompt experts (pfPlan), with xg, xu, xd and z; no initial contents
+    order: u64, // int32 [rows * slots]
+    jobs: u64, // int32 [3 * (rows * slots / 64 + E)]
+    meta: u64, // int32 [2 * 1025]
 
     pub fn promptZ(d: usize, i: usize) usize {
         return @max(2 * i + d / 2, d);
     }
 
-    /// Bytes of each buffer, in the field order above (xg .. work_d).
-    pub fn sizes(rows: usize, slots: usize, d: usize, i: usize, e: usize) [11]usize {
+    /// Bytes of each buffer, in the field order above (xg .. meta).
+    pub fn sizes(rows: usize, slots: usize, d: usize, i: usize, e: usize) [14]usize {
         const p = rows * slots;
         const maxu = @min(p, e);
-        return .{ 2 * p * d, 2 * p * d, 2 * p * i, 4 * promptZ(d, i) * p, 4, 4 * maxu, 4, 4 * e, 4 * maxu * ((rows + 127) / 128 * 128), 8 * listLen(p, maxu, mma_rows_gu), 8 * listLen(p, maxu, rows_rows_d) };
+        return .{ 2 * p * d, 2 * p * d, 2 * p * i, 4 * promptZ(d, i) * p, 4, 4 * maxu, 4, 4 * e, 4 * maxu * ((rows + 127) / 128 * 128), 8 * listLen(p, maxu, mma_rows_gu), 8 * listLen(p, maxu, rows_rows_d), 4 * p, 12 * (p / 64 + e), 8 * 1025 };
     }
 };
 
-fn launch(f: cuda.Function, s: cuda.Stream, grid: [3]usize, block: usize, args: *cuda.Args) !void {
-    try cuda.launch.launch(f, .{ .grid = .{ .x = @intCast(grid[0]), .y = @intCast(grid[1]), .z = @intCast(grid[2]) }, .block = .{ .x = @intCast(block) } }, s, args);
+fn launch(f: gpu.Function, s: gpu.Stream, grid: [3]usize, block: usize, args: *gpu.Args) !void {
+    try gpu.launch.launch(f, .{ .grid = .{ .x = @intCast(grid[0]), .y = @intCast(grid[1]), .z = @intCast(grid[2]) }, .block = .{ .x = @intCast(block) } }, s, args);
 }
 
-fn i32a(a: *cuda.Args, v: usize) void {
+fn i32a(a: *gpu.Args, v: usize) void {
     a.add(@as(c_int, @intCast(v)));
 }
 
 /// routed(x, pick, wts, ex, s, out, R, limit, ACT_F32) on a prompt chunk (R >= 64): out fp32 [R, D] = each row's slots'
 /// expert outputs weighted by wts, summed in slot order. x bf16 [R, D] (row stride x_stride elements), pick int32 and
 /// wts fp32 [R, slots] contiguous; every pick an expert id (the shared expert is the last).
-pub fn prompt(k: *const Kernels, s: cuda.Stream, ex: weights.Experts, sc: Scratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) !void {
+pub fn prompt(k: *const Kernels, s: gpu.Stream, ex: weights.Experts, sc: Scratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) !void {
     const d: usize = ex.dims;
     const i: usize = ex.width;
     const e: usize = ex.count;
     const slots = sc.slots;
     if (r < exact_rows or r > sc.rows) return error.NotAPromptChunk;
+    if (k.pf) |*pf| if (pfPlan(ex, sc, x, x_stride, pick, wts, out, r, limit)) |plan| return promptPf(pf, s, plan);
     if (slots > 32 or i % 128 != 0 or d % 128 != 0) return error.UnsupportedShape;
     const cgu = try config(d, i, true);
     const cd = try config(i, d, false);
@@ -212,7 +351,7 @@ pub fn prompt(k: *const Kernels, s: cuda.Stream, ex: weights.Experts, sc: Scratc
     const mma = k.mma[range(ex.k2_gu[0], ex.k2_gu[1])] orelse return error.MissingKernel;
     const down = k.rows[range(ex.k2_d[0], ex.k2_d[1])] orelse return error.MissingKernel;
 
-    var a: cuda.Args = .{};
+    var a: gpu.Args = .{};
     a.add(pick);
     a.add(sc.counts);
     i32a(&a, p);
@@ -341,8 +480,8 @@ pub const DecodeScratch = struct {
 pub const DecodeLaunch = struct {
     kernel: enum { prep, gate_up, down },
     range: usize = 0,
-    cfg: cuda.Config,
-    args: cuda.Args = .{},
+    cfg: gpu.Config,
+    args: gpu.Args = .{},
 };
 
 /// routed(x, pick, wts, ex, s, None, R, limit, ACT_F32, before_down=None, shared_slot=slots - 1) on a decode window
@@ -352,15 +491,15 @@ pub const DecodeLaunch = struct {
 /// initialized. shared_slot changes nothing here (only a prompt chunk's SHARED_DENSE path reads it), and without
 /// before_down nothing waits before down. Three launches on `s`: decode_prep plain, gate / up and down as programmatic
 /// dependents.
-pub fn decode(k: *const Kernels, s: cuda.Stream, ex: weights.Experts, sc: DecodeScratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) !void {
+pub fn decode(k: *const Kernels, s: gpu.Stream, ex: weights.Experts, sc: DecodeScratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) !void {
     var ls = try decodeLaunches(ex, sc, x, x_stride, pick, wts, out, r, limit);
-    var fs: [3]cuda.Function = undefined;
+    var fs: [3]gpu.Function = undefined;
     for (&ls, &fs) |*l, *f| f.* = switch (l.kernel) {
         .prep => k.decode_prep,
         .gate_up => k.cp[l.range][0] orelse return error.MissingKernel,
         .down => k.cp[l.range][1] orelse return error.MissingKernel,
     };
-    for (&ls, fs) |*l, f| try cuda.launch.launch(f, l.cfg, s, &l.args);
+    for (&ls, fs) |*l, f| try gpu.launch.launch(f, l.cfg, s, &l.args);
 }
 
 /// decode's three launches in order: experts.py _routed_fused, experts.cu exl3x_decode_prep_cuda and
@@ -383,7 +522,7 @@ pub fn decodeLaunches(ex: weights.Experts, sc: DecodeScratch, x: u64, x_stride: 
 
     // decode_prep: block 0 adds one to epoch, groups the picks (ids, count, members) and combines the rows that route
     // no slot; the other blocks rotate gate / up's input rows, a warp a (member, 128 columns, matrix)
-    var prep: cuda.Args = .{};
+    var prep: gpu.Args = .{};
     prep.add(x);
     i32a(&prep, x_stride);
     for ([_]u64{ pick, ex.suh_g, ex.suh_u, sc.xg, sc.xu }) |v| prep.add(v);
@@ -400,7 +539,7 @@ pub fn decodeLaunches(ex: weights.Experts, sc: DecodeScratch, x: u64, x_stride: 
     // 3-stage rings, the last place first; the program completing a (place, 128 columns) sums the splits into the
     // gate / up epilogue (xd) and the place's last such program publishes ready[place] = epoch; with discard the
     // summed partials (8 x splits <= 32 lanes) and the place's rotated rows leave L2 unwritten
-    var gu: cuda.Args = .{};
+    var gu: gpu.Args = .{};
     for ([_]u64{ sc.xg, sc.xu, ex.gate_ptr, ex.up_ptr, ex.gate_k2, ex.up_k2, sc.ids, sc.count, sc.members, sc.z }) |v| gu.add(v);
     for ([_]usize{ d, i, p, cgu[2], r, slots }) |v| i32a(&gu, v);
     gu.add(DecodeEpi{ .pick = pick, .E = @intCast(e), .svh_g = ex.svh_g, .svh_u = ex.svh_u, .suh_d = ex.suh_d, .xd = sc.xd, .limit = limit, .act_mode = act_f32, .cnt = sc.cnt_gu, .ready = sc.ready, .ready_cnt = sc.ready_cnt, .epoch = sc.epoch, .discard = @intFromBool(8 * cgu[2] <= 32) });
@@ -409,15 +548,15 @@ pub fn decodeLaunches(ex: weights.Experts, sc: DecodeScratch, x: u64, x_stride: 
     // place's ready == epoch, writes its rows' slot outputs to y, and the program completing a (row, 128 columns)
     // combines the row's slots with wts into out, then drops their y from L2 (4 x slots <= 32 lanes); limit and
     // act_mode keep DecodeEpi's defaults
-    var dn: cuda.Args = .{};
+    var dn: gpu.Args = .{};
     for ([_]u64{ sc.xd, sc.xd, ex.down_ptr, ex.down_ptr, ex.down_k2, ex.down_k2, sc.ids, sc.count, sc.members, sc.z }) |v| dn.add(v);
     for ([_]usize{ i, d, p, 1, r, slots }) |v| i32a(&dn, v);
     dn.add(DecodeEpi{ .pick = pick, .E = @intCast(e), .svh_d = ex.svh_d, .y = sc.y, .wts = wts, .out = out, .cnt = sc.cnt_d, .ready = sc.ready, .ready_cnt = sc.ready_cnt, .epoch = sc.epoch, .discard = @intFromBool(4 * slots <= 32) });
 
     return .{
         .{ .kernel = .prep, .cfg = .{ .grid = .{ .x = @intCast(blocks) }, .block = .{ .x = prep_threads }, .shared = @intCast(2 * p * 4) }, .args = prep },
-        .{ .kernel = .gate_up, .range = range(ex.k2_gu[0], ex.k2_gu[1]), .cfg = .{ .grid = .{ .x = @intCast(maxu), .y = @intCast(i / 128), .z = @intCast(2 * cgu[2] * mt) }, .block = .{ .x = 4 * 32 }, .pdl = true }, .args = gu },
-        .{ .kernel = .down, .range = range(ex.k2_d[0], ex.k2_d[1]), .cfg = .{ .grid = .{ .x = @intCast(maxu), .y = @intCast(d / 128), .z = @intCast(mt) }, .block = .{ .x = 4 * 32 }, .pdl = true }, .args = dn },
+        .{ .kernel = .gate_up, .range = range(ex.k2_gu[0], ex.k2_gu[1]), .cfg = .{ .grid = .{ .x = @intCast(maxu), .y = @intCast(i / 128), .z = @intCast(2 * cgu[2] * mt) }, .block = .{ .x = 4 * 32 }, .pdl = gpu.features.pdl }, .args = gu },
+        .{ .kernel = .down, .range = range(ex.k2_d[0], ex.k2_d[1]), .cfg = .{ .grid = .{ .x = @intCast(maxu), .y = @intCast(d / 128), .z = @intCast(mt) }, .block = .{ .x = 4 * 32 }, .pdl = gpu.features.pdl }, .args = dn },
     };
 }
 
@@ -445,6 +584,35 @@ test "a TP2 DeepSeek-V4.1 rank's prompt experts: settings, lists and ranges" {
     try std.testing.expectEqual(@as(usize, 1), range(3, 10));
     try std.testing.expectEqual(@as(usize, 2), range(4, 12));
     try std.testing.expectEqual(@as(usize, 5120), Scratch.promptZ(5120, 1152));
+}
+
+test "a TP2 DeepSeek-V4.1 rank's prompt experts on the AMD kit" {
+    // layer 29: routed K3 (K2 6), the shared expert's gate / up K4 and down K5; 2,048 rows of 7 slots
+    var ex: weights.Experts = .{ .trellis = 0, .gate_ptr = 1, .up_ptr = 2, .down_ptr = 3, .gate_k2 = 11, .up_k2 = 12, .down_k2 = 13, .suh_g = 4, .suh_u = 5, .svh_g = 6, .svh_u = 7, .suh_d = 8, .svh_d = 9, .count = 385, .dims = 5120, .width = 1152, .down_k = 1152, .down_n = 5120, .k2_gu = .{ 6, 8 }, .k2_d = .{ 6, 10 } };
+    var sc: Scratch = undefined;
+    sc.slots = 7;
+    sc.order = 10;
+    try std.testing.expect(pfPlan(ex, sc, 0x100, 5120, 0x200, 0x300, 0x400, 2048, 10) == null); // gate and up differ somewhere
+    ex.k2_masks = .{ 1 << 6 | 1 << 8, 1 << 6 | 1 << 10 };
+    const plan = pfPlan(ex, sc, 0x100, 5120, 0x200, 0x300, 0x400, 2048, 10).?;
+    // 14,336 picks over 385 experts (37 a expert: 64-row jobs), at most 14,336 / 64 + 385 jobs
+    try std.testing.expectEqual(@as(usize, 0), plan.nm);
+    try std.testing.expectEqual(@as(u32, 224 + 385), plan.args.maxjobs);
+    try std.testing.expectEqual(@as(u32, 64), plan.args.nmax);
+    try std.testing.expectEqualSlices(u32, &.{ 6, 8 }, plan.k2_gu[0..plan.n_gu]);
+    try std.testing.expectEqualSlices(u32, &.{ 6, 10 }, plan.k2_d[0..plan.n_d]);
+    try std.testing.expectEqual([4]usize{ 1, 49, 14336, 8192 }, plan.grids);
+    try std.testing.expectEqual(@as(u64, 11), plan.args.gate_k2);
+    try std.testing.expectEqual(@as(u32, 1), plan.args.x_fmt);
+    // 4,096 rows: 28,672 picks, 74 a expert: 128-row jobs
+    try std.testing.expectEqual(@as(usize, 1), pfPlan(ex, sc, 0x100, 5120, 0x200, 0x300, 0x400, 4096, 10).?.nm);
+    // scratch: jobs hold maxjobs at 64-row jobs, meta 2 x 1,025 counters, z every slot's row
+    const sz = Scratch.sizes(2048, 7, 5120, 1152, 385);
+    try std.testing.expect(sz[12] >= 12 * plan.args.maxjobs and sz[13] == 8 * 1025 and sz[11] == 4 * 14336);
+    try std.testing.expect(sz[3] >= 4 * 2048 * 7 * 5120);
+    // a 2D node's halves stay on exl3_experts2d
+    ex.width = 640;
+    try std.testing.expect(pfPlan(ex, sc, 0x100, 5120, 0x200, 0x300, 0x400, 2048, 10) == null);
 }
 
 test "a TP2 DeepSeek-V4.1 rank's decode scratch and windows" {

@@ -11,7 +11,7 @@
 //! made on the host. A node of the four-node 2D split takes its column parts and their exchanges through round2d.zig's
 //! hooks (Engine.two).
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const prompt = @import("prompt.zig");
 const weights = @import("weights.zig");
 const tri = @import("tri.zig");
@@ -22,6 +22,7 @@ const tri_attn = @import("tri_attn.zig");
 const tri_index = @import("tri_index.zig");
 const exl3_linear = @import("exl3_linear.zig");
 const exl3_experts = @import("exl3_experts.zig");
+const dense = @import("dense.zig");
 const round2d = @import("round2d.zig");
 const exl3_experts2d = @import("exl3_experts2d.zig");
 const engram = @import("engram.zig");
@@ -29,6 +30,7 @@ const exact = @import("exact.zig");
 const ops_mod = @import("ops.zig");
 
 const Engine = prompt.Engine;
+const two2d = prompt.two2d;
 const Chunk = prompt.Chunk;
 const Caches = prompt.Caches;
 
@@ -51,16 +53,37 @@ pub fn bucketFor(n: usize, cap: usize) usize {
 }
 
 /// The points a round exchanges or ends with, in the order the served build's recorder sees them (a checker's hook).
-pub const Point = enum { engram_proj, engram_gather, attn_in, attn_out, attn_gather, moe_in, moe_out, moe_gather, head_cols, head_gather, logits, taps };
+/// (route_in: the gate's chunk sums the routing read, fp32 [R, kc, E] (kc = tri_norm.gateParts; 0: logits [R, E]);
+/// route_pick / route_wts: its picks (int32) and weights (fp32), [R, slots] with the shared expert last)
+pub const Point = enum { engram_proj, engram_gather, attn_in, attn_out, attn_gather, moe_in, moe_out, route_in, route_pick, route_wts, moe_gather, head_cols, head_gather, logits, taps };
 
 /// A checker of a round's buffers between its steps (synchronized first by the checker): false stops the round.
 pub const Probe = struct {
     ctx: *anyopaque,
     at: *const fn (ctx: *anyopaque, what: Point, layer: usize, dev: u64) anyerror!bool,
+    /// A layer harness's re-anchoring (tf-dsv41-layer --anchor): before layer `layer` it may write reference streams
+    /// over h (bf16 [R, hc, D]) and the carried pre-mix over pre (fp32 [R, hc]); true drops the pending post, so the
+    /// layer starts from the reference.
+    anchor: ?*const fn (ctx: *anyopaque, layer: usize, h: u64, pre: u64) anyerror!bool = null,
+    /// A layer harness's dump of a buffer no checked point holds (tf-dsv41-layer --dump): `name`, the engine's shape and
+    /// dtype (an index layer's selection).
+    put: ?*const fn (ctx: *anyopaque, name: []const u8, layer: usize, dev: u64, shape: []const i64, dtype: []const u8) anyerror!void = null,
 
     fn check(pb: ?Probe, what: Point, layer: usize, dev: u64) !void {
         const p = pb orelse return;
         if (!try p.at(p.ctx, what, layer, dev)) return error.RoundMismatch;
+    }
+
+    fn dump(pb: ?Probe, name: []const u8, layer: usize, dev: u64, shape: []const i64, dtype: []const u8) !void {
+        const p = pb orelse return;
+        const f = p.put orelse return;
+        try f(p.ctx, name, layer, dev, shape, dtype);
+    }
+
+    fn reanchor(pb: ?Probe, layer: usize, h: u64, pre: u64) !bool {
+        const p = pb orelse return false;
+        const f = p.anchor orelse return false;
+        return f(p.ctx, layer, h, pre);
     }
 };
 
@@ -95,13 +118,20 @@ pub const Window = struct { row: usize, n: usize, seq: []const i32 };
 const Glue = enum(u8) { wslot, wbase, cbase1, ctarget1, gpos1, vis1, cbase2, ctarget2, gpos2, vis2, rslot, gi };
 const glue_n = @as(usize, @backingInt(Glue.gi)) + 2; // gi (the last) takes two
 
+/// R rounded up to even: a row of R int64 at that stride starts 16-byte aligned.
+fn evenRows(r: usize) usize {
+    return (r + 1) & ~@as(usize, 1);
+}
+
 /// A round's buffers for up to max_rows rows (Python allocates them a round; their contents never carry over).
 pub const Round = struct {
     r: usize = 0,
     bucket: usize = 0,
     glue: u64, // int64 [glue_n, max_rows]
-    // RoundDecoder.inputs: one int64 [5, R] buffer (ids, positions, slots, the extent's base and end), so a round's
-    // positions sit R * 8 bytes in: the alignment its kernels were specialized for (16-byte at even R only)
+    // RoundDecoder.inputs: one int64 buffer of five rows (ids, positions, slots, the extent's base and end). The
+    // served [5, R] puts the positions R * 8 bytes in, 16-byte aligned at even R only. Here each row is R rounded up
+    // to even, so they always are: the HIP Triton kit holds the aligned variants of the kernels that read them (a
+    // pointer's alignment is a specialization, not the math)
     inputs: u64,
     ids: u64 = 0,
     pos: u64 = 0,
@@ -162,6 +192,13 @@ pub const Round = struct {
     gl: u64, // fp32 [R, D / 256, experts]: the gate's chunk sums
     pick: u64, // int32 [R, slots]
     mw: u64, // fp32 [R, slots]
+    // a block whose shared expert runs alone (weights.Layer.shared; zero when none does): the routed slots' picks and
+    // weights [R, slots - 1], its gate / up (fp32 [R, I]) and their activation (bf16 [R, I])
+    pick_r: u64 = 0,
+    mw_r: u64 = 0,
+    sh_g: u64 = 0,
+    sh_u: u64 = 0,
+    sh_h: u64 = 0,
     pm: u64, // fp32 [R, D]
     gm: u64, // fp32 [world, R, D]
     // Engram
@@ -179,13 +216,13 @@ pub const Round = struct {
     wo_suh: []u64,
     sink: tri_hc.Sink,
     // the mixes' side work (their dots and the Sinkhorn: useSide) on a stream of its own, joined at the next mix
-    side: ?cuda.Stream = null,
-    join: ?cuda.Event = null,
+    side: ?gpu.Stream = null,
+    join: ?gpu.Event = null,
     side_out: bool = false,
     // the paced L2 prefetch (usePrefetch): the next kernels' weights touched into L2 on a stream of its own
-    pf: ?cuda.Stream = null,
-    pf_fork: ?cuda.Event = null,
-    pf_join: ?cuda.Event = null,
+    pf: ?gpu.Stream = null,
+    pf_fork: ?gpu.Event = null,
+    pf_join: ?gpu.Event = null,
     pf_out: bool = false,
     timer: ?*PhaseTimer = null, // eager rounds' GPU time by phase (a profile)
     // a profile's GPU clocks a round (Model.useClock): at the forward's start, then before and after each stretch
@@ -197,6 +234,15 @@ pub const Round = struct {
     clk_ratio: ?u8 = null, // phase clocks only in the layers of this compress ratio (TF_DS_CLOCK_MARKS=3: ratio 2)
     cur_ratio: u8 = 0, // the layer a stretch is on (its compress ratio) // clocks at every phase mark too (Model.useClock(true)), not only around the stretches
     clk: u64 = 0, // [1 + 2 * max_clocks] u64: the count, then each clock and its phase (PhaseTimer.Phase or clock_*)
+
+    /// Where the round writes its attention partial and the MoE's [r, D] (fp32): pa / pm, or on HIP their gathers' own
+    /// blocks (Engine.sendOf: in-place gathers); the gathers send from the same place.
+    fn attnOut(rd: *const Round, e: *const Engine) u64 {
+        return e.sendOf(rd.pa, rd.ga, rd.r * e.c.hidden * 4);
+    }
+    fn moeOut(rd: *const Round, e: *const Engine) u64 {
+        return e.sendOf(rd.pm, rd.gm, rd.r * e.c.hidden * 4);
+    }
 
     pub fn init(e: *const Engine, a: *prompt.Arena, gpa: std.mem.Allocator, pool_cap: usize) !Round {
         const c = e.c;
@@ -223,7 +269,7 @@ pub const Round = struct {
         rd.has_cand = false;
         rd.kk = 0;
         rd.glue = try a.take(glue_n * max_rows * 8); // glue rows at max_rows apart
-        rd.inputs = try a.take(5 * R * 8);
+        rd.inputs = try a.take(5 * evenRows(R) * 8);
         rd.ids = rd.inputs;
         rd.pos = rd.inputs;
         rd.zero = try a.take(8);
@@ -232,6 +278,9 @@ pub const Round = struct {
         rd.h_alt = try a.take(R * hc * d * 2);
         rd.x = try a.take(R * d * 2);
         rd.part = try a.take(R * tri_basic.hc_blocks * 32 * 4);
+        const hc_cnt = try a.take(64 * 4); // _hc_fused's arrival counters (tri_hc.Sink.cnt), zero; launches leave them zero
+        try prompt.fill(e, hc_cnt, 0, 64 * 4);
+        if (std.c.getenv("TF_HC_FUSE")) |v| tri_hc.fuse = std.mem.eql(u8, std.mem.span(v), "1"); // every rank alike (default off)
         rd.pre = try a.take(R * hc * 4);
         rd.pre_a = try a.take(R * hc * 4);
         rd.pre_f = try a.take(R * hc * 4);
@@ -286,6 +335,20 @@ pub const Round = struct {
         rd.mw = try a.take(R * e.slots() * 4);
         rd.pm = try a.take(R * d * 4);
         rd.gm = try a.take(e.world * R * d * 4);
+        rd.pick_r = 0;
+        rd.mw_r = 0;
+        rd.sh_g = 0;
+        rd.sh_u = 0;
+        rd.sh_h = 0;
+        for (w.layers) |lay| {
+            const sh = lay.shared orelse continue;
+            rd.pick_r = try a.take(R * (e.slots() - 1) * 4);
+            rd.mw_r = try a.take(R * (e.slots() - 1) * 4);
+            rd.sh_g = try a.take(R * sh.w1.n * 4);
+            rd.sh_u = try a.take(R * sh.w3.n * 4);
+            rd.sh_h = try a.take(R * sh.w1.n * 2);
+            break;
+        }
         rd.e_in = 0;
         rd.ek = 0;
         rd.ekg = 0;
@@ -293,14 +356,14 @@ pub const Round = struct {
         for (w.layers) |lay| {
             const ew = lay.engram_wkv orelse continue;
             rd.e_in = try a.take(R * ew.k * 2);
-            const en = if (e.two) |tw| tw.engramWidth() else ew.n; // the summed projection's width (2D: both pairs')
+            const en = if (two2d(e)) |tw| tw.engramWidth() else ew.n; // the summed projection's width (2D: both pairs')
             rd.ek = try a.take(R * ew.n * 4);
             rd.ekg = try a.take(e.world * R * en * 4);
             rd.ekv = try a.take(R * en * 2);
             break;
         }
         rd.xc = try a.take(R * d * 2);
-        const hh = if (e.two) |tw| tw.hw[0] + tw.hw[1] else w.head.n; // a rank's vocabulary half (2D: both pairs' parts)
+        const hh = if (two2d(e)) |tw| tw.hw[0] + tw.hw[1] else w.head.n; // a rank's vocabulary half (2D: both pairs' parts)
         rd.hl = try a.take(R * w.head.n * 4);
         rd.hg = try a.take(e.world * R * hh * 4);
         rd.logits = try a.take(R * e.world * hh * 4);
@@ -313,16 +376,16 @@ pub const Round = struct {
             const dst = try a.take(k * 2);
             var off: usize = 0;
             for (lay.wo_a[0..lay.groups]) |wo| {
-                try e.d.check(e.d.api.cuMemcpyDtoDAsync_v2(dst + off * 2, wo.suh, wo.k * 2, e.s.handle), "cuMemcpyDtoDAsync");
+                try gpu.copyD2DAsync(e.d, e.s.handle, dst + off * 2, wo.suh, wo.k * 2);
                 off += wo.k;
             }
             rd.wo_suh[li] = dst;
         }
-        var ev = try cuda.Event.init(e.d, false);
+        var ev = try gpu.Event.init(e.d, false);
         errdefer ev.deinit();
         // the Sinkhorn half's side stream is this stream (useSide gives it one of its own): its launches keep their
         // order and plain (no-PDL) launches
-        rd.sink = .{ .s = e.s, .fork = ev };
+        rd.sink = .{ .s = e.s, .fork = ev, .cnt = hc_cnt };
         rd.side = null;
         rd.join = null;
         rd.side_out = false;
@@ -339,9 +402,9 @@ pub const Round = struct {
     /// their inputs are the same, so the bytes are.
     pub fn useSide(rd: *Round, e: *const Engine) !void {
         if (rd.side != null) return;
-        var s = try cuda.Stream.init(e.d, true);
+        var s = try gpu.Stream.init(e.d, true);
         errdefer s.deinit();
-        rd.join = try cuda.Event.init(e.d, false);
+        rd.join = try gpu.Event.init(e.d, false);
         rd.side = s;
         rd.sink.s = s;
     }
@@ -359,10 +422,10 @@ pub const Round = struct {
     /// after wo_b: the router; after the experts: the next layer's input linears). It writes nothing.
     pub fn usePrefetch(rd: *Round, e: *const Engine) !void {
         if (rd.pf != null) return;
-        var s = try cuda.Stream.init(e.d, true);
+        var s = try gpu.Stream.init(e.d, true);
         errdefer s.deinit();
-        rd.pf_fork = try cuda.Event.init(e.d, false);
-        rd.pf_join = try cuda.Event.init(e.d, false);
+        rd.pf_fork = try gpu.Event.init(e.d, false);
+        rd.pf_join = try gpu.Event.init(e.d, false);
         rd.pf = s;
     }
 
@@ -418,7 +481,7 @@ pub const Round = struct {
 
     fn mark(rd: *Round, e: *const Engine, p: PhaseTimer.Phase) !void {
         if (rd.clk != 0 and rd.clk_marks and (rd.clk_ratio == null or rd.clk_ratio.? == rd.cur_ratio)) {
-            const now = cuda.launch.count;
+            const now = gpu.launch.count;
             rd.launches[@intFromEnum(p)] += now -% rd.launch_mark;
             rd.launch_mark = now;
             try rd.clock(e, @intFromEnum(p));
@@ -476,18 +539,19 @@ fn setGlue(e: *const Engine, rd: *Round, rows: Rows) !void {
         hg[gi0 + 2 * i + 1] = slot * raw + @mod(groups * 2 + 1, raw);
     }
     try prompt.upload(e, rd.glue, &hg, hg.len * 8);
-    // RoundDecoder.set: [ids, pos, slots, base, end] in one [5, R] copy
-    var in: [5 * max_rows]i64 = @splat(0);
+    // RoundDecoder.set: [ids, pos, slots, base, end] in one copy, each row evenRows(R) long (16-byte aligned)
+    const rp = evenRows(R);
+    var in: [5 * evenRows(max_rows)]i64 = @splat(0);
     for (0..R) |i| {
         in[i] = rows.ids[i];
-        in[R + i] = rows.pos[i];
-        in[2 * R + i] = rows.slotOf(i);
-        in[3 * R + i] = rows.baseOf(i);
-        in[4 * R + i] = rows.endOf(i);
+        in[rp + i] = rows.pos[i];
+        in[2 * rp + i] = rows.slotOf(i);
+        in[3 * rp + i] = rows.baseOf(i);
+        in[4 * rp + i] = rows.endOf(i);
     }
-    try prompt.upload(e, rd.inputs, &in, 5 * R * 8);
+    try prompt.upload(e, rd.inputs, &in, 5 * rp * 8);
     rd.ids = rd.inputs;
-    rd.pos = rd.inputs + R * 8;
+    rd.pos = rd.inputs + rp * 8;
 }
 
 /// The layer's RoPE table rows (model.py _cs: the compressed table for a compressed layer).
@@ -594,7 +658,7 @@ fn attention(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, 
                 // weighted sum to bf16 (torch's ops: exact.compress2's bytes), then the RMSNorm (Triton's)
                 try e.ops.scatterRows(e.s, rd.ckv, hd * 4, rd.g(.rslot), cs.raw_kv[li], hd * 4, hd * 4, R);
                 try e.ops.scatterRows(e.s, rd.cgate, hd * 4, rd.g(.rslot), cs.raw_score[li], hd * 4, hd * 4, R);
-                try e.d.check(e.d.api.cuMemsetD8Async(ch.invalid, 0, 4, e.s.handle), "cuMemsetD8Async");
+                try gpu.fill8Async(e.d, e.s.handle, ch.invalid, 0, 4);
                 try e.ops.gatherRows(e.s, cs.raw_kv[li], cs.slots * raw_rows, rd.g(.gi), rd.kvg, hd * 4, 2 * R, ch.invalid);
                 try e.ops.gatherRows(e.s, cs.raw_score[li], cs.slots * raw_rows, rd.g(.gi), rd.sg, hd * 4, 2 * R, ch.invalid);
                 try e.exact.compress2(e.s, rd.kvg, rd.sg, rd.lat2, R, hd);
@@ -712,18 +776,25 @@ fn attention(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, 
     const uw = lay.groups * lay.wo_a[0].n;
     var col: usize = 0;
     var off: usize = 0;
+    // a dense wo_b (weights.Linear.dense) reads u as it is: wo_a's epilogue rotates no rows for it
+    const dense_wo_b = lay.wo_b.dense != 0;
+    if (dense_wo_b and two2d(e) != null) return error.NotPortedYet;
     for (lay.wo_a[0..lay.groups], 0..) |wo, gi| {
-        const rot: exl3_linear.RotOut = if (e.two) |tw| round2d.woRot(tw, lay, col) else .{ .suh = lay.wo_b.suh, .xh = rd.xb, .ldr = @intCast(lay.wo_b.k), .off = @intCast(col) };
+        const rot: ?exl3_linear.RotOut = if (two2d(e)) |tw| round2d.woRot(tw, lay, col) else if (dense_wo_b) null else .{ .suh = lay.wo_b.suh, .xh = rd.xb, .ldr = @intCast(lay.wo_b.k), .off = @intCast(col) };
         calls[gi] = .{ .layer = wo, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = rd.xhwo + off * 2, .y = rd.u + col * 2, .ldy = @intCast(uw), .y_dtype = .bf16, .counters = 0, .rot = rot };
         col += wo.n;
         off += R * wo.k;
     }
     try prompt.groupedRotated(e, ch, R, calls[0..lay.groups]);
     try rd.mark(e, .a_woa);
-    if (e.two) |tw| try round2d.woExchange(tw, e, rd.xb, R); // 2D: the column partner's half of wo_b's input rows
+    if (two2d(e)) |tw| try round2d.woExchange(tw, e, rd.xb, R); // 2D: the column partner's half of wo_b's input rows
     try rd.mark(e, .a_x);
-    var cb_call = [_]exl3_linear.Call{.{ .layer = lay.wo_b, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = rd.xb, .y = rd.pa, .ldy = @intCast(lay.wo_b.n), .y_dtype = .f32, .counters = 0 }};
-    try prompt.groupedRotated(e, ch, R, &cb_call);
+    if (dense_wo_b) {
+        try dense.gemv(e.dk orelse return error.NoDenseKernels, e.s, lay.wo_b, rd.u, uw, rd.attnOut(e), c.hidden, R, false);
+    } else {
+        var cb_call = [_]exl3_linear.Call{.{ .layer = lay.wo_b, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = rd.xb, .y = rd.attnOut(e), .ldy = @intCast(lay.wo_b.n), .y_dtype = .f32, .counters = 0 }};
+        try prompt.groupedRotated(e, ch, R, &cb_call);
+    }
     // the prefetch behind wo_b: the ffn mix's weights, the router, the shared expert's gate
     try rd.prefetch(e, &.{ .{ lay.hc_ffn[0], hcFnBytes(c) }, .{ lay.gate_w, @as(u64, c.experts) * c.hidden * 2 }, lay.experts.shared_gate, lay.experts.shared_up, lay.experts.shared_down }, prefetch_budget / 2);
 }
@@ -736,16 +807,25 @@ fn moe(e: *const Engine, rd: *Round, ch: *const Chunk, li: usize) !void {
     const R = rd.r;
     const sl = e.slots();
     const kc = try tri_norm.rowmmGate(e.t, rd.x, c.hidden, lay.gate_w, rd.gl, R, c.hidden, c.experts);
-    try tri_norm.route(e.t, rd.gl, kc, lay.gate_b, c.top_k, c.routed_scaling, lay.experts.count - 1, rd.pick, rd.mw, R, c.experts, sl);
+    // the shared expert's id, in every row's last slot: the table's last entry, or past it when it runs alone
+    try tri_norm.route(e.t, rd.gl, kc, lay.gate_b, c.top_k, c.routed_scaling, lay.experts.count - @intFromBool(lay.shared == null), rd.pick, rd.mw, R, c.experts, sl);
     try rd.mark(e, .m_rt);
-    if (e.two) |tw| {
+    if (lay.shared) |sh| {
+        // the routed slots through the table, then the shared expert alone added after them (its weight-1 slot last)
+        if (two2d(e) != null) return error.NotPortedYet;
+        try prompt.compactSlots(e, rd.pick, rd.mw, rd.pick_r, rd.mw_r, sl, R);
+        var xsd = ch.xsd;
+        xsd.slots = sl - 1;
+        try exl3_experts.decode(e.ex, e.s, lay.experts, xsd, rd.x, c.hidden, rd.pick_r, rd.mw_r, rd.moeOut(e), R, c.swiglu_limit);
+        try prompt.sharedExpert(e, ch, sh, rd.x, R, .{ .g = rd.sh_g, .u = rd.sh_u, .h = rd.sh_h }, rd.moeOut(e), true);
+    } else if (two2d(e)) |tw| {
         // 2D (round2d.experts, the profile's marks between): gate / up, the intermediate's exchange, down
         try exl3_experts2d.decodeGateUp(e.ex, e.s, lay.experts, ch.xsd, rd.x, c.hidden, rd.pick, rd.mw, rd.pm, R, c.swiglu_limit);
         try rd.mark(e, .m_gu);
         try tw.catRank(e, ch.xsd.xd, tw.xd_full, R * ch.xsd.slots, tw.gu, 2);
         try rd.mark(e, .m_x);
         try exl3_experts2d.decodeDown(e.ex, e.s, lay.experts, ch.xsd, tw.xd_full, rd.pick, rd.mw, rd.pm, R);
-    } else try exl3_experts.decode(e.ex, e.s, lay.experts, ch.xsd, rd.x, c.hidden, rd.pick, rd.mw, rd.pm, R, c.swiglu_limit);
+    } else try exl3_experts.decode(e.ex, e.s, lay.experts, ch.xsd, rd.x, c.hidden, rd.pick, rd.mw, rd.moeOut(e), R, c.swiglu_limit);
     // the prefetch behind the experts: the next layer's attention mix and input linears (an Engram layer: the first
     // 4 MiB of its wkv), after the last layer the head
     if (li + 1 < e.w.layers.len) {
@@ -758,8 +838,9 @@ fn moe(e: *const Engine, rd: *Round, ch: *const Chunk, li: usize) !void {
     } else try rd.prefetch(e, &.{linearBytes(e.w.head)}, prefetch_budget);
 }
 
-/// An EXL3 linear's words: their first byte and length (k * n values of k2 / 2 bits).
+/// An EXL3 linear's words: their first byte and length (k * n values of k2 / 2 bits); a dense one's bf16 weight.
 fn linearBytes(l: weights.Linear) [2]u64 {
+    if (l.dense != 0) return .{ l.dense, @as(u64, l.k) * l.n * 2 };
     return .{ l.words, @as(u64, l.k) * l.n * l.k2 / 16 };
 }
 
@@ -778,22 +859,22 @@ pub const PhaseTimer = struct {
     pub const Phase = enum(u8) { start, embed, engram, mix_attn, attn, gather_a, mix_ffn, moe, gather_m, post, head, a_in, a_q, a_idx, a_core, a_woa, a_x, m_rt, m_gu, m_x };
     pub const phases = @typeInfo(Phase).@"enum".field_names;
     const max_marks = 1024;
-    events: []cuda.Event,
+    events: []gpu.Event,
     phase: [max_marks]Phase = undefined,
     n: usize = 0,
     ms: [phases.len]f64 = @splat(0),
     rounds: u64 = 0,
     gpa: std.mem.Allocator,
 
-    pub fn init(gpa: std.mem.Allocator, d: *const cuda.Driver) !PhaseTimer {
-        const ev = try gpa.alloc(cuda.Event, max_marks);
+    pub fn init(gpa: std.mem.Allocator, d: *const gpu.Driver) !PhaseTimer {
+        const ev = try gpa.alloc(gpu.Event, max_marks);
         var made: usize = 0;
         errdefer {
             for (ev[0..made]) |*x| x.deinit();
             gpa.free(ev);
         }
         for (ev) |*x| {
-            x.* = try cuda.Event.init(d, true);
+            x.* = try gpu.Event.init(d, true);
             made += 1;
         }
         return .{ .events = ev, .gpa = gpa };
@@ -804,7 +885,7 @@ pub const PhaseTimer = struct {
         t.gpa.free(t.events);
     }
 
-    pub fn mark(t: *PhaseTimer, s: cuda.Stream, p: Phase) !void {
+    pub fn mark(t: *PhaseTimer, s: gpu.Stream, p: Phase) !void {
         if (t.n == max_marks) return;
         try t.events[t.n].record(s);
         t.phase[t.n] = p;
@@ -815,7 +896,7 @@ pub const PhaseTimer = struct {
     pub fn finish(t: *PhaseTimer) !void {
         if (t.n == 0) return;
         try t.events[t.n - 1].synchronize();
-        for (1..t.n) |i| t.ms[@backingInt(t.phase[i])] += try cuda.Event.elapsedMs(t.events[i - 1], t.events[i]);
+        for (1..t.n) |i| t.ms[@backingInt(t.phase[i])] += try gpu.Event.elapsedMs(t.events[i - 1], t.events[i]);
         t.n = 0;
         t.rounds += 1;
     }
@@ -843,9 +924,17 @@ const Carry = struct {
 pub const Graphs = struct {
     gpa: std.mem.Allocator,
     map: std.AutoHashMapUnmanaged(Key, Entry) = .empty,
+    /// Since open: stretches captured, stretches run from a capture, stretches run eagerly in a forced-eager round.
+    captured: u64 = 0,
+    replayed: u64 = 0,
+    eager: u64 = 0,
+    rounds: u64 = 0,
+    /// TF_DS_GRAPHS_EAGER=N (every rank alike): every Nth round runs its stretches eagerly instead of from their graphs
+    /// (0: never), the check that the eager path leaves the state the graphs do.
+    eager_every: u64 = 0,
 
     pub const Key = struct { rows: u32, bucket: u64, stretch: u32 };
-    const Entry = struct { exec: cuda.graph.Exec, start: Carry, end: Carry };
+    const Entry = struct { exec: gpu.graph.Exec, start: Carry, end: Carry };
 
     pub fn init(gpa: std.mem.Allocator) Graphs {
         return .{ .gpa = gpa };
@@ -867,6 +956,7 @@ pub const Graphs = struct {
         if (g.map.getPtr(key)) |en| {
             if (!std.meta.eql(en.start, cy.*)) return error.GraphStateMismatch;
             try en.exec.launchOn(e.s);
+            g.replayed += 1;
             cy.* = en.end;
             rd.kk = cy.kk;
             rd.has_cand = cy.has_cand;
@@ -874,19 +964,20 @@ pub const Graphs = struct {
             return;
         }
         const start = cy.*;
-        try cuda.graph.beginCapture(e.s, .thread_local);
+        try gpu.graph.beginCapture(e.s, .thread_local);
         stretch(e, rd, ch, cs, rings, cy, li, end, null) catch |err| {
-            if (cuda.graph.endCapture(e.s)) |got| {
+            if (gpu.graph.endCapture(e.s)) |got| {
                 var x = got;
                 x.deinit();
             } else |_| {}
             return err;
         };
-        var graph = try cuda.graph.endCapture(e.s);
+        var graph = try gpu.graph.endCapture(e.s);
         defer graph.deinit();
         var exec = try graph.instantiate();
         errdefer exec.deinit();
         try g.map.put(g.gpa, key, .{ .exec = exec, .start = start, .end = cy.* });
+        g.captured += 1;
         try exec.launchOn(e.s);
     }
 };
@@ -920,7 +1011,10 @@ pub fn forward(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches
     var li: usize = 0;
     var sn: u32 = 0;
     try rd.clock(e, Round.clock_start);
-    rd.launch_mark = cuda.launch.count;
+    rd.launch_mark = gpu.launch.count;
+    // a forced-eager round (TF_DS_GRAPHS_EAGER): its stretches run as they would without graphs
+    const eager = if (graphs) |g| g.eager_every > 0 and g.rounds % g.eager_every == g.eager_every - 1 else false;
+    if (graphs) |g| g.rounds += 1;
     while (li < w.layers.len) : (sn += 1) {
         var end = li + 1;
         while (end < w.layers.len and w.layers[end].engram_wkv == null) end += 1;
@@ -930,9 +1024,12 @@ pub fn forward(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches
             try engramLand(e, rd, eh orelse return error.NoEngramTables, &ah, li);
         }
         try rd.clock(e, Round.clock_wait);
-        if (graphs) |g| {
-            try g.run(.{ .rows = @intCast(R), .bucket = rd.bucket, .stretch = sn }, e, rd, ch, cs, rings, &cy, li, end);
-        } else try stretch(e, rd, ch, cs, rings, &cy, li, end, probe);
+        if (graphs != null and !eager) {
+            try graphs.?.run(.{ .rows = @intCast(R), .bucket = rd.bucket, .stretch = sn }, e, rd, ch, cs, rings, &cy, li, end);
+        } else {
+            try stretch(e, rd, ch, cs, rings, &cy, li, end, probe);
+            if (graphs) |g| g.eager += 1;
+        }
         try rd.clock(e, Round.clock_tail);
         if (!ahead) try engramAhead(e, eh orelse return error.NoEngramTables, seq, rows, &ah);
         ahead = true;
@@ -967,15 +1064,17 @@ fn stretch(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, ri
     for (li..end) |l| {
         const lay = w.layers[l];
         rd.cur_ratio = lay.ratio;
+        if (try Probe.reanchor(probe, l, h, pre)) pending = null;
         if (lay.engram_wkv) |ew| {
             if (pending) |gp| {
                 try tri_basic.hcPost(t, gp, h, rd.post, rd.comb, h, e.world, R, d);
                 pending = null;
             }
-            try prompt.grouped(e, ch, R, &.{ew}, &.{rd.e_in}, &.{ew.k}, &.{rd.ek}, &.{ew.n}, &.{.f32});
-            try Probe.check(probe, .engram_proj, l, rd.ek);
-            const en = if (e.two) |tw| tw.engramWidth() else ew.n;
-            if (e.two) |tw| try tw.quarters(e, rd.ek, rd.ekg, R, tw.ew, 4) else try e.gatherF32(rd.ek, rd.ekg, R * ew.n);
+            const ek = e.sendOf(rd.ek, rd.ekg, R * ew.n * 4);
+            try prompt.grouped(e, ch, R, &.{ew}, &.{rd.e_in}, &.{ew.k}, &.{ek}, &.{ew.n}, &.{.f32});
+            try Probe.check(probe, .engram_proj, l, ek);
+            const en = if (two2d(e)) |tw| tw.engramWidth() else ew.n;
+            if (two2d(e)) |tw| try tw.quarters(e, ek, rd.ekg, R, tw.ew, 4) else try e.gatherF32(ek, rd.ekg, R * ew.n, .at(.round_engram, l));
             try Probe.check(probe, .engram_gather, l, rd.ekg);
             if (e.world != 2) return notPorted(@src());
             try e.ops.add2Bf16(e.s, rd.ekg, rd.ekg + R * en * 4, rd.ekv, R * en);
@@ -994,8 +1093,10 @@ fn stretch(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, ri
         try Probe.check(probe, .attn_in, l, rd.x);
         try attention(e, rd, ch, cs, rings, &sh, l);
         try rd.mark(e, .attn);
-        try Probe.check(probe, .attn_out, l, rd.pa);
-        if (e.two) |tw| try tw.quarters(e, rd.pa, rd.ga, R, tw.ow, 4) else try e.gatherF32(rd.pa, rd.ga, R * d);
+        try Probe.check(probe, .attn_out, l, rd.attnOut(e));
+        // an index layer's selection: int64 [R, kk], -1 past each row's visible entries
+        if (lay.ratio != 0 and lay.idx_wq_b != null and rd.kk > 0) try Probe.dump(probe, "Ref.indexer.cidx", l, rd.cidx, &.{ @intCast(R), @intCast(rd.kk) }, "int64");
+        if (two2d(e)) |tw| try tw.quarters(e, rd.pa, rd.ga, R, tw.ow, 4) else try e.gatherF32(rd.attnOut(e), rd.ga, R * d, .at(.round_attn, l));
         try rd.mark(e, .gather_a);
         try Probe.check(probe, .attn_gather, l, rd.ga);
         pending = rd.ga;
@@ -1004,8 +1105,11 @@ fn stretch(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, ri
         try Probe.check(probe, .moe_in, l, rd.x);
         try moe(e, rd, ch, l);
         try rd.mark(e, .moe);
-        try Probe.check(probe, .moe_out, l, rd.pm);
-        if (e.two) |tw| try tw.quarters(e, rd.pm, rd.gm, R, tw.dw, 4) else try e.gatherF32(rd.pm, rd.gm, R * d);
+        try Probe.check(probe, .moe_out, l, rd.moeOut(e));
+        try Probe.check(probe, .route_in, l, rd.gl);
+        try Probe.check(probe, .route_pick, l, rd.pick);
+        try Probe.check(probe, .route_wts, l, rd.mw);
+        if (two2d(e)) |tw| try tw.quarters(e, rd.pm, rd.gm, R, tw.dw, 4) else try e.gatherF32(rd.moeOut(e), rd.gm, R * d, .at(.round_moe, l));
         try rd.mark(e, .gather_m);
         if (rd.clk_layers) try rd.clock(e, @intCast(64 + l));
         try Probe.check(probe, .moe_gather, l, rd.gm);
@@ -1021,10 +1125,11 @@ fn stretch(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, ri
     // the head on every row: the logits, the ranks' columns in rank order (g.permute(1, 0, 2))
     try tri_basic.collapseNorm(t, h, pre, w.norm, rd.xc, c.eps, R, d);
     const hn: usize = w.head.n;
-    try prompt.grouped(e, ch, R, &.{w.head}, &.{rd.xc}, &.{d}, &.{rd.hl}, &.{hn}, &.{.f32});
-    try Probe.check(probe, .head_cols, w.layers.len, rd.hl);
-    const hh = if (e.two) |tw| tw.hw[0] + tw.hw[1] else hn; // a rank's vocabulary half (2D: both pairs' quarters)
-    if (e.two) |tw| try tw.quarters(e, rd.hl, rd.hg, R, tw.hw, 4) else try e.gatherF32(rd.hl, rd.hg, R * hn);
+    const hl = e.sendOf(rd.hl, rd.hg, R * hn * 4);
+    try prompt.grouped(e, ch, R, &.{w.head}, &.{rd.xc}, &.{d}, &.{hl}, &.{hn}, &.{.f32});
+    try Probe.check(probe, .head_cols, w.layers.len, hl);
+    const hh = if (two2d(e)) |tw| tw.hw[0] + tw.hw[1] else hn; // a rank's vocabulary half (2D: both pairs' quarters)
+    if (two2d(e)) |tw| try tw.quarters(e, hl, rd.hg, R, tw.hw, 4) else try e.gatherF32(hl, rd.hg, R * hn, .at(.round_head, w.layers.len));
     try Probe.check(probe, .head_gather, w.layers.len, rd.hg);
     for (0..e.world) |k| try e.ops.copyRows(e.s, rd.hg + k * R * hh * 4, hh * 4, rd.logits + k * hh * 4, e.world * hh * 4, hh * 4, R);
     try rd.mark(e, .head);

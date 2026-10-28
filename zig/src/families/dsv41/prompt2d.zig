@@ -12,7 +12,7 @@
 //! prompt.zig takes it through thin hooks behind Engine.two; a TP2 engine has none and runs as before. The decode
 //! rounds' part is round2d.zig's, on this node state.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const Config = @import("config.zig").Config;
 const plan = @import("plan.zig");
 const prompt = @import("prompt.zig");
@@ -23,66 +23,12 @@ const ring2d = @import("ring2d.zig");
 const round2d = @import("round2d.zig");
 const round_rows = @import("round.zig").max_rows;
 const Link = @import("link.zig").Link;
-const Comm = @import("comm.zig").Comm;
 
-const nccl = cuda.nccl;
+const nccl = gpu.nccl;
 
-/// The split of node `g` of `world` nodes: TP over 1 or 2, the 2D split over 4.
-pub fn split(g: u32, world: u32) !plan.Split {
-    return switch (world) {
-        1, 2 => .{ .rank = g, .world = world },
-        4 => .{ .rank = g % 2, .world = 2, .pair = g / 2 },
-        else => error.UnsupportedWorld,
-    };
-}
-
-/// The links of a run and its NCCL world: rank 0 listens on PORT + g - 1 for follower g, one follower at a time (each
-/// follower retries its connect while rank 0 gets to it), so two ranks link exactly as before (rank 1 on PORT).
-/// NCCL's unique id goes from rank 0 down every link. (The port's link to N followers replaces this.)
-pub const Fan = struct {
-    links: [3]?Link = .{ null, null, null },
-
-    pub fn open(io: std.Io, ip: [4]u8, port: u16, rank: u32, world: u32) !Fan {
-        var f: Fan = .{};
-        errdefer f.close();
-        if (world > 4) return error.UnsupportedWorld;
-        if (world < 2) return f;
-        if (rank == 0) {
-            for (1..world) |g| f.links[g - 1] = try Link.listen(ip, port + @as(u16, @intCast(g - 1)));
-        } else {
-            f.links[0] = try Link.connect(io, ip, port + @as(u16, @intCast(rank - 1)), 300);
-        }
-        return f;
-    }
-
-    pub fn close(f: *Fan) void {
-        for (&f.links) |*l| {
-            if (l.*) |*x| x.close();
-            l.* = null;
-        }
-    }
-
-    /// Comm.init over every link: rank 0 makes the id and sends it to each follower. Needs the CUDA context current.
-    pub fn comm(f: *const Fan, rank: u32, world: u32) !Comm {
-        var lib = try nccl.Library.open();
-        errdefer lib.close();
-        var id: nccl.UniqueId = undefined;
-        if (world > 1) {
-            if (rank == 0) {
-                try lib.check(lib.api.ncclGetUniqueId(&id), "ncclGetUniqueId");
-                for (f.links) |l| if (l) |x| try x.send(std.mem.asBytes(&id));
-            } else {
-                var buf: [@sizeOf(nccl.UniqueId)]u8 = undefined;
-                const got = try f.links[0].?.recv(&buf);
-                if (got.len != buf.len) return error.BadUniqueId;
-                id = std.mem.bytesToValue(nccl.UniqueId, got);
-            }
-        } else try lib.check(lib.api.ncclGetUniqueId(&id), "ncclGetUniqueId");
-        var c: nccl.Comm = null;
-        try lib.check(lib.api.ncclCommInitRank(&c, @intCast(world), id, @intCast(rank)), "ncclCommInitRank");
-        return .{ .lib = lib, .comm = c, .rank = rank, .world = world };
-    }
-};
+/// The split and the links moved to fan.zig (a TP2 build without this file needs them).
+pub const split = @import("fan.zig").split;
+pub const Fan = @import("fan.zig").Fan;
 
 fn len(r: ?[2]usize) usize {
     const x = r orelse return 0;
@@ -155,7 +101,7 @@ pub const Two = struct {
             try e.ops.copyRows(e.s, src, w[t.p] * esize, t.pad, wmax * esize, w[t.p] * esize, n);
             send = t.pad;
         }
-        try e.comm.allGather(send, t.parts, n * wmax * esize, .u8, e.s);
+        try e.comm.allGather(.at(.two_parts, 0), send, t.parts, n * wmax * esize, .u8, e.s);
         return wmax;
     }
 
@@ -232,9 +178,9 @@ pub const Two = struct {
         const half = tmp + mine * 4;
         const their = half + mine * 2;
         const g: u32 = @intCast(t.r + 2 * t.p);
-        try e.comm.exchange(src, mine, other, mine, .f32, g ^ 1, e.s);
+        try e.comm.exchange(.at(.two_pair, 0), src, mine, other, mine, .f32, g ^ 1, e.s);
         try e.ops.add2Bf16(e.s, src, other, half, mine);
-        try e.comm.exchange(half, mine, their, n * w[1 - t.p], .bf16, g ^ 2, e.s);
+        try e.comm.exchange(.at(.two_pair, 1), half, mine, their, n * w[1 - t.p], .bf16, g ^ 2, e.s);
         const row = (w[0] + w[1]) * 2;
         for (0..2) |pg| {
             const from = if (pg == t.p) half else their;

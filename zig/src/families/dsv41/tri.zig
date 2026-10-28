@@ -1,8 +1,9 @@
 //! Our Triton kernels from the captured set (aot.json + cubins), launched as the served build's wrappers launch them:
 //! the same grid, constexprs and PDL. The set picks each launch's variant as Triton would (zig/src/cuda/aot.zig).
 const std = @import("std");
-const cuda = @import("cuda");
-const aot = cuda.aot;
+const gpu = @import("gpu");
+const aot = gpu.aot;
+const tri_aux = @import("tri_aux.zig");
 
 /// Where launches go: the captured set on a stream, or (tests) a log compared with the recorded launches.
 /// kernels.decode_rows(): the most rows a call takes the row-invariant decode kernels with now: 16 (DECODE_ROWS), or a
@@ -11,14 +12,29 @@ pub var decode_rows: usize = 16;
 
 pub const Tri = struct {
     set: ?*const aot.Set = null,
-    stream: cuda.Stream = undefined,
+    stream: gpu.Stream = undefined,
     log: ?*Log = null,
     /// The "pdl" switch (TF_DS_TRITON_PDL, on in the served build): decode kernels as programmatic dependent launches.
     pdl: bool = true,
+    /// HIP builds: w-tri's kernels for the launches tri_aux.zig names (null: every launch Triton).
+    aux: ?*const tri_aux.Aux = null,
 
     pub fn run(t: Tri, name: []const u8, grid: [3]u32, args: []const aot.Arg, consts: []const aot.Const) !void {
         if (t.log) |l| return l.add(name, grid, args, consts);
         try t.set.?.run(t.stream, name, grid, args, consts);
+    }
+
+    /// One of tri_aux.zig's kernels (`id` its kit id), its by-value argument struct `args`, blocks of 256 threads.
+    pub fn runHip(t: Tri, id: []const u8, f: gpu.Function, grid: [3]u32, args: anytype) !void {
+        return t.runHipBlock(id, f, grid, 256, args);
+    }
+
+    /// runHip for a kernel built for blocks of `block` threads (registry.json's block).
+    pub fn runHipBlock(t: Tri, id: []const u8, f: gpu.Function, grid: [3]u32, block: u32, args: anytype) !void {
+        if (t.log) |l| return l.addHip(id, grid, block, std.mem.asBytes(&args));
+        var a: gpu.Args = .{};
+        a.add(args);
+        try gpu.launch.launch(f, .{ .grid = .{ .x = grid[0], .y = grid[1], .z = grid[2] }, .block = .{ .x = block } }, t.stream, &a);
     }
 
     /// The PDL constexpr a wrapper passes when its kernel takes one (_pdl() in kernels.py).
@@ -44,16 +60,27 @@ pub const Log = struct {
     gpa: std.mem.Allocator,
     items: std.ArrayList(Kept) = .empty,
 
-    pub const Kept = struct { name: []const u8, grid: [3]u32, args: []aot.Arg, consts: []aot.Const };
+    /// `hip`: a HIP kernel's argument struct (its name the kit id, no Triton arguments or constexprs), `block` its threads
+    pub const Kept = struct { name: []const u8, grid: [3]u32, args: []aot.Arg, consts: []aot.Const, hip: []const u8 = &.{}, block: u32 = 0 };
 
     fn add(l: *Log, name: []const u8, grid: [3]u32, args: []const aot.Arg, consts: []const aot.Const) !void {
         try l.items.append(l.gpa, .{ .name = name, .grid = grid, .args = try l.gpa.dupe(aot.Arg, args), .consts = try l.gpa.dupe(aot.Const, consts) });
+    }
+
+    fn addHip(l: *Log, id: []const u8, grid: [3]u32, block: u32, bytes: []const u8) !void {
+        try l.items.append(l.gpa, .{ .name = id, .grid = grid, .args = &.{}, .consts = &.{}, .hip = try l.gpa.dupe(u8, bytes), .block = block });
+    }
+
+    /// Launch `i`'s HIP argument struct, as `T`.
+    pub fn hipArgs(l: *const Log, comptime T: type, i: usize) T {
+        return std.mem.bytesToValue(T, l.items.items[i].hip[0..@sizeOf(T)]);
     }
 
     pub fn deinit(l: *Log) void {
         for (l.items.items) |k| {
             l.gpa.free(k.args);
             l.gpa.free(k.consts);
+            l.gpa.free(k.hip);
         }
         l.items.deinit(l.gpa);
     }
@@ -62,6 +89,9 @@ pub const Log = struct {
 // -- conformance with the recording (fixtures/launches.json: each Triton function's distinct recorded launches) -----
 
 pub const fixtures = @embedFile("fixtures/launches.json");
+/// The launches the recording lacks (tools/dsv41-hip/tri/variants.py: the prompt GEMM's shapes from the weights, every
+/// decode / verify window size), held to the recording's standard: conform replays them through the wrappers too.
+pub const derived_fixtures = @embedFile("fixtures/derived_launches.json");
 
 /// One recorded launch: its tensors' dtype and shape (with 16-byte alignment), scalars and constexprs.
 pub const Case = struct {
@@ -131,14 +161,23 @@ fn tritonType(dtype: []const u8) []const u8 {
     return dtype;
 }
 
-/// Runs `call` on every recorded launch of `fn_name` and checks that it asks for that launch: grid, every scalar
-/// (floats by their fp32 bits), every constexpr, and every tensor argument's pointer type and alignment.
+/// Runs `call` on every recorded launch of `fn_name`, then on every derived one (derived_launches.json), and checks
+/// that it asks for that launch: grid, every scalar (floats by their fp32 bits), every constexpr, and every tensor
+/// argument's pointer type and alignment.
 pub fn conform(fn_name: []const u8, call: *const fn (Tri, Case) anyerror!void) !void {
     const a = std.testing.allocator;
     var parsed = try std.json.parseFromSlice(std.json.Value, a, fixtures, .{});
     defer parsed.deinit();
     const cases = (parsed.value.object.get(fn_name) orelse return error.NoFixtures).array.items;
     try std.testing.expect(cases.len > 0);
+    try conformCases(fn_name, call, cases);
+    var derived = try std.json.parseFromSlice(std.json.Value, a, derived_fixtures, .{});
+    defer derived.deinit();
+    if (derived.value.object.get(fn_name)) |d| try conformCases(fn_name, call, d.array.items);
+}
+
+fn conformCases(fn_name: []const u8, call: *const fn (Tri, Case) anyerror!void, cases: []const std.json.Value) !void {
+    const a = std.testing.allocator;
     for (cases, 0..) |cv, ci| {
         const c: Case = .{ .v = cv.object };
         var log: Log = .{ .gpa = a };
@@ -212,6 +251,62 @@ pub fn conform(fn_name: []const u8, call: *const fn (Tri, Case) anyerror!void) !
             return error.TestUnexpectedResult;
         }
     }
+}
+
+/// Whether the recorded or derived launches (the kit's variant list: t_cover checks the kit holds each one) hold
+/// `k`'s specialization, the strict-mode question asked of the fixtures: its constexprs, each pointer's type and
+/// 16-byte alignment, each int's Triton class (1 folded into a constexpr, a multiple of 16, other; for kernels
+/// without do_not_specialize ints), each float present.
+pub fn covered(gpa: std.mem.Allocator, k: Log.Kept) !bool {
+    for ([_][]const u8{ fixtures, derived_fixtures }) |src| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, gpa, src, .{});
+        defer parsed.deinit();
+        const cases = (parsed.value.object.get(k.name) orelse continue).array.items;
+        for (cases) |cv| if (sameVariant(.{ .v = cv.object }, k)) return true;
+    }
+    return false;
+}
+
+fn sameVariant(c: Case, k: Log.Kept) bool {
+    const consts = c.v.get("consts").?.object;
+    for (k.consts) |x| {
+        const r = consts.get(x.name) orelse return false;
+        switch (r) {
+            .integer => |i| if (x.int == null or x.int.? != i) return false,
+            .bool => |b| if (x.int == null or x.int.? != @intFromBool(b)) return false,
+            .object => |o| {
+                const bits = std.fmt.parseInt(u32, o.get("fp32_bits").?.string[2..], 16) catch return false;
+                if (x.f32 == null or @as(u32, @bitCast(x.f32.?)) != bits) return false;
+            },
+            else => return false,
+        }
+    }
+    var it = consts.iterator();
+    while (it.next()) |e| {
+        const passed = for (k.consts) |x| {
+            if (std.mem.eql(u8, x.name, e.key_ptr.*)) break true;
+        } else false;
+        if (!passed and !(e.value_ptr.* == .integer and e.value_ptr.integer == 1 and folded(k.args, e.key_ptr.*))) return false;
+    }
+    const scalars = c.v.get("scalars").?.object;
+    const tensors = c.v.get("tensors").?.object;
+    for (k.args) |a| switch (a.value) {
+        .ptr => |pv| {
+            const t = (tensors.get(a.name) orelse return false).array.items;
+            if (!std.mem.eql(u8, tritonType(t[0].string), pv.ty) or t[3].bool != (pv.addr % 16 == 0)) return false;
+        },
+        .i32 => |x| {
+            if (x == 1) {
+                const r = consts.get(a.name) orelse return false;
+                if (!(r == .integer and r.integer == 1)) return false;
+                continue;
+            }
+            const r = scalars.get(a.name) orelse return false;
+            if (r != .integer or r.integer == 1 or (@mod(r.integer, 16) == 0) != (@mod(x, 16) == 0)) return false;
+        },
+        .f32, .u64 => if (scalars.get(a.name) == null) return false,
+    };
+    return true;
 }
 
 /// An int argument of 1, which Triton folds into a constexpr of the variant; aot.Set.find takes either form.

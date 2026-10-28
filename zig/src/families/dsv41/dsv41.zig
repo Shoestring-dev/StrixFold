@@ -25,6 +25,7 @@ pub const exl3_linear = @import("exl3_linear.zig");
 pub const tri_norm = @import("tri_norm.zig");
 pub const tri_index = @import("tri_index.zig");
 pub const tri_attn = @import("tri_attn.zig");
+pub const tri_aux = @import("tri_aux.zig");
 pub const tri_markov = @import("tri_markov.zig");
 pub const tri_hc = @import("tri_hc.zig");
 pub const exl3_prefill = @import("exl3_prefill.zig");
@@ -45,9 +46,18 @@ pub const round2d = @import("round2d.zig");
 pub const draft2d = @import("draft2d.zig");
 pub const markov_tokens = @import("markov_tokens.zig");
 pub const draft = @import("draft.zig");
+pub const scheduler_costs = @import("scheduler_costs.zig");
 pub const sampling = @import("sampling.zig");
 pub const model = @import("model.zig");
 pub const lanes = @import("lanes.zig");
+pub const coll = @import("coll.zig");
+pub const fan = @import("fan.zig");
+pub const tcp_wire = @import("tcp_wire.zig");
+pub const tcp_coll = @import("tcp_coll.zig");
+pub const blas = @import("blas.zig");
+pub const dense = @import("dense.zig");
+/// HIP builds only: the helpers from the AMD kit (a CUDA build never references it).
+pub const hip_load = @import("hip_load.zig");
 
 test {
     // every declaration of every file, so functions no test calls are still compiled
@@ -65,6 +75,7 @@ test {
     refAll(comm);
     refAll(tri);
     refAll(tri_basic);
+    refAll(tri_aux);
     refAll(cublas);
     refAll(elf);
     refAll(exl3_linear);
@@ -91,7 +102,11 @@ test {
     refAll(draft2d);
     refAll(markov_tokens);
     refAll(draft);
+    refAll(scheduler_costs);
     refAll(sampling);
     refAll(model);
     refAll(lanes);
+    refAll(coll);
+    refAll(fan);
+    refAll(blas);
 }

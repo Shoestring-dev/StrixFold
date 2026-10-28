@@ -3,7 +3,7 @@
 //! CUBLAS_DEFAULT_MATH and a 32 MiB workspace (the recording's cuBLAS log); the same call on the same library picks the
 //! same algorithm.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 
 pub const Status = c_int;
 pub const Handle = ?*opaque {};
@@ -18,7 +18,7 @@ const D = u64;
 pub const Api = struct {
     cublasCreate_v2: *const fn (*Handle) callconv(.c) S,
     cublasDestroy_v2: *const fn (Handle) callconv(.c) S,
-    cublasSetStream_v2: *const fn (Handle, cuda.abi.Stream) callconv(.c) S,
+    cublasSetStream_v2: *const fn (Handle, gpu.abi.Stream) callconv(.c) S,
     cublasSetWorkspace_v2: *const fn (Handle, D, usize) callconv(.c) S,
     cublasSetMathMode: *const fn (Handle, c_int) callconv(.c) S,
     cublasSgemm_v2: *const fn (Handle, Op, Op, c_int, c_int, c_int, *const f32, D, c_int, D, c_int, *const f32, D, c_int) callconv(.c) S,
@@ -34,7 +34,7 @@ pub const Blas = struct {
     /// torch's default cuBLAS workspace on this GPU (the recorded cublasSetWorkspace_v2 size).
     pub const workspace_bytes: usize = 32 << 20;
 
-    pub fn open(stream: cuda.Stream, workspace: u64) Error!Blas {
+    pub fn open(stream: gpu.Stream, workspace: u64) Error!Blas {
         var lib = std.DynLib.open("libcublas.so.13") catch std.DynLib.open("libcublas.so") catch return error.LibraryUnavailable;
         errdefer lib.close();
         var api: Api = undefined;

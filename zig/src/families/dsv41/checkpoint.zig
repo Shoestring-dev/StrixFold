@@ -1,9 +1,13 @@
 //! The checkpoint's tensors as the split takes them, by the loader's keys (plan.zig): whole, by input rows or by
 //! output columns, in the dtypes the Python loader keeps, so each entry's bytes equal the lane's rank cache entry.
+//! A dense projection (part "dense": the `.weight` tensor, bf16 [N, K]) is sliced the same way: its input rows are the
+//! weight's columns, its output columns the weight's rows.
 const std = @import("std");
 const core = @import("core");
 const st = core.safetensors;
 const DType = @import("rank_cache.zig").DType;
+const plan = @import("plan.zig");
+const Config = @import("config.zig").Config;
 
 /// One planned entry's layout once read.
 pub const Slice = struct {
@@ -65,6 +69,23 @@ pub const Shards = struct {
     }
 };
 
+/// The blocks whose wo_b and shared expert's w2 the shards hold dense (`.weight` in place of `.trellis`; plan.Dense),
+/// the target layers' and, with `dspark`, the DSpark stages'.
+pub fn denseOf(sh: *const Shards, c: Config, dspark: bool) !plan.Dense {
+    var dn: plan.Dense = .{};
+    const blocks = c.layers + if (dspark and c.dspark_block > 0) c.draft_layers else 0;
+    if (blocks > 64) return error.TooManyBlocks;
+    for (0..blocks) |i| {
+        var pb: [32]u8 = undefined;
+        const p = if (i < c.layers) try std.fmt.bufPrint(&pb, "layers.{d}", .{i}) else try std.fmt.bufPrint(&pb, "mtp.{d}", .{i - c.layers});
+        var nb: [96]u8 = undefined;
+        const bit = @as(u64, 1) << @intCast(i);
+        if (sh.get(try std.fmt.bufPrint(&nb, "{s}.attn.wo_b.weight", .{p})) != null) dn.wo_b |= bit;
+        if (sh.get(try std.fmt.bufPrint(&nb, "{s}.ffn.shared_experts.w2.weight", .{p})) != null) dn.shared_w2 |= bit;
+    }
+    return dn;
+}
+
 /// A loader key split into its fields: "name|dtype" (plain) or "prefix|cols|rows|part" (an EXL3 part).
 const Key = struct {
     name: []const u8,
@@ -119,7 +140,7 @@ const Source = struct { t: st.Tensor, name: []const u8 };
 
 fn source(sh: *const Shards, k: Key, buf: []u8) !Source {
     const name = if (!k.exl3) k.name else blk: {
-        const tail = if (std.mem.eql(u8, k.part, "tr")) "trellis" else if (std.mem.eql(u8, k.part, "suh")) "suh" else if (std.mem.eql(u8, k.part, "svh")) "svh" else return error.BadKey;
+        const tail = if (std.mem.eql(u8, k.part, "tr")) "trellis" else if (std.mem.eql(u8, k.part, "suh")) "suh" else if (std.mem.eql(u8, k.part, "svh")) "svh" else if (std.mem.eql(u8, k.part, "dense")) "weight" else return error.BadKey;
         break :blk try std.fmt.bufPrint(buf, "{s}.{s}", .{ k.name, tail });
     };
     return .{ .t = sh.get(name) orelse return error.MissingTensor, .name = name };
@@ -133,7 +154,12 @@ pub fn describe(sh: *const Shards, key: []const u8) !Slice {
     var out: Slice = .{ .dtype = try dtypeOf(s.t.dtype), .rank = s.t.rank, .shape = s.t.shape, .bytes = 0 };
     if (k.dtype) |d| out.dtype = d;
     if (k.exl3) {
-        if (std.mem.eql(u8, k.part, "tr")) {
+        if (std.mem.eql(u8, k.part, "dense")) {
+            // [N, K]: output columns are the weight's rows, input rows its columns
+            if (s.t.rank != 2) return error.UnexpectedTensor;
+            if (k.cols) |c| out.shape[0] = c[1] - c[0];
+            if (k.rows) |r| out.shape[1] = r[1] - r[0];
+        } else if (std.mem.eql(u8, k.part, "tr")) {
             if (k.rows) |r| out.shape[0] = (r[1] - r[0]) / 16;
             if (k.cols) |c| out.shape[1] = (c[1] - c[0]) / 16;
         } else if (std.mem.eql(u8, k.part, "suh")) {
@@ -146,12 +172,33 @@ pub fn describe(sh: *const Shards, key: []const u8) !Slice {
     return out;
 }
 
-/// `key`'s bytes into `out` (describe(key).bytes long).
-pub fn read(sh: *const Shards, key: []const u8, out: []u8) !void {
+/// Where `key`'s source tensor lies in its shard (a reader that takes the whole tensor in one read, then readFrom).
+pub const Span = struct { file: *const st.File, offset: usize, len: usize };
+
+pub fn span(sh: *const Shards, key: []const u8) !Span {
     const k = try Key.parse(key);
     var buf: [256]u8 = undefined;
     const s = try source(sh, k, &buf);
-    const t = s.t;
+    const f = &sh.files[sh.names.get(s.name).?];
+    return .{ .file = f, .offset = @intFromPtr(s.t.bytes.ptr) - @intFromPtr(f.map.memory.ptr), .len = s.t.bytes.len };
+}
+
+/// `key`'s bytes into `out` (describe(key).bytes long).
+pub fn read(sh: *const Shards, key: []const u8, out: []u8) !void {
+    return readFrom(sh, key, null, out);
+}
+
+/// read, the source tensor's bytes taken from `bytes` (its span, read by the caller) instead of the mapped shard: a
+/// column slice touches every row of its tensor, which through the map is a disk read a row.
+pub fn readFrom(sh: *const Shards, key: []const u8, bytes: ?[]const u8, out: []u8) !void {
+    const k = try Key.parse(key);
+    var buf: [256]u8 = undefined;
+    const s = try source(sh, k, &buf);
+    var t = s.t;
+    if (bytes) |b| {
+        if (b.len != t.bytes.len) return error.BadSize;
+        t.bytes = b;
+    }
     const want = try describe(sh, key);
     if (out.len != want.bytes) return error.BadSize;
     if (!k.exl3) {
@@ -161,6 +208,16 @@ pub fn read(sh: *const Shards, key: []const u8, out: []u8) !void {
         return error.UnsupportedConversion;
     }
     const es = (try dtypeOf(t.dtype)).size();
+    if (std.mem.eql(u8, k.part, "dense")) {
+        // weight [N, K]: rows n of the output columns, each its input rows' span
+        const kk = t.dim(1);
+        const n0 = if (k.cols) |c| c[0] else 0;
+        const k0 = if (k.rows) |r| r[0] else 0;
+        const w = want.shape[1] * es;
+        if (n0 + want.shape[0] > t.dim(0) or k0 * es + w > kk * es) return error.BadSlice;
+        for (0..want.shape[0]) |i| @memcpy(out[i * w ..][0..w], t.bytes[((n0 + i) * kk + k0) * es ..][0..w]);
+        return;
+    }
     if (std.mem.eql(u8, k.part, "tr")) {
         const row = t.dim(1) * t.dim(2) * es; // one K tile row: every N tile's words
         const k0 = if (k.rows) |r| r[0] / 16 else 0;
@@ -244,8 +301,57 @@ test "column, row and whole slices of a toy trellis and its scales" {
     var svh: [64]u8 = undefined;
     try read(&sh, "w|(32, 64)|None|svh", &svh);
     try std.testing.expectEqualSlices(u8, body[96 + 64 .. 224], &svh);
+    // the same from a copy of the tensor's span, as tf-dsv41-rank-cache reads it
+    const sp = try span(&sh, "w|(32, 64)|(16, 32)|tr");
+    try std.testing.expectEqual(@as(usize, 8 + json.len), sp.offset);
+    try std.testing.expectEqual(@as(usize, 32), sp.len);
+    var copy: [32]u8 = undefined;
+    @memcpy(&copy, file.items[sp.offset..][0..sp.len]);
+    var both2: [8]u8 = undefined;
+    try readFrom(&sh, "w|(32, 64)|(16, 32)|tr", &copy, &both2);
+    try std.testing.expectEqualSlices(u8, &both, &both2);
+    try std.testing.expectError(error.BadSize, readFrom(&sh, "w|(32, 64)|(16, 32)|tr", copy[0..16], &both2));
     var wide: [16]u8 = undefined;
     try read(&sh, "g.bias|torch.float32", &wide);
     const h0: f16 = @bitCast(std.mem.readInt(u16, body[224..226], .little));
     try std.testing.expectEqual(@as(f32, h0), @as(f32, @bitCast(std.mem.readInt(u32, wide[0..4], .little))));
+}
+
+test "a dense weight's slices: input rows are its columns, output columns its rows" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    // w.weight bf16 [4, 8] (N 4, K 8): value 8 n + k in the low byte of each element
+    var body: [4 * 8 * 2]u8 = undefined;
+    for (0..32) |i| std.mem.writeInt(u16, body[2 * i ..][0..2], @intCast(i), .little);
+    const json = "{\"w.weight\":{\"dtype\":\"BF16\",\"shape\":[4,8],\"data_offsets\":[0,64]}}";
+    var file: std.ArrayList(u8) = .empty;
+    defer file.deinit(a);
+    var len: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len, json.len, .little);
+    try file.appendSlice(a, &len);
+    try file.appendSlice(a, json);
+    try file.appendSlice(a, &body);
+    try tmp.dir.writeFile(io, .{ .sub_path = "model-00001-of-00001.safetensors", .data = file.items });
+    const dir = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer a.free(dir);
+    var sh = try Shards.open(a, io, dir);
+    defer sh.close(io);
+    // input rows 4..8 of every output column: [4, 4], row n = 8 n + 4 .. 8 n + 8
+    const d = try describe(&sh, "w|None|(4, 8)|dense");
+    try std.testing.expectEqual(DType.bf16, d.dtype);
+    try std.testing.expectEqual(@as(usize, 4), d.shape[0]);
+    try std.testing.expectEqual(@as(usize, 4), d.shape[1]);
+    var rows: [32]u8 = undefined;
+    try read(&sh, "w|None|(4, 8)|dense", &rows);
+    for (0..4) |n| for (0..4) |j| try std.testing.expectEqual(@as(u16, @intCast(8 * n + 4 + j)), std.mem.readInt(u16, rows[2 * (4 * n + j) ..][0..2], .little));
+    // output columns 2..4 of input rows 0..4
+    var both: [16]u8 = undefined;
+    try read(&sh, "w|(2, 4)|(0, 4)|dense", &both);
+    for (0..2) |n| for (0..4) |j| try std.testing.expectEqual(@as(u16, @intCast(8 * (n + 2) + j)), std.mem.readInt(u16, both[2 * (4 * n + j) ..][0..2], .little));
+    // the whole weight
+    var whole: [64]u8 = undefined;
+    try read(&sh, "w|None|None|dense", &whole);
+    try std.testing.expectEqualSlices(u8, &body, &whole);
 }

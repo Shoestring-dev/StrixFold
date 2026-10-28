@@ -6,7 +6,7 @@
 //! travel as fp32 words (16-bit parts reinterpreted), so a part's row must be a whole number of 16 bytes. A part
 //! larger than the rings take returns error.TooLarge, and the caller takes NCCL (prompt2d.zig), as the lane does.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const rdma = @import("rdma.zig");
 const Comm = @import("comm.zig").Comm;
 
@@ -20,7 +20,7 @@ pub const Rings = struct {
 
     /// The three rings of node `g` (of 4): created, their infos exchanged over `comm` (world 4), connected and
     /// started on every node before any returns.
-    pub fn open(gpa: std.mem.Allocator, d: *const cuda.Driver, k: rdma.Kernels, devices: []const []const u8, g: u32, s: rdma.Settings, comm: *const Comm, stream: cuda.Stream) !Rings {
+    pub fn open(gpa: std.mem.Allocator, d: *const gpu.Driver, k: rdma.Kernels, devices: []const []const u8, g: u32, s: rdma.Settings, comm: *const Comm, stream: gpu.Stream) !Rings {
         if (g >= 4 or comm.world != 4) return error.NotFourNodes;
         const r = g % 2;
         const p = g / 2;
@@ -36,7 +36,7 @@ pub const Rings = struct {
         for (0..4) |q| mine[q] = all4.info(@intCast(q));
         for (0..2) |q| mine[4 + q] = col.info(@intCast(q));
         for (0..2) |q| mine[6 + q] = pair.info(@intCast(q));
-        var dev = try cuda.DeviceBuffer.alloc(d, 5 * 8 * per);
+        var dev = try gpu.DeviceBuffer.alloc(d, 5 * 8 * per);
         defer dev.free();
         try dev.upload(0, std.mem.sliceAsBytes(&mine));
         try comm.allGather(dev.ptr, dev.ptr + 8 * per, 8 * per, .u8, stream);
@@ -76,7 +76,7 @@ pub const Rings = struct {
 
     /// quarters (Comm2D.quarters): `src` [rows, w[p]] (this node's columns of its TP2 rank's part) -> `dst`
     /// [2, rows, w0 + w1]: each TP2 rank's whole part, pair 0's columns then pair 1's.
-    pub fn quarters(rs: *const Rings, stream: cuda.Stream, src: u64, dst: u64, rows: usize, w: [2]usize, esize: usize) !void {
+    pub fn quarters(rs: *const Rings, stream: gpu.Stream, src: u64, dst: u64, rows: usize, w: [2]usize, esize: usize) !void {
         const row = (w[0] + w[1]) * esize;
         var dsts: [4]rdma.Ring.Dst = undefined;
         for (0..4) |q| dsts[q] = .{ .ptr = dst + (q % 2) * rows * row + (q / 2) * w[0] * esize, .row4 = try float4s(w[q / 2] * esize), .stride4 = try float4s(row) };
@@ -85,7 +85,7 @@ pub const Rings = struct {
 
     /// cat_rank (Comm2D.cat_rank): `src` [rows, w[p]] -> `dst` [rows, w0 + w1], pair 0's part then pair 1's, from the
     /// column partner.
-    pub fn catRank(rs: *const Rings, stream: cuda.Stream, src: u64, dst: u64, rows: usize, w: [2]usize, esize: usize) !void {
+    pub fn catRank(rs: *const Rings, stream: gpu.Stream, src: u64, dst: u64, rows: usize, w: [2]usize, esize: usize) !void {
         const row = (w[0] + w[1]) * esize;
         var dsts: [2]rdma.Ring.Dst = undefined;
         for (0..2) |pp| dsts[pp] = .{ .ptr = dst + pp * w[0] * esize, .row4 = try float4s(w[pp] * esize), .stride4 = try float4s(row) };
@@ -93,7 +93,7 @@ pub const Rings = struct {
     }
 
     /// The pair gather (Comm2D.gather: TP2 inside a pair): `src` [rows, width] -> `dst` [2, rows, width] in TP2 rank order.
-    pub fn pairGather(rs: *const Rings, stream: cuda.Stream, src: u64, dst: u64, rows: usize, width: usize, esize: usize) !void {
+    pub fn pairGather(rs: *const Rings, stream: gpu.Stream, src: u64, dst: u64, rows: usize, width: usize, esize: usize) !void {
         var dsts: [2]rdma.Ring.Dst = undefined;
         for (0..2) |rr| dsts[rr] = .{ .ptr = dst + rr * rows * width * esize, .row4 = try float4s(width * esize), .stride4 = try float4s(width * esize) };
         try rs.pair.gatherInto(stream, src, @intCast(rows), try float4s(width * esize), &dsts);

@@ -5,7 +5,7 @@
 //! (torch's top-k of int64 keys, kernels.topk_indices). Their bytes are the same as torch's by construction; the layer
 //! gate checks them.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 
 /// launch_shape.h's tf_launch_blocks: a block a `threads` elements, at most 65535.
 fn blocks(count: usize, threads: usize) u32 {
@@ -16,35 +16,40 @@ fn blocks(count: usize, threads: usize) u32 {
 pub const Prefetch = extern struct { ptr: [16]u64 = @splat(0), bytes: [16]u64 = @splat(0), n: c_int = 0 };
 
 pub const Ops = struct {
-    pointwise: cuda.Module,
-    movement: cuda.Module,
-    family: cuda.Module,
-    to_f32: cuda.Function,
-    f16_to_f32: cuda.Function,
-    add2_bf16: cuda.Function,
-    topk_i64: cuda.Function,
-    topk_indices: cuda.Function,
-    scatter: cuda.Function,
-    cand_fast: cuda.Function,
-    iota_vis: cuda.Function,
-    l2_prefetch: cuda.Function,
-    block_max: cuda.Function,
-    pool_pick: cuda.Function,
-    apply_pool: cuda.Function,
-    to_bf16: cuda.Function,
-    strided: cuda.Function,
-    gather: cuda.Function,
-    copy16: cuda.Function,
-    argmax_rows: cuda.Function,
-    gpu_clock: cuda.Function,
+    pointwise: gpu.Module,
+    movement: gpu.Module,
+    family: gpu.Module,
+    to_f32: gpu.Function,
+    f16_to_f32: gpu.Function,
+    add2_bf16: gpu.Function,
+    topk_i64: gpu.Function,
+    topk_indices: gpu.Function,
+    scatter: gpu.Function,
+    cand_fast: gpu.Function,
+    iota_vis: gpu.Function,
+    l2_prefetch: ?gpu.Function, // NVIDIA's L2 prefetch (CUDA builds)
+    block_max: gpu.Function,
+    pool_pick: gpu.Function,
+    apply_pool: gpu.Function,
+    to_bf16: ?gpu.Function, // loaded on CUDA, never launched by the family
+    strided: gpu.Function,
+    gather: gpu.Function,
+    copy16: gpu.Function,
+    argmax_rows: gpu.Function,
+    gpu_clock: ?gpu.Function, // profiles only
+    /// HIP: nanoseconds a tick of the device's constant wall clock in 32.32 fixed point, glue.clock's last parameter
+    /// (CUDA's %globaltimer counts nanoseconds itself).
+    clock_ns_q32: u64 = 0,
+    /// The functions are the AMD kit's (hip_load.zig): unload leaves its modules alone.
+    kit_owned: bool = false,
 
     /// The three images (cuda.kernels.torch_pointwise, torch_movement and dsv41_ops, or the fatbins' bytes).
-    pub fn load(d: *const cuda.Driver, pointwise: []const u8, movement: []const u8, family: []const u8) !Ops {
-        var pw = try cuda.Module.load(d, pointwise);
+    pub fn load(d: *const gpu.Driver, pointwise: []const u8, movement: []const u8, family: []const u8) !Ops {
+        var pw = try gpu.Module.load(d, pointwise);
         errdefer pw.unload();
-        var mv = try cuda.Module.load(d, movement);
+        var mv = try gpu.Module.load(d, movement);
         errdefer mv.unload();
-        var fm = try cuda.Module.load(d, family);
+        var fm = try gpu.Module.load(d, family);
         errdefer fm.unload();
         return .{
             .pointwise = pw,
@@ -72,20 +77,22 @@ pub const Ops = struct {
     }
 
     pub fn unload(o: *Ops) void {
-        o.pointwise.unload();
-        o.movement.unload();
-        o.family.unload();
+        if (!o.kit_owned) {
+            o.pointwise.unload();
+            o.movement.unload();
+            o.family.unload();
+        }
         o.* = undefined;
     }
 
-    fn go(f: cuda.Function, s: cuda.Stream, grid: usize, block: u32, args: *cuda.Args) !void {
-        try cuda.launch.launch(f, .{ .grid = .{ .x = @intCast(grid) }, .block = .{ .x = block } }, s, args);
+    fn go(f: gpu.Function, s: gpu.Stream, grid: usize, block: u32, args: *gpu.Args) !void {
+        try gpu.launch.launch(f, .{ .grid = .{ .x = @intCast(grid) }, .block = .{ .x = block } }, s, args);
     }
 
     /// `.float()` of `count` bf16 values (exact).
-    pub fn toF32(o: *const Ops, s: cuda.Stream, in: u64, out: u64, count: usize) !void {
+    pub fn toF32(o: *const Ops, s: gpu.Stream, in: u64, out: u64, count: usize) !void {
         if (count == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(in);
         a.add(out);
         a.add(@as(u64, count));
@@ -93,9 +100,9 @@ pub const Ops = struct {
     }
 
     /// `.float()` of `count` fp16 values (exact).
-    pub fn f16ToF32(o: *const Ops, s: cuda.Stream, in: u64, out: u64, count: usize) !void {
+    pub fn f16ToF32(o: *const Ops, s: gpu.Stream, in: u64, out: u64, count: usize) !void {
         if (count == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(in);
         a.add(out);
         a.add(@as(u64, count));
@@ -103,9 +110,9 @@ pub const Ops = struct {
     }
 
     /// Comm.sum of two ranks' fp32 partials then `.to(bf16)`: out = bf16(g0 + g1), one fp32 add in rank order.
-    pub fn add2Bf16(o: *const Ops, s: cuda.Stream, g0: u64, g1: u64, out: u64, count: usize) !void {
+    pub fn add2Bf16(o: *const Ops, s: gpu.Stream, g0: u64, g1: u64, out: u64, count: usize) !void {
         if (count == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(g0);
         a.add(g1);
         a.add(out);
@@ -115,39 +122,39 @@ pub const Ops = struct {
 
     /// keys.topk(k, sorted=False).values of unique int64 keys [rows, n] (row stride ks) into top [rows, k], the set in no
     /// particular order (_topk_finish sorts the indices).
-    pub fn topkI64(o: *const Ops, s: cuda.Stream, keys: u64, ks: usize, rows: usize, n: usize, k: usize, top: u64) !void {
+    pub fn topkI64(o: *const Ops, s: gpu.Stream, keys: u64, ks: usize, rows: usize, n: usize, k: usize, top: u64) !void {
         if (rows == 0) return;
         if (k > n) return error.BadTopK;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(keys);
         a.add(@as(c_longlong, @intCast(ks)));
         a.add(@as(c_int, @intCast(n)));
         a.add(@as(c_int, @intCast(k)));
         a.add(top);
-        try cuda.launch.launch(o.topk_i64, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 1024 } }, s, &a);
+        try gpu.launch.launch(o.topk_i64, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 1024 } }, s, &a);
     }
 
     /// kernels.topk_indices(score, k) with torch.where(top < vis, top, -1): each row's k highest fp32 scores' columns
     /// ascending (ties to the lower column), a column at or past vis[r] as -1. score [rows, n] (row stride ss), vis
     /// [rows] int64, out [rows, k] int64.
-    pub fn topkIndices(o: *const Ops, s: cuda.Stream, score: u64, ss: usize, rows: usize, n: usize, k: usize, vis: u64, out: u64) !void {
+    pub fn topkIndices(o: *const Ops, s: gpu.Stream, score: u64, ss: usize, rows: usize, n: usize, k: usize, vis: u64, out: u64) !void {
         if (rows == 0) return;
         if (k > n or k > 2048) return error.BadTopK;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(score);
         a.add(@as(c_longlong, @intCast(ss)));
         a.add(@as(c_int, @intCast(n)));
         a.add(@as(c_int, @intCast(k)));
         a.add(vis);
         a.add(out);
-        try cuda.launch.launch(o.topk_indices, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 1024 } }, s, &a);
+        try gpu.launch.launch(o.topk_indices, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 1024 } }, s, &a);
     }
 
     /// dst row idx[i] = src row i (`t[idx] = rows`, distinct int64 indices): `rows` rows of `bytes` bytes, src rows
     /// `src_ld` bytes apart, dst rows `dst_ld`.
-    pub fn scatterRows(o: *const Ops, s: cuda.Stream, src: u64, src_ld: usize, idx: u64, dst: u64, dst_ld: usize, bytes: usize, rows: usize) !void {
+    pub fn scatterRows(o: *const Ops, s: gpu.Stream, src: u64, src_ld: usize, idx: u64, dst: u64, dst_ld: usize, bytes: usize, rows: usize) !void {
         if (rows == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(src);
         a.add(@as(c_longlong, @intCast(src_ld)));
         a.add(idx);
@@ -160,9 +167,9 @@ pub const Ops = struct {
 
     /// rounds.py _candidates_fast's mask when the pool takes every block: out [rows, nb] u8 (row stride os) = the block
     /// of bsize scores (row stride ss) has a maximum above -inf, or is the row's newest, (vis - 1) // bsize.
-    pub fn candFast(o: *const Ops, s: cuda.Stream, score: u64, ss: usize, nb: usize, bsize: usize, vis: u64, out: u64, os: usize, rows: usize) !void {
+    pub fn candFast(o: *const Ops, s: gpu.Stream, score: u64, ss: usize, nb: usize, bsize: usize, vis: u64, out: u64, os: usize, rows: usize) !void {
         if (rows == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(score);
         a.add(@as(c_longlong, @intCast(ss)));
         a.add(@as(c_int, @intCast(nb)));
@@ -170,41 +177,43 @@ pub const Ops = struct {
         a.add(vis);
         a.add(out);
         a.add(@as(c_longlong, @intCast(os)));
-        try cuda.launch.launch(o.cand_fast, .{ .grid = .{ .x = blocks(nb, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(o.cand_fast, .{ .grid = .{ .x = blocks(nb, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
     }
 
-    /// Every 128-byte line of `pf`'s ranges touched into L2 (one block of 128 threads); writes nothing.
-    pub fn l2Prefetch(o: *const Ops, s: cuda.Stream, pf: Prefetch) !void {
+    /// Every 128-byte line of `pf`'s ranges touched into L2 (CUDA: one block of 128 threads; HIP: the kit's
+    /// exl3.l2_prefetch, 40 blocks of 256, 16-byte loads that allocate in the memory-side cache); writes nothing.
+    pub fn l2Prefetch(o: *const Ops, s: gpu.Stream, pf: Prefetch) !void {
         if (pf.n == 0) return;
         // the served decode settings (exl3/prefetch.py): 3 us before the first wave, waves of 128 chunks of 8 KiB
         // at 230 GB/s (TF_EXL3_L2_DELAY_NS, TF_EXL3_L2_RATE_GBPS), one block
         const delay_ns: c_longlong = 3000;
         const wave_ns: c_longlong = @intFromFloat(128.0 * 8192.0 / 230.0);
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(pf);
         a.add(delay_ns);
         a.add(wave_ns);
-        try cuda.launch.launch(o.l2_prefetch, .{ .grid = .{ .x = 1 }, .block = .{ .x = 128 } }, s, &a);
+        const shape: gpu.launch.Config = if (gpu.backend == .hip) .{ .grid = .{ .x = 40 }, .block = .{ .x = 256 } } else .{ .grid = .{ .x = 1 }, .block = .{ .x = 128 } };
+        try gpu.launch.launch(o.l2_prefetch orelse return error.NoL2Prefetch, shape, s, &a);
     }
 
     /// The indexer's selection of every scanned key (its top-k takes all nb): out [rows, nb] int64 = j where j <
     /// vis[r], else -1 (vis [rows] int64), on the device.
-    pub fn iotaVis(o: *const Ops, s: cuda.Stream, vis: u64, out: u64, nb: usize, rows: usize) !void {
+    pub fn iotaVis(o: *const Ops, s: gpu.Stream, vis: u64, out: u64, nb: usize, rows: usize) !void {
         if (rows == 0 or nb == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(vis);
         a.add(out);
         a.add(@as(c_int, @intCast(nb)));
-        try cuda.launch.launch(o.iota_vis, .{ .grid = .{ .x = blocks(nb, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(o.iota_vis, .{ .grid = .{ .x = blocks(nb, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
     }
 
     /// The candidate pool's block maxima (model.py _candidates, rounds.py _candidate_blocks): out [rows, nb] fp32 (row
     /// stride os, nb = ceil(width / bsize)) = each block's maximum of the scores [rows, width] (row stride ss; the last
     /// block padded with -inf, a NaN wins), the row's newest block (vis - 1) // bsize pinned to +inf.
-    pub fn blockMax(o: *const Ops, s: cuda.Stream, score: u64, ss: usize, width: usize, bsize: usize, vis: u64, out: u64, os: usize, rows: usize) !void {
+    pub fn blockMax(o: *const Ops, s: gpu.Stream, score: u64, ss: usize, width: usize, bsize: usize, vis: u64, out: u64, os: usize, rows: usize) !void {
         if (rows == 0) return;
         const nb = (width + bsize - 1) / bsize;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(score);
         a.add(@as(c_longlong, @intCast(ss)));
         a.add(@as(c_int, @intCast(width)));
@@ -213,15 +222,15 @@ pub const Ops = struct {
         a.add(out);
         a.add(@as(c_longlong, @intCast(os)));
         a.add(@as(c_int, @intCast(nb)));
-        try cuda.launch.launch(o.block_max, .{ .grid = .{ .x = blocks(nb, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(o.block_max, .{ .grid = .{ .x = blocks(nb, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
     }
 
     /// The pool from each row's top blocks idx [rows, k] int64 of the block maxima bmax [rows, nb] (row stride bs):
     /// _candidates' mask u8 [rows, nb] (row stride ms; zeros but the picked blocks above -inf) and/or
     /// _candidate_blocks' list int32 [rows, k] (the block, or -1 when its maximum is not above -inf); 0 leaves one out.
-    pub fn poolPick(o: *const Ops, s: cuda.Stream, bmax: u64, bs: usize, nb: usize, idx: u64, k: usize, mask: u64, ms: usize, cblk: u64, rows: usize) !void {
+    pub fn poolPick(o: *const Ops, s: gpu.Stream, bmax: u64, bs: usize, nb: usize, idx: u64, k: usize, mask: u64, ms: usize, cblk: u64, rows: usize) !void {
         if (rows == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(bmax);
         a.add(@as(c_longlong, @intCast(bs)));
         a.add(@as(c_int, @intCast(nb)));
@@ -230,48 +239,48 @@ pub const Ops = struct {
         a.add(mask);
         a.add(@as(c_longlong, @intCast(ms)));
         a.add(cblk);
-        try cuda.launch.launch(o.pool_pick, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 1024 } }, s, &a);
+        try gpu.launch.launch(o.pool_pick, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 1024 } }, s, &a);
     }
 
     /// model.py apply_candidates, in place: -inf at every column of score [rows, width] (row stride ss) whose block of
     /// bsize the row's pool mask (u8, row stride ms) leaves out.
-    pub fn applyPool(o: *const Ops, s: cuda.Stream, score: u64, ss: usize, width: usize, bsize: usize, mask: u64, ms: usize, rows: usize) !void {
+    pub fn applyPool(o: *const Ops, s: gpu.Stream, score: u64, ss: usize, width: usize, bsize: usize, mask: u64, ms: usize, rows: usize) !void {
         if (rows == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(score);
         a.add(@as(c_longlong, @intCast(ss)));
         a.add(@as(c_int, @intCast(width)));
         a.add(@as(c_int, @intCast(bsize)));
         a.add(mask);
         a.add(@as(c_longlong, @intCast(ms)));
-        try cuda.launch.launch(o.apply_pool, .{ .grid = .{ .x = blocks(width, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
+        try gpu.launch.launch(o.apply_pool, .{ .grid = .{ .x = blocks(width, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
     }
 
     /// `.to(torch.bfloat16)` of `count` fp32 values (round to nearest even).
-    pub fn toBf16(o: *const Ops, s: cuda.Stream, in: u64, out: u64, count: usize) !void {
+    pub fn toBf16(o: *const Ops, s: gpu.Stream, in: u64, out: u64, count: usize) !void {
         if (count == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(in);
         a.add(out);
         a.add(@as(u64, count));
-        try go(o.to_bf16, s, blocks(count, 256), 256, &a);
+        try go(o.to_bf16 orelse return error.NoKernel, s, blocks(count, 256), 256, &a);
     }
 
     /// `rows` rows of `bytes` bytes from src (rows `src_ld` bytes apart) to dst (rows `dst_ld` bytes apart).
-    pub fn copyRows(o: *const Ops, s: cuda.Stream, src: u64, src_ld: usize, dst: u64, dst_ld: usize, bytes: usize, rows: usize) !void {
+    pub fn copyRows(o: *const Ops, s: gpu.Stream, src: u64, src_ld: usize, dst: u64, dst_ld: usize, bytes: usize, rows: usize) !void {
         if (rows == 0) return;
         if (src_ld < bytes or dst_ld < bytes) return error.Overlap;
         if ((src | dst | src_ld | dst_ld | bytes) % 16 == 0 and rows <= 65535) {
             // 16-byte words, a word a thread (the same bytes)
-            var w: cuda.Args = .{};
+            var w: gpu.Args = .{};
             w.add(src);
             w.add(@as(u64, src_ld / 16));
             w.add(dst);
             w.add(@as(u64, dst_ld / 16));
             w.add(@as(u64, bytes / 16));
-            return cuda.launch.launch(o.copy16, .{ .grid = .{ .x = blocks(bytes / 16, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &w);
+            return gpu.launch.launch(o.copy16, .{ .grid = .{ .x = blocks(bytes / 16, 256), .y = @intCast(rows) }, .block = .{ .x = 256 } }, s, &w);
         }
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(src);
         a.add(dst);
         // tf_strided_copy (outer, middle, inner, source_outer, source_middle, destination_outer, destination_middle):
@@ -282,9 +291,9 @@ pub const Ops = struct {
 
     /// Each row's greedy token (sampling.argmax's: the first largest, a NaN never larger, 0 when the first value is
     /// NaN): out [rows] u32 of logits [rows, n] fp32 (row stride ld floats).
-    pub fn argmaxRows(o: *const Ops, s: cuda.Stream, logits: u64, ld: usize, n: usize, rows: usize, out: u64) !void {
+    pub fn argmaxRows(o: *const Ops, s: gpu.Stream, logits: u64, ld: usize, n: usize, rows: usize, out: u64) !void {
         if (rows == 0 or n == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(logits);
         a.add(@as(u64, ld));
         a.add(@as(c_int, @intCast(n)));
@@ -292,21 +301,22 @@ pub const Ops = struct {
         try go(o.argmax_rows, s, rows, 1024, &a);
     }
 
-    /// The GPU clock (ns) into buf[i] when the stream reaches it (a profile).
-    pub fn gpuClock(o: *const Ops, s: cuda.Stream, buf: u64, tag: u32, reset: bool, cap: u32) !void {
-        var a: cuda.Args = .{};
+    /// The GPU clock (ns) into buf[i] when the stream reaches it (a profile; on HIP the wall clock scaled to ns).
+    pub fn gpuClock(o: *const Ops, s: gpu.Stream, buf: u64, tag: u32, reset: bool, cap: u32) !void {
+        var a: gpu.Args = .{};
         a.add(buf);
         a.add(tag);
         a.add(@as(u32, @intFromBool(reset)));
         a.add(cap);
-        try go(o.gpu_clock, s, 1, 32, &a);
+        if (gpu.backend == .hip) a.add(o.clock_ns_q32);
+        try go(o.gpu_clock orelse return error.NoClockKernel, s, 1, 32, &a);
     }
 
     /// dst row i = src row idx[i] (int64 indices, rows of `bytes` bytes); an index outside [0, src_rows) sets the
     /// caller's zeroed uint32 flag `invalid` and leaves that row as it was.
-    pub fn gatherRows(o: *const Ops, s: cuda.Stream, src: u64, src_rows: usize, idx: u64, dst: u64, bytes: usize, rows: usize, invalid: u64) !void {
+    pub fn gatherRows(o: *const Ops, s: gpu.Stream, src: u64, src_rows: usize, idx: u64, dst: u64, bytes: usize, rows: usize, invalid: u64) !void {
         if (rows == 0) return;
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(src);
         a.add(dst);
         a.add(idx);

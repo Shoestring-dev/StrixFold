@@ -1,0 +1,6849 @@
+{
+ "_bias": [
+  {
+   "consts": {
+    "BN": 64,
+    "NP": 16,
+    "PDL": true,
+    "RANK": 256,
+    "SUB": 4
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "tri_markov.localBest / pick, step i odd: TOK = out + 8 i (8 bytes in)"
+   },
+   "grid": [
+    253,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "draft_batch_capture:s1:markov odd step",
+   "rank": 0,
+   "scalars": {
+    "n_cols": 64640,
+    "n_rows": 1,
+    "o_row": 64640,
+    "seg0": 0,
+    "t_stride": 6
+   },
+   "tensors": {
+    "EMB": [
+     "bfloat16",
+     [
+      129280,
+      256
+     ],
+     [
+      256,
+      1
+     ],
+     true
+    ],
+    "HEAD": [
+     "float16",
+     [
+      129280,
+      256
+     ],
+     [
+      256,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "float16",
+     [
+      1,
+      64640
+     ],
+     [
+      64640,
+      1
+     ],
+     true
+    ],
+    "SLOT": [
+     "int32",
+     [
+      129280
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "TOK": [
+     "int64",
+     [
+      1
+     ],
+     [
+      6
+     ],
+     false
+    ]
+   }
+  }
+ ],
+ "_finish": [
+  {
+   "consts": {
+    "BP": 64,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "tri_markov.localBest / pick, step i odd: OUT = out + 8 (i + 1) (aligned)"
+   },
+   "grid": [
+    1,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "draft_batch_capture:s1:markov odd step",
+   "rank": 0,
+   "scalars": {
+    "n_part": 64,
+    "o_stride": 6,
+    "send": 1
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      1
+     ],
+     [
+      6
+     ],
+     true
+    ],
+    "PI": [
+     "int32",
+     [
+      1,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "PV": [
+     "float32",
+     [
+      1,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "SEND": [
+     "float32",
+     [
+      1,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_gather_tiles": [
+  {
+   "consts": {
+    "BN": 64,
+    "KK": 512,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b32769)"
+   },
+   "grid": [
+    16,
+    512,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "round:r16:derived-b32769",
+   "scalars": {
+    "ks": 32769,
+    "n": 32769
+   },
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      32769
+     ],
+     [
+      32769,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      32768
+     ],
+     [
+      32768,
+      1
+     ],
+     true
+    ],
+    "TPOS": [
+     "int64",
+     [
+      16,
+      512
+     ],
+     [
+      512,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_gemm": [
+  {
+   "consts": {
+    "BK": 32,
+    "BM": 128,
+    "GROUP": 8,
+    "HAS_BIAS": false,
+    "K": 5120,
+    "N": 512,
+    "SCALE": {
+     "float": 0.08838834764831845,
+     "fp32_bits": "0x3db504f3",
+     "fp64_bits": "0x3fb6a09e667f3bcd"
+    }
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "prompt GEMM of attn.compressor.wgate@2 (layers 2,8,14); attn.compressor.wkv@2 (layers 2,8,14)"
+   },
+   "grid": [
+    64,
+    1,
+    1
+   ],
+   "num_warps": 8,
+   "phase": "derived:prompt_gemm",
+   "rank": 0,
+   "scalars": {
+    "M": 2048,
+    "o_stride": 512
+   },
+   "tensors": {
+    "BIAS": [
+     "float16",
+     [
+      512
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "H": [
+     "bfloat16",
+     [
+      128,
+      128
+     ],
+     [
+      128,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "float32",
+     [
+      2048,
+      512
+     ],
+     [
+      512,
+      1
+     ],
+     true
+    ],
+    "SVH": [
+     "float16",
+     [
+      512
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      5120,
+      512
+     ],
+     [
+      512,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "float16",
+     [
+      2048,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_hc_mix_part": [
+  {
+   "consts": {
+    "D": 5120,
+    "MB": 8,
+    "NB": 40,
+    "PDL": false,
+    "POSTED": false,
+    "RB": 8,
+    "SUB": 128,
+    "WIDE": 20480,
+    "WORLD": 1,
+    "XPF": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "mixPart at R rows: RB = hcRb(R)"
+   },
+   "grid": [
+    2,
+    40,
+    3
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=13",
+   "rank": 0,
+   "scalars": {
+    "RS": 0,
+    "rows": 13
+   },
+   "tensors": {
+    "COMB": [
+     "float32",
+     [
+      1,
+      4,
+      4
+     ],
+     [
+      16,
+      4,
+      1
+     ],
+     true
+    ],
+    "FN": [
+     "float32",
+     [
+      24,
+      20480
+     ],
+     [
+      20480,
+      1
+     ],
+     true
+    ],
+    "G": [
+     "bfloat16",
+     [
+      1,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ],
+    "PART": [
+     "float32",
+     [
+      1280
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "POST": [
+     "float32",
+     [
+      1,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      13,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ],
+    "XO": [
+     "bfloat16",
+     [
+      13,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "D": 5120,
+    "MB": 8,
+    "NB": 40,
+    "PDL": true,
+    "POSTED": true,
+    "RB": 1,
+    "SUB": 128,
+    "WIDE": 20480,
+    "WORLD": 2,
+    "XPF": true,
+    "rows": 1
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "mixPart at R rows: RB = hcRb(R)"
+   },
+   "grid": [
+    1,
+    40,
+    3
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=1",
+   "rank": 0,
+   "scalars": {
+    "RS": 5120
+   },
+   "tensors": {
+    "COMB": [
+     "float32",
+     [
+      5,
+      4,
+      4
+     ],
+     [
+      16,
+      4,
+      1
+     ],
+     true
+    ],
+    "FN": [
+     "float32",
+     [
+      24,
+      20480
+     ],
+     [
+      20480,
+      1
+     ],
+     true
+    ],
+    "G": [
+     "float32",
+     [
+      2,
+      5,
+      5120
+     ],
+     [
+      25600,
+      5120,
+      1
+     ],
+     true
+    ],
+    "PART": [
+     "float32",
+     [
+      6400
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "POST": [
+     "float32",
+     [
+      5,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      1,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ],
+    "XO": [
+     "bfloat16",
+     [
+      1,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "D": 5120,
+    "MB": 8,
+    "NB": 40,
+    "PDL": true,
+    "POSTED": true,
+    "RB": 2,
+    "SUB": 128,
+    "WIDE": 20480,
+    "WORLD": 2,
+    "XPF": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "mixPart at R rows: RB = hcRb(R)"
+   },
+   "grid": [
+    1,
+    40,
+    3
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=2",
+   "rank": 0,
+   "scalars": {
+    "RS": 10240,
+    "rows": 2
+   },
+   "tensors": {
+    "COMB": [
+     "float32",
+     [
+      5,
+      4,
+      4
+     ],
+     [
+      16,
+      4,
+      1
+     ],
+     true
+    ],
+    "FN": [
+     "float32",
+     [
+      24,
+      20480
+     ],
+     [
+      20480,
+      1
+     ],
+     true
+    ],
+    "G": [
+     "float32",
+     [
+      2,
+      5,
+      5120
+     ],
+     [
+      25600,
+      5120,
+      1
+     ],
+     true
+    ],
+    "PART": [
+     "float32",
+     [
+      6400
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "POST": [
+     "float32",
+     [
+      5,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      2,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ],
+    "XO": [
+     "bfloat16",
+     [
+      2,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "D": 5120,
+    "MB": 8,
+    "NB": 40,
+    "PDL": true,
+    "POSTED": true,
+    "RB": 8,
+    "SUB": 128,
+    "WIDE": 20480,
+    "WORLD": 2,
+    "XPF": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "mixPart at R rows: RB = hcRb(R)"
+   },
+   "grid": [
+    2,
+    40,
+    3
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=16",
+   "rank": 0,
+   "scalars": {
+    "RS": 81920,
+    "rows": 16
+   },
+   "tensors": {
+    "COMB": [
+     "float32",
+     [
+      5,
+      4,
+      4
+     ],
+     [
+      16,
+      4,
+      1
+     ],
+     true
+    ],
+    "FN": [
+     "float32",
+     [
+      24,
+      20480
+     ],
+     [
+      20480,
+      1
+     ],
+     true
+    ],
+    "G": [
+     "float32",
+     [
+      2,
+      5,
+      5120
+     ],
+     [
+      25600,
+      5120,
+      1
+     ],
+     true
+    ],
+    "PART": [
+     "float32",
+     [
+      6400
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "POST": [
+     "float32",
+     [
+      5,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      16,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ],
+    "XO": [
+     "bfloat16",
+     [
+      16,
+      4,
+      5120
+     ],
+     [
+      20480,
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_index_score": [
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1026)"
+   },
+   "grid": [
+    16,
+    9,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1026",
+   "scalars": {
+    "cs": 0,
+    "n": 513,
+    "nt": 9
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      513
+     ],
+     [
+      513,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      513
+     ],
+     [
+      513,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": false,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1032)"
+   },
+   "grid": [
+    16,
+    17,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1032",
+   "scalars": {
+    "cs": 0,
+    "n": 1032,
+    "nt": 17
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "float32",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "float32",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1032)"
+   },
+   "grid": [
+    16,
+    17,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1032",
+   "scalars": {
+    "cs": 129,
+    "n": 1032,
+    "nt": 17
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      129
+     ],
+     [
+      129,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": false,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1040)"
+   },
+   "grid": [
+    16,
+    17,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1040",
+   "scalars": {
+    "cs": 0,
+    "n": 1040,
+    "nt": 17
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "float32",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "float32",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1040)"
+   },
+   "grid": [
+    16,
+    17,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1040",
+   "scalars": {
+    "cs": 130,
+    "n": 1040,
+    "nt": 17
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      130
+     ],
+     [
+      130,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1056)"
+   },
+   "grid": [
+    16,
+    9,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1056",
+   "scalars": {
+    "cs": 0,
+    "n": 528,
+    "nt": 9
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      528
+     ],
+     [
+      528,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      528
+     ],
+     [
+      528,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1152)"
+   },
+   "grid": [
+    16,
+    18,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1152",
+   "scalars": {
+    "cs": 144,
+    "n": 1152,
+    "nt": 18
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      144
+     ],
+     [
+      144,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      1152
+     ],
+     [
+      1152,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1152
+     ],
+     [
+      1152,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1922)"
+   },
+   "grid": [
+    16,
+    16,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1922",
+   "scalars": {
+    "cs": 0,
+    "n": 961,
+    "nt": 16
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      961
+     ],
+     [
+      961,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      961
+     ],
+     [
+      961,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": false,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1992)"
+   },
+   "grid": [
+    16,
+    32,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1992",
+   "scalars": {
+    "cs": 0,
+    "n": 1992,
+    "nt": 32
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "float32",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "float32",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1992)"
+   },
+   "grid": [
+    16,
+    32,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1992",
+   "scalars": {
+    "cs": 249,
+    "n": 1992,
+    "nt": 32
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      249
+     ],
+     [
+      249,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": false,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b2000)"
+   },
+   "grid": [
+    16,
+    32,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b2000",
+   "scalars": {
+    "cs": 250,
+    "n": 2000,
+    "nt": 32
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      250
+     ],
+     [
+      250,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      2000
+     ],
+     [
+      2000,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      2000
+     ],
+     [
+      2000,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b4104)"
+   },
+   "grid": [
+    16,
+    65,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b4104",
+   "scalars": {
+    "cs": 513,
+    "n": 4104,
+    "nt": 65
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      513
+     ],
+     [
+      513,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      4104
+     ],
+     [
+      4104,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      65
+     ],
+     [
+      65,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b4112)"
+   },
+   "grid": [
+    16,
+    65,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b4112",
+   "scalars": {
+    "cs": 514,
+    "n": 4112,
+    "nt": 65
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      514
+     ],
+     [
+      514,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      4112
+     ],
+     [
+      4112,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      65
+     ],
+     [
+      65,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b4224)"
+   },
+   "grid": [
+    16,
+    66,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b4224",
+   "scalars": {
+    "cs": 528,
+    "n": 4224,
+    "nt": 66
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      528
+     ],
+     [
+      528,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      4224
+     ],
+     [
+      4224,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      66
+     ],
+     [
+      66,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b5064)"
+   },
+   "grid": [
+    16,
+    80,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b5064",
+   "scalars": {
+    "cs": 633,
+    "n": 5064,
+    "nt": 80
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      633
+     ],
+     [
+      633,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      5064
+     ],
+     [
+      5064,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      80
+     ],
+     [
+      80,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": true,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b5072)"
+   },
+   "grid": [
+    16,
+    80,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b5072",
+   "scalars": {
+    "cs": 634,
+    "n": 5072,
+    "nt": 80
+   },
+   "tensors": {
+    "CAND": [
+     "uint8",
+     [
+      16,
+      634
+     ],
+     [
+      634,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      5072
+     ],
+     [
+      5072,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      80
+     ],
+     [
+      80,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b8194)"
+   },
+   "grid": [
+    16,
+    65,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b8194",
+   "scalars": {
+    "cs": 0,
+    "n": 4097,
+    "nt": 65
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      4097
+     ],
+     [
+      4097,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      65
+     ],
+     [
+      65,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b8224)"
+   },
+   "grid": [
+    16,
+    65,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b8224",
+   "scalars": {
+    "cs": 0,
+    "n": 4112,
+    "nt": 65
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      4112
+     ],
+     [
+      4112,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      65
+     ],
+     [
+      65,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "DEAD_PAD": false,
+    "HAS_BASE": true,
+    "HAS_CAND": false,
+    "HAS_TMAX": true,
+    "ID": 128,
+    "IH": 32,
+    "KEYS": true,
+    "PACKED": true,
+    "PDL": true,
+    "SKIP_DEAD": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b10114)"
+   },
+   "grid": [
+    16,
+    80,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b10114",
+   "scalars": {
+    "cs": 0,
+    "n": 5057,
+    "nt": 80
+   },
+   "tensors": {
+    "CAND": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      5057
+     ],
+     [
+      5057,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      80
+     ],
+     [
+      80,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_index_score_cand": [
+  {
+   "consts": {
+    "BN": 64,
+    "CB": 8,
+    "HAS_BASE": true,
+    "ID": 128,
+    "IH": 32,
+    "PACKED": true,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b16385)"
+   },
+   "grid": [
+    16,
+    256,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b16385",
+   "scalars": {
+    "cbs": 2048,
+    "n": 16385,
+    "nout": 16384
+   },
+   "tensors": {
+    "CBLK": [
+     "int32",
+     [
+      16,
+      2048
+     ],
+     [
+      2048,
+      1
+     ],
+     true
+    ],
+    "K": [
+     "uint8",
+     [
+      1048592,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "KB": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "KS": [
+     "uint8",
+     [
+      1048592,
+      4
+     ],
+     [
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      16384
+     ],
+     [
+      16384,
+      1
+     ],
+     true
+    ],
+    "Q": [
+     "bfloat16",
+     [
+      16,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Wt": [
+     "bfloat16",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_kv_norm_rope": [
+  {
+   "consts": {
+    "D": 512,
+    "PDL": true,
+    "QUANT": true,
+    "RD": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "prompt.replayCut: POS = pos[first:], first odd (first * 8 bytes in)"
+   },
+   "grid": [
+    1,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:replay-cut odd first",
+   "rank": 0,
+   "scalars": {
+    "eps": {
+     "float": 1e-20,
+     "fp32_bits": "0x1e3ce508",
+     "fp64_bits": "0x3bc79ca10c924223"
+    },
+    "ring_size": 144
+   },
+   "tensors": {
+    "COS": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "bfloat16",
+     [
+      1,
+      512
+     ],
+     [
+      512,
+      1
+     ],
+     true
+    ],
+    "POS": [
+     "int64",
+     [
+      1
+     ],
+     [
+      1
+     ],
+     false
+    ],
+    "RING": [
+     "bfloat16",
+     [
+      144,
+      512
+     ],
+     [
+      512,
+      1
+     ],
+     true
+    ],
+    "SIN": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "SLOT_OF": [
+     "int64",
+     [
+      1
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "W": [
+     "bfloat16",
+     [
+      512
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "Y": [
+     "bfloat16",
+     [
+      1,
+      512
+     ],
+     [
+      512,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_pick": [
+  {
+   "consts": {
+    "PDL": true,
+    "WORLD": 2
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "tri_markov.localBest / pick, step i odd: OUT = out + 8 (i + 1) (aligned)"
+   },
+   "grid": [
+    1,
+    1,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "draft_batch_capture:s1:markov odd step",
+   "rank": 0,
+   "scalars": {
+    "n_rows": 1,
+    "o_stride": 6
+   },
+   "tensors": {
+    "G": [
+     "float32",
+     [
+      2,
+      1,
+      4
+     ],
+     [
+      4,
+      4,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      1
+     ],
+     [
+      6
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_rope_heads": [
+  {
+   "consts": {
+    "H": 32,
+    "HB": 16,
+    "HD": 128,
+    "INV": false,
+    "PDL": true,
+    "RD": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "prompt.replayCut: POS = pos[first:], first odd (first * 8 bytes in)"
+   },
+   "grid": [
+    1,
+    2,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:replay-cut odd first",
+   "rank": 0,
+   "scalars": {},
+   "tensors": {
+    "COS": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "POS": [
+     "int64",
+     [
+      1
+     ],
+     [
+      1
+     ],
+     false
+    ],
+    "SIN": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      1,
+      32,
+      128
+     ],
+     [
+      4096,
+      128,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "H": 32,
+    "HB": 16,
+    "HD": 512,
+    "INV": false,
+    "PDL": true,
+    "RD": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "prompt.replayCut: POS = pos[first:], first odd (first * 8 bytes in)"
+   },
+   "grid": [
+    1,
+    2,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:replay-cut odd first",
+   "rank": 0,
+   "scalars": {},
+   "tensors": {
+    "COS": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "POS": [
+     "int64",
+     [
+      1
+     ],
+     [
+      1
+     ],
+     false
+    ],
+    "SIN": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      1,
+      32,
+      512
+     ],
+     [
+      16384,
+      512,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "H": 32,
+    "HB": 16,
+    "HD": 512,
+    "INV": true,
+    "PDL": true,
+    "RD": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "prompt.replayCut: POS = pos[first:], first odd (first * 8 bytes in)"
+   },
+   "grid": [
+    1,
+    2,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:replay-cut odd first",
+   "rank": 0,
+   "scalars": {},
+   "tensors": {
+    "COS": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "POS": [
+     "int64",
+     [
+      1
+     ],
+     [
+      1
+     ],
+     false
+    ],
+    "SIN": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      1,
+      32,
+      512
+     ],
+     [
+      16384,
+      512,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_rowmm2r": [
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 3,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=3",
+   "rank": 0,
+   "scalars": {
+    "rows": 3,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      3,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      3,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 4,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=4",
+   "rank": 0,
+   "scalars": {
+    "rows": 4,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      4,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      4,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 5,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=5",
+   "rank": 0,
+   "scalars": {
+    "rows": 5,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      5,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      5,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 6,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=6",
+   "rank": 0,
+   "scalars": {
+    "rows": 6,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      6,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      6,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 7,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=7",
+   "rank": 0,
+   "scalars": {
+    "rows": 7,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      7,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      7,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 9,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=9",
+   "rank": 0,
+   "scalars": {
+    "rows": 9,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      9,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      9,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 10,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=10",
+   "rank": 0,
+   "scalars": {
+    "rows": 10,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      10,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      10,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 11,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=11",
+   "rank": 0,
+   "scalars": {
+    "rows": 11,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      11,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      11,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 1,
+    "K": 5120,
+    "N": 32,
+    "PDL": true,
+    "RB": 12,
+    "WTS": false
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm2 at R rows: RB = min(16, R)"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 1,
+   "phase": "derived:window R=12",
+   "rank": 0,
+   "scalars": {
+    "rows": 12,
+    "scale": {
+     "float": 1.0,
+     "fp32_bits": "0x3f800000",
+     "fp64_bits": "0x3ff0000000000000"
+    },
+    "xs": 5120
+   },
+   "tensors": {
+    "OUT": [
+     "float32",
+     [
+      12,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      32,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      12,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_rowmm_parts": [
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 16,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 1,
+    "rows": 1
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    8,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=1",
+   "rank": 0,
+   "scalars": {
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      1,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      1,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 16,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 2
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    8,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=2",
+   "rank": 0,
+   "scalars": {
+    "rows": 2,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      2,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      2,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 16,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 3
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    8,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=3",
+   "rank": 0,
+   "scalars": {
+    "rows": 3,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      3,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      3,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 16,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 4
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    8,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=4",
+   "rank": 0,
+   "scalars": {
+    "rows": 4,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      4,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      4,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 16,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 6
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    8,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=6",
+   "rank": 0,
+   "scalars": {
+    "rows": 6,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      6,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      6,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 7
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=7",
+   "rank": 0,
+   "scalars": {
+    "rows": 7,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      7,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      7,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 8
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=8",
+   "rank": 0,
+   "scalars": {
+    "rows": 8,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      8,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      8,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 9
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=9",
+   "rank": 0,
+   "scalars": {
+    "rows": 9,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      9,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      9,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 11
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=11",
+   "rank": 0,
+   "scalars": {
+    "rows": 11,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      11,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      11,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 12
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=12",
+   "rank": 0,
+   "scalars": {
+    "rows": 12,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      12,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      12,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 13
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=13",
+   "rank": 0,
+   "scalars": {
+    "rows": 13,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      13,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      13,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 14
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=14",
+   "rank": 0,
+   "scalars": {
+    "rows": 14,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      14,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      14,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 128,
+    "PDL": true,
+    "RB": 16
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    16,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=16",
+   "rank": 0,
+   "scalars": {
+    "rows": 16,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      16,
+      20,
+      128
+     ],
+     [
+      2560,
+      128,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      128,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      16,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 16,
+    "CPG": 1,
+    "K": 5120,
+    "N": 384,
+    "PDL": true,
+    "RB": 5
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    24,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=5",
+   "rank": 0,
+   "scalars": {
+    "rows": 5,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      5,
+      20,
+      384
+     ],
+     [
+      7680,
+      384,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      384,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      5,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 384,
+    "PDL": true,
+    "RB": 7
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    48,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=7",
+   "rank": 0,
+   "scalars": {
+    "rows": 7,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      7,
+      20,
+      384
+     ],
+     [
+      7680,
+      384,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      384,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      7,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BK": 256,
+    "BN": 8,
+    "CPG": 1,
+    "K": 5120,
+    "N": 384,
+    "PDL": true,
+    "RB": 13
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "rowmm_gate at R rows: RB = R, rpTile BN"
+   },
+   "grid": [
+    48,
+    20,
+    1
+   ],
+   "num_warps": 2,
+   "phase": "derived:window R=13",
+   "rank": 0,
+   "scalars": {
+    "rows": 13,
+    "xs": 5120
+   },
+   "tensors": {
+    "S": [
+     "float32",
+     [
+      13,
+      20,
+      384
+     ],
+     [
+      7680,
+      384,
+      1
+     ],
+     true
+    ],
+    "W": [
+     "float16",
+     [
+      384,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ],
+    "X": [
+     "bfloat16",
+     [
+      13,
+      5120
+     ],
+     [
+      5120,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_score": [
+  {
+   "consts": {
+    "BC": 1024,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "tri_markov.localBest / pick, step i odd: TOK = out + 8 i (8 bytes in)"
+   },
+   "grid": [
+    64,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "draft_batch_capture:s1:markov odd step",
+   "rank": 0,
+   "scalars": {
+    "c_row": 64640,
+    "l_row": 323200,
+    "l_seg": 323200,
+    "n_cols": 64640,
+    "n_part": 64,
+    "n_rows": 1,
+    "s_row": 64640,
+    "seg0": 0,
+    "t_stride": 6
+   },
+   "tensors": {
+    "CACHE": [
+     "float16",
+     [
+      256,
+      64640
+     ],
+     [
+      64640,
+      1
+     ],
+     true
+    ],
+    "LG": [
+     "float32",
+     [
+      323200
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "PI": [
+     "int32",
+     [
+      1,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "PV": [
+     "float32",
+     [
+      1,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "SLOT": [
+     "int32",
+     [
+      129280
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "STAGE": [
+     "float16",
+     [
+      1,
+      64640
+     ],
+     [
+      64640,
+      1
+     ],
+     true
+    ],
+    "TOK": [
+     "int64",
+     [
+      1
+     ],
+     [
+      6
+     ],
+     false
+    ]
+   }
+  }
+ ],
+ "_score_keys": [
+  {
+   "consts": {
+    "BN": 1024,
+    "HAS_TMAX": false,
+    "PDL": true,
+    "TB": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1032)"
+   },
+   "grid": [
+    16,
+    2,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1032",
+   "scalars": {
+    "n": 1032,
+    "nt": 17
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ],
+    "S": [
+     "float32",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1032
+     ],
+     [
+      1032,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 1024,
+    "HAS_TMAX": false,
+    "PDL": true,
+    "TB": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1040)"
+   },
+   "grid": [
+    16,
+    2,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1040",
+   "scalars": {
+    "n": 1040,
+    "nt": 17
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ],
+    "S": [
+     "float32",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1040
+     ],
+     [
+      1040,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 1024,
+    "HAS_TMAX": false,
+    "PDL": true,
+    "TB": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b1992)"
+   },
+   "grid": [
+    16,
+    2,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b1992",
+   "scalars": {
+    "n": 1992,
+    "nt": 32
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ],
+    "S": [
+     "float32",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      1992
+     ],
+     [
+      1992,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 1024,
+    "HAS_TMAX": true,
+    "PDL": true,
+    "TB": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b4104)"
+   },
+   "grid": [
+    16,
+    5,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b4104",
+   "scalars": {
+    "n": 4104,
+    "nt": 65
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      16,
+      4104
+     ],
+     [
+      4104,
+      1
+     ],
+     true
+    ],
+    "S": [
+     "float32",
+     [
+      16,
+      4104
+     ],
+     [
+      4104,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      65
+     ],
+     [
+      65,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 1024,
+    "HAS_TMAX": true,
+    "PDL": true,
+    "TB": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b4112)"
+   },
+   "grid": [
+    16,
+    5,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b4112",
+   "scalars": {
+    "n": 4112,
+    "nt": 65
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      16,
+      4112
+     ],
+     [
+      4112,
+      1
+     ],
+     true
+    ],
+    "S": [
+     "float32",
+     [
+      16,
+      4112
+     ],
+     [
+      4112,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      65
+     ],
+     [
+      65,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "BN": 1024,
+    "HAS_TMAX": true,
+    "PDL": true,
+    "TB": 64
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (round:r16:derived-b5064)"
+   },
+   "grid": [
+    16,
+    5,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "round:r16:derived-b5064",
+   "scalars": {
+    "n": 5064,
+    "nt": 80
+   },
+   "tensors": {
+    "OUT": [
+     "int64",
+     [
+      16,
+      5064
+     ],
+     [
+      5064,
+      1
+     ],
+     true
+    ],
+    "S": [
+     "float32",
+     [
+      16,
+      5064
+     ],
+     [
+      5064,
+      1
+     ],
+     true
+    ],
+    "TMAX": [
+     "int64",
+     [
+      16,
+      80
+     ],
+     [
+      80,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_sparse_attn_merge_rot2": [
+  {
+   "consts": {
+    "DISCARD": true,
+    "GH": 8,
+    "H": 32,
+    "HB": 16,
+    "HD": 512,
+    "PDL": true,
+    "RD": 64,
+    "SPLITS": 8,
+    "rows": 1
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "merge_rot2 at R rows, POS 16-byte aligned"
+   },
+   "grid": [
+    1,
+    32,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "derived:window R=1",
+   "rank": 0,
+   "scalars": {},
+   "tensors": {
+    "COS": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "bfloat16",
+     [
+      1,
+      32,
+      512
+     ],
+     [
+      16384,
+      512,
+      1
+     ],
+     true
+    ],
+    "PL": [
+     "float32",
+     [
+      256
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "PM": [
+     "float32",
+     [
+      256
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "PO": [
+     "float32",
+     [
+      131072
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "POS": [
+     "int64",
+     [
+      1
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "SIN": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "SINK": [
+     "float32",
+     [
+      32
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "SUH": [
+     "float16",
+     [
+      16384
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "XH": [
+     "float16",
+     [
+      1,
+      4096
+     ],
+     [
+      4096,
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "DISCARD": true,
+    "GH": 8,
+    "H": 32,
+    "HB": 16,
+    "HD": 512,
+    "PDL": true,
+    "RD": 64,
+    "SPLITS": 8
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "merge_rot2 at R rows, POS 16-byte aligned"
+   },
+   "grid": [
+    2,
+    32,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "derived:window R=2",
+   "rank": 0,
+   "scalars": {
+    "rows": 2
+   },
+   "tensors": {
+    "COS": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "bfloat16",
+     [
+      2,
+      32,
+      512
+     ],
+     [
+      16384,
+      512,
+      1
+     ],
+     true
+    ],
+    "PL": [
+     "float32",
+     [
+      256
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "PM": [
+     "float32",
+     [
+      256
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "PO": [
+     "float32",
+     [
+      131072
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "POS": [
+     "int64",
+     [
+      2
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "SIN": [
+     "float32",
+     [
+      1052672,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "SINK": [
+     "float32",
+     [
+      32
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "SUH": [
+     "float16",
+     [
+      16384
+     ],
+     [
+      1
+     ],
+     true
+    ],
+    "XH": [
+     "float16",
+     [
+      2,
+      4096
+     ],
+     [
+      4096,
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ],
+ "_topk_sel": [
+  {
+   "consts": {
+    "KK": 1,
+    "N": 1,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (forward:derived-ncomp1)"
+   },
+   "grid": [
+    16,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:derived-ncomp1",
+   "scalars": {},
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      1
+     ],
+     [
+      1,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      1
+     ],
+     [
+      1,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "KK": 2,
+    "N": 2,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (forward:derived-ncomp2)"
+   },
+   "grid": [
+    16,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:derived-ncomp2",
+   "scalars": {},
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      2
+     ],
+     [
+      2,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      2
+     ],
+     [
+      2,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "KK": 32,
+    "N": 32,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (forward:derived-ncomp32)"
+   },
+   "grid": [
+    16,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:derived-ncomp32",
+   "scalars": {},
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      32
+     ],
+     [
+      32,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "KK": 64,
+    "N": 64,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (forward:derived-ncomp64)"
+   },
+   "grid": [
+    16,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:derived-ncomp64",
+   "scalars": {},
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      64
+     ],
+     [
+      64,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "KK": 128,
+    "N": 128,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (forward:derived-ncomp128)"
+   },
+   "grid": [
+    16,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:derived-ncomp128",
+   "scalars": {},
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      128
+     ],
+     [
+      128,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      128
+     ],
+     [
+      128,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ]
+   }
+  },
+  {
+   "consts": {
+    "KK": 256,
+    "N": 256,
+    "PDL": true
+   },
+   "derived": {
+    "config_sha256": "eb48f2216645b36f400036fa2d67d8ad6b48233b0f4a1bcb7e99fa6450dad253",
+    "inventory_sha256": "04294708203ffcec5c89ed2e78cd72d559be75e8624fbd06e92ba24909c36015",
+    "rule": "context length (forward:derived-ncomp256)"
+   },
+   "grid": [
+    16,
+    1,
+    1
+   ],
+   "num_warps": 4,
+   "phase": "forward:derived-ncomp256",
+   "scalars": {},
+   "tensors": {
+    "KEYS": [
+     "int64",
+     [
+      16,
+      256
+     ],
+     [
+      256,
+      1
+     ],
+     true
+    ],
+    "OUT": [
+     "int64",
+     [
+      16,
+      256
+     ],
+     [
+      256,
+      1
+     ],
+     true
+    ],
+    "VIS": [
+     "int64",
+     [
+      16
+     ],
+     [
+      1
+     ],
+     true
+    ]
+   }
+  }
+ ]
+}

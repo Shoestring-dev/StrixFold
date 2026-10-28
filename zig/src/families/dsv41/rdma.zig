@@ -6,13 +6,13 @@
 //! and copies the slots out in rank order (or straight into the caller's views). The kernel pair is rdma_gather.cu's
 //! and runs in graphs like any other kernel; a failed write or `abort` sets an abort word every wait also reads.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const fabric = @import("fabric");
 const seqs = @import("rdma_seq.zig");
 
 const vabi = fabric.verbs_abi;
 const Verbs = fabric.verbs.Verbs;
-const DevicePtr = cuda.abi.DevicePtr;
+const DevicePtr = gpu.abi.DevicePtr;
 
 pub const max_ranks = seqs.max_ranks;
 pub const max_devices = seqs.max_devices;
@@ -25,7 +25,7 @@ const wc_recv_rdma_with_imm = 129;
 const host_register_portable = 0x01;
 const host_register_devicemap = 0x02;
 
-pub const Error = error{ VerbsFailed, PostFailed, BadMtu, BadInfo, TooLarge, Failed, NoHostRegister } || cuda.Error || fabric.verbs.Error || std.posix.MMapError || std.Thread.SpawnError;
+pub const Error = error{ VerbsFailed, PostFailed, BadMtu, BadInfo, TooLarge, Failed, NoHostRegister } || gpu.Error || fabric.verbs.Error || std.posix.MMapError || std.Thread.SpawnError;
 
 /// The served ring has its own GID selection, independent of NCCL's.
 pub fn parseGidIndex(text: ?[]const u8) error{InvalidRdmaGidIndex}!u8 {
@@ -77,11 +77,11 @@ pub const Info = extern struct {
 
 /// The kernel pair, from the family's rdma_gather fatbin.
 pub const Kernels = struct {
-    stage: cuda.Function,
-    collect: cuda.Function,
-    collect_into: cuda.Function,
+    stage: gpu.Function,
+    collect: gpu.Function,
+    collect_into: gpu.Function,
 
-    pub fn load(m: cuda.Module) cuda.Error!Kernels {
+    pub fn load(m: gpu.Module) gpu.Error!Kernels {
         return .{ .stage = try m.function("dsv41_rdma_stage"), .collect = try m.function("dsv41_rdma_collect"), .collect_into = try m.function("dsv41_rdma_collect_into") };
     }
 };
@@ -89,16 +89,16 @@ pub const Kernels = struct {
 /// cuMemHostRegister / cuMemHostUnregister, which the runtime's driver table does not hold.
 const HostReg = struct {
     lib: std.DynLib,
-    register: *const fn (?*anyopaque, usize, c_uint) callconv(.c) cuda.abi.Result,
-    unregister: *const fn (?*anyopaque) callconv(.c) cuda.abi.Result,
+    register: *const fn (?*anyopaque, usize, c_uint) callconv(.c) gpu.abi.Result,
+    unregister: *const fn (?*anyopaque) callconv(.c) gpu.abi.Result,
 
     fn open() Error!HostReg {
         var lib = std.DynLib.open("libcuda.so.1") catch return error.NoHostRegister;
         errdefer lib.close();
         return .{
             .lib = lib,
-            .register = lib.lookup(*const fn (?*anyopaque, usize, c_uint) callconv(.c) cuda.abi.Result, "cuMemHostRegister_v2") orelse return error.NoHostRegister,
-            .unregister = lib.lookup(*const fn (?*anyopaque) callconv(.c) cuda.abi.Result, "cuMemHostUnregister") orelse return error.NoHostRegister,
+            .register = lib.lookup(*const fn (?*anyopaque, usize, c_uint) callconv(.c) gpu.abi.Result, "cuMemHostRegister_v2") orelse return error.NoHostRegister,
+            .unregister = lib.lookup(*const fn (?*anyopaque) callconv(.c) gpu.abi.Result, "cuMemHostUnregister") orelse return error.NoHostRegister,
         };
     }
 };
@@ -111,7 +111,7 @@ const Pinned = struct {
     mem: []align(std.heap.page_size_min) u8,
     dev: DevicePtr,
 
-    fn alloc(d: *const cuda.Driver, hr: *const HostReg, len: usize) Error!Pinned {
+    fn alloc(d: *const gpu.Driver, hr: *const HostReg, len: usize) Error!Pinned {
         const n = std.mem.alignForward(usize, len, 1 << 16);
         const mem = try std.posix.mmap(null, n, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
         errdefer std.posix.munmap(mem);
@@ -152,7 +152,7 @@ const Peer = struct {
 };
 
 pub const Ring = struct {
-    d: *const cuda.Driver,
+    d: *const gpu.Driver,
     verbs: Verbs,
     v: *const Verbs = undefined,
     k: Kernels,
@@ -163,7 +163,7 @@ pub const Ring = struct {
     send: Pinned,
     recv: Pinned,
     meta: Pinned,
-    scalars: cuda.DeviceBuffer, // seq (u64), staged (u32), probe (8 x u64)
+    scalars: gpu.DeviceBuffer, // seq (u64), staged (u32), probe (8 x u64)
     nics: [max_devices]Nic = undefined,
     nd: u32 = 0,
     peers: [max_ranks]Peer = @splat(.{}),
@@ -193,7 +193,7 @@ pub const Ring = struct {
     }
 
     /// Rings, metadata and queue pairs (in INIT, receives posted) on `devices`; `connect` with every rank's `info` next.
-    pub fn create(gpa: std.mem.Allocator, d: *const cuda.Driver, k: Kernels, devices: []const []const u8, rank: u32, world: u32, s: Settings) Error!*Ring {
+    pub fn create(gpa: std.mem.Allocator, d: *const gpu.Driver, k: Kernels, devices: []const []const u8, rank: u32, world: u32, s: Settings) Error!*Ring {
         if (world < 2 or world > max_ranks or rank >= world or devices.len == 0 or devices.len > max_devices) return error.BadInfo;
         if (s.slots < 2 or s.slots > seqs.max_slots or s.max_bytes == 0 or s.max_bytes % 64 != 0) return error.BadInfo;
         const r = try gpa.create(Ring);
@@ -208,7 +208,7 @@ pub const Ring = struct {
         errdefer recv.free(&hr);
         var meta = try Pinned.alloc(d, &hr, (s.slots * world + 1 + 2 * s.slots + 1) * 8);
         errdefer meta.free(&hr);
-        var scalars = try cuda.DeviceBuffer.alloc(d, 80);
+        var scalars = try gpu.DeviceBuffer.alloc(d, 80);
         errdefer scalars.free();
         try scalars.fill8(0, null);
         r.* = .{ .d = d, .verbs = verbs, .k = k, .s = s, .rank = rank, .world = world, .hr = hr, .send = send, .recv = recv, .meta = meta, .scalars = scalars };
@@ -422,12 +422,12 @@ pub const Ring = struct {
         return r.scalars.ptr + offset;
     }
     /// recv [world x n4 float4] <- every rank's send [n4 float4] (fp32, 16-byte aligned), on `stream`.
-    pub fn gather(r: *Ring, stream: cuda.Stream, send: DevicePtr, n4: u32, recv: DevicePtr) Error!void {
+    pub fn gather(r: *Ring, stream: gpu.Stream, send: DevicePtr, n4: u32, recv: DevicePtr) Error!void {
         if (r.failure() != null) return error.Failed;
         if (@as(usize, n4) * 16 > r.s.max_bytes) return error.TooLarge;
         const own: DevicePtr = if (r.s.own_early) recv + @as(u64, r.rank) * n4 * 16 else 0;
         try r.stage(stream, send, n4, own, n4, n4);
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(send);
         a.add(recv);
         a.add(@as(c_int, @intCast(n4)));
@@ -445,13 +445,13 @@ pub const Ring = struct {
         a.add(@as(c_int, @intFromBool(r.s.pdl)));
         const per = collect_threads * r.s.collect_grain;
         const blocks = std.math.clamp((@as(u64, n4) * r.world + per - 1) / per, 1, r.s.collect_blocks);
-        try cuda.launch.launch(r.k.collect, .{ .grid = .{ .x = @intCast(blocks), .y = 1, .z = 1 }, .block = .{ .x = collect_threads, .y = 1, .z = 1 }, .pdl = r.s.pdl }, stream, &a);
+        try gpu.launch.launch(r.k.collect, .{ .grid = .{ .x = @intCast(blocks), .y = 1, .z = 1 }, .block = .{ .x = collect_threads, .y = 1, .z = 1 }, .pdl = r.s.pdl }, stream, &a);
     }
     /// A rank's slice in `dsts` (its rows `row4` float4 wide, `stride4` apart; ptr 0: not copied out).
     pub const Dst = struct { ptr: DevicePtr = 0, row4: u32 = 0, stride4: u64 = 0 };
     /// Every rank's [rows, w_p] fp32 slice straight into dsts[p]; `send` is this rank's slice, contiguous. Every rank
     /// names the same widths, so each peer's ring slot holds rows x w_p floats.
-    pub fn gatherInto(r: *Ring, stream: cuda.Stream, send: DevicePtr, rows: u32, own_row4: u32, dsts: []const Dst) Error!void {
+    pub fn gatherInto(r: *Ring, stream: gpu.Stream, send: DevicePtr, rows: u32, own_row4: u32, dsts: []const Dst) Error!void {
         if (r.failure() != null) return error.Failed;
         if (dsts.len != r.world) return error.BadInfo;
         const n4 = rows * own_row4;
@@ -469,7 +469,7 @@ pub const Ring = struct {
         }
         const mine = dsts[r.rank];
         try r.stage(stream, send, n4, mine.ptr, if (mine.ptr != 0) mine.row4 else n4, if (mine.ptr != 0) mine.stride4 else n4);
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(dd);
         a.add(@as(c_int, @intCast(rows)));
         a.add(r.recv.dev);
@@ -484,13 +484,13 @@ pub const Ring = struct {
         a.add(@as(c_int, @intFromBool(r.s.pdl)));
         const per = collect_threads * r.s.collect_grain;
         const blocks = std.math.clamp((copy4 + per - 1) / per, 1, r.s.collect_blocks);
-        try cuda.launch.launch(r.k.collect_into, .{ .grid = .{ .x = @intCast(blocks), .y = 1, .z = 1 }, .block = .{ .x = collect_threads, .y = 1, .z = 1 }, .pdl = r.s.pdl }, stream, &a);
+        try gpu.launch.launch(r.k.collect_into, .{ .grid = .{ .x = @intCast(blocks), .y = 1, .z = 1 }, .block = .{ .x = collect_threads, .y = 1, .z = 1 }, .pdl = r.s.pdl }, stream, &a);
     }
     fn probe(r: *const Ring) DevicePtr {
         return if (r.s.probing) r.scalar(16) else 0;
     }
-    fn stage(r: *Ring, stream: cuda.Stream, send: DevicePtr, n4: u32, own: DevicePtr, own_row4: u32, own_stride4: u64) Error!void {
-        var a: cuda.Args = .{};
+    fn stage(r: *Ring, stream: gpu.Stream, send: DevicePtr, n4: u32, own: DevicePtr, own_row4: u32, own_stride4: u64) Error!void {
+        var a: gpu.Args = .{};
         a.add(send);
         a.add(@as(c_int, @intCast(n4)));
         a.add(r.send.dev);
@@ -509,7 +509,7 @@ pub const Ring = struct {
         a.add(@as(c_longlong, @intCast(own_stride4)));
         a.add(@as(c_int, @intFromBool(r.s.pdl)));
         const blocks = std.math.clamp((@as(u64, n4) + 1023) / 1024, 1, r.s.stage_blocks);
-        try cuda.launch.launch(r.k.stage, .{ .grid = .{ .x = @intCast(blocks), .y = 1, .z = 1 }, .block = .{ .x = stage_threads, .y = 1, .z = 1 }, .pdl = r.s.pdl }, stream, &a);
+        try gpu.launch.launch(r.k.stage, .{ .grid = .{ .x = @intCast(blocks), .y = 1, .z = 1 }, .block = .{ .x = stage_threads, .y = 1, .z = 1 }, .pdl = r.s.pdl }, stream, &a);
     }
     /// (stage, doorbell to every flag, copy-out) mean ns over the probed gathers and their count; resets the sums.
     pub fn probes(r: *Ring) Error![4]f64 {

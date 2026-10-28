@@ -6,15 +6,15 @@
 //! kernel settings are pinned from the TP2 half's shapes (Plan.of: the half's I, not this node's narrower width) and
 //! only the launched widths narrowed, so every output column has the bits of the TP2 rank's partial.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const weights = @import("weights.zig");
 const X = @import("exl3_experts.zig");
 
-fn launch(f: cuda.Function, s: cuda.Stream, grid: [3]usize, block: usize, args: *cuda.Args) !void {
-    try cuda.launch.launch(f, .{ .grid = .{ .x = @intCast(grid[0]), .y = @intCast(grid[1]), .z = @intCast(grid[2]) }, .block = .{ .x = @intCast(block) } }, s, args);
+fn launch(f: gpu.Function, s: gpu.Stream, grid: [3]usize, block: usize, args: *gpu.Args) !void {
+    try gpu.launch.launch(f, .{ .grid = .{ .x = @intCast(grid[0]), .y = @intCast(grid[1]), .z = @intCast(grid[2]) }, .block = .{ .x = @intCast(block) } }, s, args);
 }
 
-fn i32a(a: *cuda.Args, v: usize) void {
+fn i32a(a: *gpu.Args, v: usize) void {
     a.add(@as(c_int, @intCast(v)));
 }
 
@@ -50,7 +50,7 @@ pub const Plan = struct {
 /// experts2d.gateup on a prompt chunk (R >= 64): the grouping (TP2's, by pick only), the rotated rows, gate and up for
 /// this node's columns, the epilogue (TP2's values on them) into sc.xd [R * slots, ig] fp16. x bf16 [R, D] (row stride
 /// x_stride elements), pick int32 [R, slots]; sc sized for this node's width.
-pub fn gateUp(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.Scratch, x: u64, x_stride: usize, pick: u64, r: usize, limit: f32) !void {
+pub fn gateUp(k: *const X.Kernels, s: gpu.Stream, ex: weights.Experts, sc: X.Scratch, x: u64, x_stride: usize, pick: u64, r: usize, limit: f32) !void {
     const pl = try Plan.of(ex);
     const e: usize = ex.count;
     const slots = sc.slots;
@@ -63,7 +63,7 @@ pub fn gateUp(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.Sc
     const n_d = X.listLen(p, maxu, X.rows_rows_d);
     const mma = k.mma[X.range(ex.k2_gu[0], ex.k2_gu[1])] orelse return error.MissingKernel;
 
-    var a: cuda.Args = .{};
+    var a: gpu.Args = .{};
     a.add(pick);
     a.add(sc.counts);
     i32a(&a, p);
@@ -112,7 +112,7 @@ pub fn gateUp(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.Sc
 /// experts2d.down on a prompt chunk: down over the TP2 rank's whole intermediate xd_full [R * slots, I] fp16 for this
 /// node's output columns, then the served combine (slots in order) into out fp32 [R, dn]. Uses the grouping and work
 /// lists gateUp made in sc.
-pub fn down(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.Scratch, xd_full: u64, pick: u64, wts: u64, out: u64, r: usize) !void {
+pub fn down(k: *const X.Kernels, s: gpu.Stream, ex: weights.Experts, sc: X.Scratch, xd_full: u64, pick: u64, wts: u64, out: u64, r: usize) !void {
     const pl = try Plan.of(ex);
     const e: usize = ex.count;
     const slots = sc.slots;
@@ -124,7 +124,7 @@ pub fn down(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.Scra
     const dfn = k.rows[X.range(ex.k2_d[0], ex.k2_d[1])] orelse return error.MissingKernel;
 
     // down: grid (1, dn / 128, pairs), 4 warps, two 16-row member tiles a program, one split (TP2's settings)
-    var a: cuda.Args = .{};
+    var a: gpu.Args = .{};
     for ([_]u64{ xd_full, xd_full, ex.down_ptr, ex.down_ptr, ex.down_k2, ex.down_k2, sc.ids, sc.count, sc.members, sc.z }) |v| a.add(v);
     for ([_]usize{ pl.i, pl.dn, p, 1, maxm, slots, n_d }) |v| i32a(&a, v);
     a.add(sc.work_d);
@@ -189,7 +189,7 @@ pub fn decodeSizes(rows: usize, slots: usize, ex: weights.Experts) ![13]usize {
 /// [R, slots], out fp32 [R, dn].
 pub fn gateUpLaunches(ex: weights.Experts, sc: X.DecodeScratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) ![2]X.DecodeLaunch {
     const w = try Window.of(ex, sc, r);
-    var prep: cuda.Args = .{};
+    var prep: gpu.Args = .{};
     prep.add(x);
     i32a(&prep, x_stride);
     for ([_]u64{ pick, ex.suh_g, ex.suh_u, sc.xg, sc.xu }) |v| prep.add(v);
@@ -202,7 +202,7 @@ pub fn gateUpLaunches(ex: weights.Experts, sc: X.DecodeScratch, x: u64, x_stride
     const prep_warps = X.prep_threads / 32;
     const blocks = 1 + (w.p * (w.d / 128) * 2 + prep_warps - 1) / prep_warps;
 
-    var gu: cuda.Args = .{};
+    var gu: gpu.Args = .{};
     for ([_]u64{ sc.xg, sc.xu, ex.gate_ptr, ex.up_ptr, ex.gate_k2, ex.up_k2, sc.ids, sc.count, sc.members, sc.z }) |v| gu.add(v);
     for ([_]usize{ w.d, w.ig, w.p, w.sk, r, w.slots }) |v| i32a(&gu, v);
     gu.add(X.DecodeEpi{ .pick = pick, .E = @intCast(w.e), .svh_g = ex.svh_g, .svh_u = ex.svh_u, .suh_d = ex.suh_d, .xd = sc.xd, .limit = limit, .act_mode = X.act_f32, .cnt = sc.cnt_gu, .discard = @intFromBool(8 * w.sk <= 32) });
@@ -219,14 +219,14 @@ pub fn gateUpLaunches(ex: weights.Experts, sc: X.DecodeScratch, x: u64, x_stride
 /// gateUpLaunches' grouping in sc.
 pub fn downLaunch(ex: weights.Experts, sc: X.DecodeScratch, xd_full: u64, pick: u64, wts: u64, out: u64, r: usize) !X.DecodeLaunch {
     const w = try Window.of(ex, sc, r);
-    var dn: cuda.Args = .{};
+    var dn: gpu.Args = .{};
     for ([_]u64{ xd_full, xd_full, ex.down_ptr, ex.down_ptr, ex.down_k2, ex.down_k2, sc.ids, sc.count, sc.members, sc.z }) |v| dn.add(v);
     for ([_]usize{ w.i, w.dn, w.p, 1, r, w.slots }) |v| i32a(&dn, v);
     dn.add(X.DecodeEpi{ .pick = pick, .E = @intCast(w.e), .svh_d = ex.svh_d, .y = sc.y, .wts = wts, .out = out, .cnt = sc.cnt_d, .discard = @intFromBool(4 * w.slots <= 32) });
     return .{ .kernel = .down, .range = X.range(ex.k2_d[0], ex.k2_d[1]), .cfg = .{ .grid = .{ .x = @intCast(w.maxu), .y = @intCast(w.dn / 128), .z = @intCast(w.mt) }, .block = .{ .x = 4 * 32 }, .pdl = true }, .args = dn };
 }
 
-fn function(k: *const X.Kernels, l: *const X.DecodeLaunch) !cuda.Function {
+fn function(k: *const X.Kernels, l: *const X.DecodeLaunch) !gpu.Function {
     return switch (l.kernel) {
         .prep => k.decode_prep,
         .gate_up => k.cp[l.range][0] orelse error.MissingKernel,
@@ -235,17 +235,17 @@ fn function(k: *const X.Kernels, l: *const X.DecodeLaunch) !cuda.Function {
 }
 
 /// gateup_fused on a decode window: decode_prep, then gate / up (this node's columns of the intermediate in sc.xd).
-pub fn decodeGateUp(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.DecodeScratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) !void {
+pub fn decodeGateUp(k: *const X.Kernels, s: gpu.Stream, ex: weights.Experts, sc: X.DecodeScratch, x: u64, x_stride: usize, pick: u64, wts: u64, out: u64, r: usize, limit: f32) !void {
     var ls = try gateUpLaunches(ex, sc, x, x_stride, pick, wts, out, r, limit);
-    var fs: [2]cuda.Function = undefined;
+    var fs: [2]gpu.Function = undefined;
     for (&ls, &fs) |*l, *f| f.* = try function(k, l);
-    for (&ls, fs) |*l, f| try cuda.launch.launch(f, l.cfg, s, &l.args);
+    for (&ls, fs) |*l, f| try gpu.launch.launch(f, l.cfg, s, &l.args);
 }
 
 /// down_fused on a decode window, after the exchange: out fp32 [R, dn].
-pub fn decodeDown(k: *const X.Kernels, s: cuda.Stream, ex: weights.Experts, sc: X.DecodeScratch, xd_full: u64, pick: u64, wts: u64, out: u64, r: usize) !void {
+pub fn decodeDown(k: *const X.Kernels, s: gpu.Stream, ex: weights.Experts, sc: X.DecodeScratch, xd_full: u64, pick: u64, wts: u64, out: u64, r: usize) !void {
     var l = try downLaunch(ex, sc, xd_full, pick, wts, out, r);
-    try cuda.launch.launch(try function(k, &l), l.cfg, s, &l.args);
+    try gpu.launch.launch(try function(k, &l), l.cfg, s, &l.args);
 }
 
 test "a 2D node's prompt experts keep the TP2 half's settings" {

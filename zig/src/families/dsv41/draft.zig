@@ -10,7 +10,7 @@
 //! confidence head (one fp32 GEMV as torch issues it). The served L2 prefetch forks move no bytes and are left out; the
 //! RDMA gathers are NCCL all-gathers (the same bytes).
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const prompt = @import("prompt.zig");
 const weights = @import("weights.zig");
 const plan = @import("plan.zig");
@@ -24,8 +24,10 @@ const exl3_linear = @import("exl3_linear.zig");
 const exl3_experts = @import("exl3_experts.zig");
 const markov_tokens = @import("markov_tokens.zig");
 const draft2d = @import("draft2d.zig");
+pub const scheduler_costs = @import("scheduler_costs.zig");
 
 const Engine = prompt.Engine;
+const two2d = prompt.two2d;
 const Chunk = prompt.Chunk;
 
 /// MultiDecoder's stream slots in the served lane (--parallel 4): the pool's streams.
@@ -87,10 +89,20 @@ pub const Point = enum { attn_in, attn_ring, attn_out, attn_gather, moe_in, moe_
 pub const Probe = struct {
     ctx: *anyopaque,
     at: *const fn (ctx: *anyopaque, what: Point, stage: usize, dev: u64) anyerror!bool,
+    /// A layer harness's re-anchoring (tf-dsv41-layer --anchor), as round.Probe's: before stage `stage` it may write
+    /// reference streams over h (bf16 [R, hc, D]) and the carried pre-mix over pre (fp32 [R, hc]); true drops the
+    /// pending post.
+    anchor: ?*const fn (ctx: *anyopaque, stage: usize, h: u64, pre: u64) anyerror!bool = null,
 
     fn check(pb: ?Probe, what: Point, stage: usize, dev: u64) !void {
         const p = pb orelse return;
         if (!try p.at(p.ctx, what, stage, dev)) return error.DraftMismatch;
+    }
+
+    fn reanchor(pb: ?Probe, stage: usize, h: u64, pre: u64) !bool {
+        const p = pb orelse return false;
+        const f = p.anchor orelse return false;
+        return f(p.ctx, stage, h, pre);
     }
 };
 
@@ -103,9 +115,9 @@ const MarkovGather = struct {
     e: *const Engine,
     dst: u64,
 
-    fn run(ctx: *anyopaque, send: u64, rows: usize) anyerror!u64 {
+    fn run(ctx: *anyopaque, send: u64, rows: usize, step: usize) anyerror!u64 {
         const g: *MarkovGather = @ptrCast(@alignCast(ctx));
-        try g.e.gatherF32(send, g.dst, rows * 4);
+        try g.e.gatherF32(send, g.dst, rows * 4, .at(.draft_markov, step));
         return g.dst;
     }
 };
@@ -114,7 +126,7 @@ const MarkovGather = struct {
 /// buffer and every per-pass value (ids, positions, slots, the pick lists) is uploaded ahead of the replay.
 pub const PassGraphs = struct {
     gpa: std.mem.Allocator,
-    map: std.AutoHashMapUnmanaged(Key, cuda.graph.Exec) = .empty,
+    map: std.AutoHashMapUnmanaged(Key, gpu.graph.Exec) = .empty,
 
     pub const Key = struct { streams: u32, steps: u32 };
 
@@ -136,15 +148,15 @@ pub const PassGraphs = struct {
     fn run(g: *PassGraphs, dr: *Drafter, e: *const Engine, ch: *const Chunk, pool: *const Pool, N: usize, steps: usize) !void {
         const key: Key = .{ .streams = @intCast(N), .steps = @intCast(steps) };
         if (g.map.getPtr(key)) |x| return x.launchOn(e.s);
-        try cuda.graph.beginCapture(e.s, .thread_local);
+        try gpu.graph.beginCapture(e.s, .thread_local);
         dr.body(e, ch, pool, N, steps, null) catch |err| {
-            if (cuda.graph.endCapture(e.s)) |got| {
+            if (gpu.graph.endCapture(e.s)) |got| {
                 var x = got;
                 x.deinit();
             } else |_| {}
             return err;
         };
-        var graph = try cuda.graph.endCapture(e.s);
+        var graph = try gpu.graph.endCapture(e.s);
         defer graph.deinit();
         var exec = try graph.instantiate();
         errdefer exec.deinit();
@@ -302,7 +314,7 @@ pub const Drafter = struct {
             const sz = exl3_experts.Scratch.sizes(R, dr.slots_moe, ex.dims, ex.width, ex.count);
             dr.xs.rows = R;
             dr.xs.slots = dr.slots_moe;
-            inline for (.{ "xg", "xu", "xd", "z", "no_y", "ids", "count", "counts", "members", "work_gu", "work_d" }, 0..) |f, j| {
+            inline for (.{ "xg", "xu", "xd", "z", "no_y", "ids", "count", "counts", "members", "work_gu", "work_d", "order", "jobs", "meta" }, 0..) |f, j| {
                 @field(dr.xs, f) = try a.take(sz[j]);
             }
         }
@@ -311,8 +323,8 @@ pub const Drafter = struct {
         dr.local = try a.take(R * e.w.head.n * 4);
         // the Markov loop: every token's slot -1 (none), then the cached rows of the first 256 frequent tokens
         const none = try a.take(c.vocab * 4);
-        try e.d.check(e.d.api.cuMemsetD32Async(none, 0xffffffff, c.vocab, e.s.handle), "cuMemsetD32Async");
-        dr.mk = if (e.two) |tw| try draft2d.markov(c.*, tw, ds.markov_head, ds.markov_embed, none) else try tri_markov.Markov.init(c.*, sp, ds.markov_head, ds.markov_embed, none);
+        try gpu.fill32Async(e.d, e.s.handle, none, 0xffffffff, c.vocab);
+        dr.mk = if (two2d(e)) |tw| try draft2d.markov(c.*, tw, ds.markov_head, ds.markov_embed, none) else try tri_markov.Markov.init(c.*, sp, ds.markov_head, ds.markov_embed, none);
         const k = markov_tokens.cached.len;
         const tok = try a.take(k * 8);
         try prompt.upload(e, tok, &markov_tokens.cached, k * 8);
@@ -469,8 +481,8 @@ pub const Drafter = struct {
         // one host read: the drafts and the confidences
         try e.s.synchronize();
         var hc: [max_streams * max_block]f32 = undefined;
-        try e.d.check(e.d.api.cuMemcpyDtoH_v2(&ho, dr.out, N * ts * 8), "cuMemcpyDtoH");
-        try e.d.check(e.d.api.cuMemcpyDtoH_v2(&hc, dr.conf, N * steps * 4), "cuMemcpyDtoH");
+        try gpu.copyD2H(e.d, std.mem.sliceAsBytes(ho[0 .. N * ts]), dr.out);
+        try gpu.copyD2H(e.d, std.mem.sliceAsBytes(hc[0 .. N * steps]), dr.conf);
         for (0..N) |i| for (0..steps) |j| {
             dr.drafts[i][j] = ho[i * ts + 1 + j];
             dr.confs[i][j] = hc[i * steps + j];
@@ -496,19 +508,20 @@ pub const Drafter = struct {
         var pre_f = dr.pre_f;
         var pending: ?u64 = null;
         for (dr.ds.blocks, 0..) |lay, j| {
+            if (try Probe.reanchor(probe, j, h, pre)) pending = null;
             h = try dr.mix(e, h, &spare, &pending, lay.hc_attn, pre, lay.attn_norm, dr.pre_a, R);
             try Probe.check(probe, .attn_in, j, dr.x);
             try Probe.check(probe, .attn_ring, j, pool.rings[j]);
             try dr.attention(e, ch, pool, j, R);
-            try Probe.check(probe, .attn_out, j, dr.pa);
-            if (e.two) |tw| try tw.pairGather(e, dr.pa, dr.ga, R, d, 4) else try e.gatherF32(dr.pa, dr.ga, R * d);
+            try Probe.check(probe, .attn_out, j, e.sendOf(dr.pa, dr.ga, R * d * 4));
+            if (two2d(e)) |tw| try tw.pairGather(e, dr.pa, dr.ga, R, d, 4) else try e.gatherF32(e.sendOf(dr.pa, dr.ga, R * d * 4), dr.ga, R * d, .at(.draft_attn, j));
             try Probe.check(probe, .attn_gather, j, dr.ga);
             pending = dr.ga;
             h = try dr.mix(e, h, &spare, &pending, lay.hc_ffn, dr.pre_a, lay.ffn_norm, pre_f, R);
             try Probe.check(probe, .moe_in, j, dr.x);
             try dr.moe(e, j, R);
-            try Probe.check(probe, .moe_out, j, dr.pm);
-            if (e.two) |tw| try tw.pairGather(e, dr.pm, dr.gm, R, d, 4) else try e.gatherF32(dr.pm, dr.gm, R * d);
+            try Probe.check(probe, .moe_out, j, e.sendOf(dr.pm, dr.gm, R * d * 4));
+            if (two2d(e)) |tw| try tw.pairGather(e, dr.pm, dr.gm, R, d, 4) else try e.gatherF32(e.sendOf(dr.pm, dr.gm, R * d * 4), dr.gm, R * d, .at(.draft_moe, j));
             try Probe.check(probe, .moe_gather, j, dr.gm);
             pending = dr.gm;
             std.mem.swap(u64, &pre, &pre_f);
@@ -530,7 +543,7 @@ pub const Drafter = struct {
         // the confidence head: [xc (fp32), the embedding rows the steps read (fp32)] @ conf^T, a stream's first steps rows
         const rank = c.markov_rank;
         const w = d + rank;
-        try e.d.check(e.d.api.cuMemsetD8Async(ch.invalid, 0, 4, e.s.handle), "cuMemsetD8Async");
+        try gpu.fill8Async(e.d, e.s.handle, ch.invalid, 0, 4);
         for (0..N) |i| {
             try e.ops.gatherRows(e.s, dr.ds.markov_embed, c.vocab, dr.out + i * ts * 8, dr.embs + i * steps * rank * 2, rank * 2, steps, ch.invalid);
             try e.ops.toF32(e.s, dr.xc + i * n * d * 2, dr.xcf + i * steps * d * 4, steps * d);
@@ -611,7 +624,8 @@ pub const Drafter = struct {
         }
         try exl3_linear.rotMany(e.lin, e.s, calls[0..lay.groups], R, true);
         try exl3_linear.glinear(e.lin, e.s, calls[0..lay.groups], R, ch.gz, true, true);
-        var cb = [_]exl3_linear.Call{.{ .layer = lay.wo_b, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = dr.xb, .y = dr.pa, .ldy = @intCast(lay.wo_b.n), .y_dtype = .f32, .counters = 0 }};
+        // (on HIP the attention gather's own block: an in-place gather, Engine.sendOf)
+        var cb = [_]exl3_linear.Call{.{ .layer = lay.wo_b, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = dr.xb, .y = e.sendOf(dr.pa, dr.ga, R * c.hidden * 4), .ldy = @intCast(lay.wo_b.n), .y_dtype = .f32, .counters = 0 }};
         try prompt.groupedRotated(e, ch, R, &cb);
     }
 
@@ -632,8 +646,10 @@ pub const Drafter = struct {
         }
         try tri_norm.route(e.t, dr.gl, kc, lay.gate_b, dr.topk, c.routed_scaling, lay.experts.count - 1, dr.pick, dr.mw, R, ne, dr.slots_moe);
         // routed(): fewer than EXACT_ROWS rows take the decode window's fused path, more the chunk's (13+ streams)
-        if (R < exl3_experts.exact_rows) return exl3_experts.decode(e.ex, e.s, lay.experts, dr.xsd, dr.x, c.hidden, dr.pick, dr.mw, dr.pm, R, c.swiglu_limit);
-        try exl3_experts.prompt(e.ex, e.s, lay.experts, dr.xs, dr.x, c.hidden, dr.pick, dr.mw, dr.pm, R, c.swiglu_limit);
+        // (on HIP the MoE gather's own block: an in-place gather, Engine.sendOf)
+        const pm = e.sendOf(dr.pm, dr.gm, R * c.hidden * 4);
+        if (R < exl3_experts.exact_rows) return exl3_experts.decode(e.ex, e.s, lay.experts, dr.xsd, dr.x, c.hidden, dr.pick, dr.mw, pm, R, c.swiglu_limit);
+        try exl3_experts.prompt(e.ex, e.s, lay.experts, dr.xs, dr.x, c.hidden, dr.pick, dr.mw, pm, R, c.swiglu_limit);
     }
 };
 
@@ -654,34 +670,60 @@ pub fn passSteps(n_streams: usize, slots: usize, drafts: usize, round_rows: usiz
     return @max(1, @min(block, s));
 }
 
-/// The served ROUND_MS table (TF_DS_ROUND_MS unset): a round's forward ms by its rows, and DRAFT_MS.
-pub const round_ms = [_]f64{ 30.0, 35.2, 39.9, 44.9, 48.6, 52.1, 55.6, 59.1, 62.7, 66.3, 69.6, 72.9, 75.5, 78.2, 81.3, 84.4, 87.5, 90.6, 93.7, 96.8, 99.9, 103.0, 106.1, 109.2 };
-pub const draft_ms: f64 = 3.5;
-
-extern "c" fn exp(x: f64) f64;
+/// The served ROUND_MS table (TF_DS_ROUND_MS unset): a round's forward ms by its rows, and DRAFT_MS: GB10's (Spark),
+/// a reference, never an AMD measurement (scheduler_costs.zig).
+pub const round_ms = scheduler_costs.spark_round_ms;
+pub const draft_ms = scheduler_costs.spark_draft_ms;
 
 /// MultiDecoder._choose_k: the k in 0 .. kmax with the most expected tokens a millisecond (1 + the prefix survivals'
-/// sum, survival the sigmoid of each confidence, over the round's table cost with the other streams at their table
-/// depth), in Python's float64 arithmetic (libm's exp, as Python's math.exp calls it); the first best wins.
-pub fn chooseK(conf: []const f32, kmax: usize, live: usize, drafts: usize, round_rows: usize) usize {
+/// sum, survival the sigmoid of each confidence, over the round's cost in `profile` with the other streams at their
+/// table depth), in Python's float64 arithmetic (libm's exp, as Python's math.exp calls it); the first best wins.
+/// Every caller names its profile: the measured one (Model.costs) or, replaying a recorded GB10 run, scheduler_costs.spark.
+pub fn chooseK(conf: []const f32, kmax: usize, live: usize, drafts: usize, round_rows: usize, profile: scheduler_costs.Profile) !usize {
+    if (live == 0 or live > max_streams or round_rows == 0 or round_rows > max_absorb) return error.BadDraftSelection;
     const others = (live - 1) * (depth(live, drafts, round_rows) + 1);
-    var best: usize = 0;
-    var best_v: f64 = -1.0;
-    var surv: f64 = 1.0;
-    var exp_tokens: f64 = 1.0;
-    for (0..kmax + 1) |kk| {
-        if (kk > 0) {
-            surv *= 1.0 / (1.0 + exp(-@as(f64, conf[kk - 1])));
-            exp_tokens += surv;
+    return profile.choose(conf, kmax, live, others);
+}
+
+test "chooseK on the GB10 profile is the served _choose_k it replaced" {
+    // the served loop and table as they stood before scheduler_costs.zig, kept here as the reference
+    const served = struct {
+        const table_ms = [_]f64{ 30.0, 35.2, 39.9, 44.9, 48.6, 52.1, 55.6, 59.1, 62.7, 66.3, 69.6, 72.9, 75.5, 78.2, 81.3, 84.4, 87.5, 90.6, 93.7, 96.8, 99.9, 103.0, 106.1, 109.2 };
+        const pass_ms: f64 = 3.5;
+        extern "c" fn exp(x: f64) f64;
+        fn k(conf: []const f32, kmax: usize, live: usize, drafts: usize, round_rows: usize) usize {
+            const others = (live - 1) * (depth(live, drafts, round_rows) + 1);
+            var best: usize = 0;
+            var best_v: f64 = -1.0;
+            var surv: f64 = 1.0;
+            var exp_tokens: f64 = 1.0;
+            for (0..kmax + 1) |kk| {
+                if (kk > 0) {
+                    surv *= 1.0 / (1.0 + exp(-@as(f64, conf[kk - 1])));
+                    exp_tokens += surv;
+                }
+                const rows = @min(table_ms.len, others + kk + 1);
+                const v = exp_tokens * @as(f64, @floatFromInt(live)) / (table_ms[rows - 1] + pass_ms);
+                if (v > best_v) {
+                    best = kk;
+                    best_v = v;
+                }
+            }
+            return best;
         }
-        const rows = @min(round_ms.len, others + kk + 1);
-        const v = exp_tokens * @as(f64, @floatFromInt(live)) / (round_ms[rows - 1] + draft_ms);
-        if (v > best_v) {
-            best = kk;
-            best_v = v;
+    };
+    var x: u64 = 0x9E3779B97F4A7C15;
+    var conf: [5]f32 = undefined;
+    for (0..2000) |t| {
+        for (&conf) |*c| {
+            x = x *% 6364136223846793005 +% 1442695040888963407;
+            c.* = @as(f32, @floatFromInt(@as(i32, @intCast(x >> 52)) - 2048)) / 256.0; // -8 .. 8
         }
+        const live = 1 + t % 4;
+        const rows: usize = if (t % 3 == 0) 48 else 16;
+        const kmax = @min(depth(live, 5, rows), 5);
+        try std.testing.expectEqual(served.k(&conf, kmax, live, 5, rows), try chooseK(&conf, kmax, live, 5, rows, scheduler_costs.spark));
     }
-    return best;
 }
 
 test "draft depths and pass steps as multi.py takes them" {

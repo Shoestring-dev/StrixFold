@@ -5,7 +5,7 @@
 //! the rest (2D RoPE tables, rotary, silu * up, unfold, gelu, the span) in dsv41_ops.cu at torch's rounding points.
 //! Rank 0 runs it; the span rows go into the prompt in place of the image tokens' embeddings.
 const std = @import("std");
-const cuda = @import("cuda");
+const gpu = @import("gpu");
 const core = @import("core");
 const st = core.safetensors;
 const cublas = @import("cublas.zig");
@@ -82,9 +82,9 @@ const Sources = struct {
 };
 
 pub const Tower = struct {
-    d: *const cuda.Driver,
-    stream: cuda.Stream,
-    weights: cuda.DeviceBuffer,
+    d: *const gpu.Driver,
+    stream: gpu.Stream,
+    weights: gpu.DeviceBuffer,
     blocks: [layers]Block,
     patch_w: u64,
     patch_b: u64,
@@ -96,27 +96,27 @@ pub const Tower = struct {
     image_start: u64,
     image_newline: u64,
     image_end: u64,
-    module: cuda.Module,
-    k_rope: cuda.Function,
-    k_rot: cuda.Function,
-    k_to_bf16: cuda.Function,
-    k_add: cuda.Function,
-    k_silu_mul: cuda.Function,
-    k_unfold: cuda.Function,
-    k_gelu: cuda.Function,
-    k_span: cuda.Function,
+    module: gpu.Module,
+    k_rope: gpu.Function,
+    k_rot: gpu.Function,
+    k_to_bf16: gpu.Function,
+    k_add: gpu.Function,
+    k_silu_mul: gpu.Function,
+    k_unfold: gpu.Function,
+    k_gelu: gpu.Function,
+    k_span: gpu.Function,
     exact: *const exact_mod.Exact,
     blas: *const cublas.Blas,
     lt: cublaslt.Lt,
     fmha: fmha_mod.Fmha,
     // the workspace for the largest image so far
-    work: ?cuda.DeviceBuffer = null,
+    work: ?gpu.DeviceBuffer = null,
     work_rows: usize = 0,
 
     const names = [_][]const u8{ "attn.wqkv.weight", "attn.wqkv.bias", "attn.wo.weight", "attn.wo.bias", "norm1.weight", "norm2.weight", "mlp.w1.weight", "mlp.w2.weight" };
 
     /// The tower's weights (bf16, the checkpoint's own) on the device, its kernels, and torch's attention cubin.
-    pub fn open(gpa: std.mem.Allocator, io: std.Io, d: *const cuda.Driver, stream: cuda.Stream, model_dir: []const u8, fmha_cubin: []const u8, ops_image: []const u8, exact: *const exact_mod.Exact, blas: *const cublas.Blas, blas_workspace: u64) !Tower {
+    pub fn open(gpa: std.mem.Allocator, io: std.Io, d: *const gpu.Driver, stream: gpu.Stream, model_dir: []const u8, fmha_cubin: []const u8, ops_image: []const u8, exact: *const exact_mod.Exact, blas: *const cublas.Blas, blas_workspace: u64) !Tower {
         // only the shards the index names for these tensors (the vision tensors sit in one of the 39)
         var sh = try Sources.open(gpa, io, model_dir);
         defer sh.close(io);
@@ -133,7 +133,7 @@ pub const Tower = struct {
             const t = sh.get(k) orelse return error.MissingVisionTensor;
             total += std.mem.alignForward(usize, t.bytes.len, 256);
         }
-        var buf = try cuda.DeviceBuffer.alloc(d, total);
+        var buf = try gpu.DeviceBuffer.alloc(d, total);
         errdefer buf.free();
         var at: usize = 0;
         const ptrs = try gpa.alloc(u64, keys.items.len);
@@ -169,7 +169,7 @@ pub const Tower = struct {
         tw.image_start = r[7];
         tw.image_newline = r[8];
         tw.image_end = r[9];
-        tw.module = try cuda.Module.load(d, ops_image);
+        tw.module = try gpu.Module.load(d, ops_image);
         errdefer tw.module.unload();
         tw.k_rope = try tw.module.function("tf_ds_vrope_kernel");
         tw.k_rot = try tw.module.function("tf_ds_vrot_kernel");
@@ -233,7 +233,7 @@ pub const Tower = struct {
         if (tw.work == null or tw.work.?.len < need) {
             if (tw.work) |*w| w.free();
             tw.work = null;
-            tw.work = try cuda.DeviceBuffer.alloc(tw.d, need);
+            tw.work = try gpu.DeviceBuffer.alloc(tw.d, need);
         }
         return Work.plan(tw.work.?.ptr, n, l);
     }
@@ -259,13 +259,13 @@ pub const Tower = struct {
         try tw.lt.linearBias(w.patches, false, tw.patch_w, tw.patch_b, w.x, n, patch_in, dim);
         try Probe.call(probe, "embed", 0, w.x, n * dim * 2);
         {
-            var a: cuda.Args = .{};
+            var a: gpu.Args = .{};
             a.add(w.cos);
             a.add(w.sin);
             a.add(@as(c_int, @intCast(n)));
             a.add(@as(c_int, @intCast(g.n_vit_w)));
             a.add(theta);
-            try cuda.launch.launch(tw.k_rope, .{ .grid = .{ .x = blocksFor(n * 32, 256) }, .block = .{ .x = 256 } }, s, &a);
+            try gpu.launch.launch(tw.k_rope, .{ .grid = .{ .x = blocksFor(n * 32, 256) }, .block = .{ .x = 256 } }, s, &a);
         }
         try Probe.call(probe, "cos", 0, w.cos, n * 32 * 4);
         try Probe.call(probe, "sin", 0, w.sin, n * 32 * 4);
@@ -277,7 +277,7 @@ pub const Tower = struct {
         try Probe.call(probe, "norm", 0, w.h, n * dim * 2);
         // the aligner: 3x3 cells unfolded (zeros past the grid), w1 on the transposed unfold, gelu, w2
         {
-            var a: cuda.Args = .{};
+            var a: gpu.Args = .{};
             a.add(w.h);
             a.add(w.unfold);
             a.add(@as(c_int, @intCast(g.n_vit_h)));
@@ -285,14 +285,14 @@ pub const Tower = struct {
             a.add(@as(c_int, dim));
             a.add(@as(c_int, @intCast(g.n_llm_h)));
             a.add(@as(c_int, @intCast(g.n_llm_w)));
-            try cuda.launch.launch(tw.k_unfold, .{ .grid = .{ .x = blocksFor(unfold_dim * l, 256) }, .block = .{ .x = 256 } }, s, &a);
+            try gpu.launch.launch(tw.k_unfold, .{ .grid = .{ .x = blocksFor(unfold_dim * l, 256) }, .block = .{ .x = 256 } }, s, &a);
         }
         try tw.lt.linearBias(w.unfold, true, tw.al_w1, tw.al_b1, w.a1, l, unfold_dim, model_dim);
         {
-            var a: cuda.Args = .{};
+            var a: gpu.Args = .{};
             a.add(w.a1);
             a.add(@as(c_ulonglong, l * model_dim));
-            try cuda.launch.launch(tw.k_gelu, .{ .grid = .{ .x = blocksFor(l * model_dim, 256) }, .block = .{ .x = 256 } }, s, &a);
+            try gpu.launch.launch(tw.k_gelu, .{ .grid = .{ .x = blocksFor(l * model_dim, 256) }, .block = .{ .x = 256 } }, s, &a);
         }
         try tw.lt.linearBias(w.a1, false, tw.al_w2, tw.al_b2, w.rows, l, model_dim, model_dim);
         try Probe.call(probe, "rows", 0, w.rows, l * model_dim * 2);
@@ -305,7 +305,7 @@ pub const Tower = struct {
         try tw.exact.rmsNorm(s, w.x, dim, b.norm1, w.h, dim, n, dim, eps);
         try tw.lt.linearBias(w.h, false, b.wqkv, b.bqkv, w.qkv, n, dim, 3 * dim);
         {
-            var a: cuda.Args = .{};
+            var a: gpu.Args = .{};
             a.add(w.qkv);
             a.add(w.cos);
             a.add(w.sin);
@@ -313,27 +313,27 @@ pub const Tower = struct {
             a.add(w.k32);
             a.add(w.v32);
             a.add(@as(c_int, @intCast(n)));
-            try cuda.launch.launch(tw.k_rot, .{ .grid = .{ .x = blocksFor(n * heads * 32, 256) }, .block = .{ .x = 256 } }, s, &a);
+            try gpu.launch.launch(tw.k_rot, .{ .grid = .{ .x = blocksFor(n * heads * 32, 256) }, .block = .{ .x = 256 } }, s, &a);
         }
         try tw.fmha.run(s, w.q32, w.k32, w.v32, w.o32, n, heads);
         {
-            var a: cuda.Args = .{};
+            var a: gpu.Args = .{};
             a.add(w.o32);
             a.add(w.h);
             a.add(@as(c_ulonglong, count));
-            try cuda.launch.launch(tw.k_to_bf16, .{ .grid = .{ .x = blocksFor(count, 256) }, .block = .{ .x = 256 } }, s, &a);
+            try gpu.launch.launch(tw.k_to_bf16, .{ .grid = .{ .x = blocksFor(count, 256) }, .block = .{ .x = 256 } }, s, &a);
         }
         try tw.lt.linearBias(w.h, false, b.wo, b.bo, w.a, n, dim, dim);
         try tw.add(w.x, w.a, count);
         try tw.exact.rmsNorm(s, w.x, dim, b.norm2, w.h, dim, n, dim, eps);
         try tw.blas.linearBf16(w.h, b.w1, w.gu, n, dim, 2 * inter);
         {
-            var a: cuda.Args = .{};
+            var a: gpu.Args = .{};
             a.add(w.gu);
             a.add(w.m);
             a.add(@as(c_int, @intCast(n)));
             a.add(@as(c_int, inter));
-            try cuda.launch.launch(tw.k_silu_mul, .{ .grid = .{ .x = blocksFor(n * inter, 256) }, .block = .{ .x = 256 } }, s, &a);
+            try gpu.launch.launch(tw.k_silu_mul, .{ .grid = .{ .x = blocksFor(n * inter, 256) }, .block = .{ .x = 256 } }, s, &a);
         }
         try tw.blas.linearBf16(w.m, b.w2, w.a, n, inter, dim);
         try tw.add(w.x, w.a, count);
@@ -347,11 +347,11 @@ pub const Tower = struct {
     }
 
     fn add(tw: *Tower, x: u64, y: u64, count: usize) !void {
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(x);
         a.add(y);
         a.add(@as(c_ulonglong, count));
-        try cuda.launch.launch(tw.k_add, .{ .grid = .{ .x = blocksFor(count, 256) }, .block = .{ .x = 256 } }, tw.stream, &a);
+        try gpu.launch.launch(tw.k_add, .{ .grid = .{ .x = blocksFor(count, 256) }, .block = .{ .x = 256 } }, tw.stream, &a);
     }
 
     /// Tower.span_rows: the image span's rows bf16 [span tokens, 5120] into `out` (device), the delimiters' learned
@@ -372,7 +372,7 @@ pub const Tower = struct {
         const rows_at = scratch + std.mem.alignForward(usize, t, 256);
         try tw.upload(types_at, std.mem.sliceAsBytes(types_buf[0..t]));
         try tw.upload(rows_at, std.mem.sliceAsBytes(row_of[0..t]));
-        var a: cuda.Args = .{};
+        var a: gpu.Args = .{};
         a.add(types_at);
         a.add(rows);
         a.add(tw.image_start);
@@ -382,6 +382,6 @@ pub const Tower = struct {
         a.add(@as(c_int, @intCast(t)));
         a.add(@as(c_int, model_dim));
         a.add(rows_at);
-        try cuda.launch.launch(tw.k_span, .{ .grid = .{ .x = blocksFor(t * model_dim, 256) }, .block = .{ .x = 256 } }, tw.stream, &a);
+        try gpu.launch.launch(tw.k_span, .{ .grid = .{ .x = blocksFor(t * model_dim, 256) }, .block = .{ .x = 256 } }, tw.stream, &a);
     }
 };
