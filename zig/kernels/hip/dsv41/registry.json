@@ -1,0 +1,234 @@
+{
+ "schema": "tensorfold.dsv41.hip-registry/1",
+ "required": {
+  "dsv41": {
+   "always": [
+    "tri._embed_init", "tri._hc_partial", "tri._hc_finish", "tri._hc_finish_s", "tri._hc_sinkhorn",
+    "tri._hc_mix_part", "tri._hc_mix_pf", "tri._hc_post", "tri._hc_post_only", "tri._collapse", "tri._collapse_norm",
+    "tri._rmsnorm", "tri._rmsnorm_rot", "tri._q_kv_norm", "tri._kv_norm_rope", "tri._rope_heads", "tri._rowmm2",
+    "tri._rowmm2r", "tri._rowmm_parts", "tri._route", "tri._route_parts", "tri._index_score",
+    "tri._index_score_rows", "tri._index_score_cand", "tri._score_keys", "tri._gather_tiles", "tri._topk_sel",
+    "tri._topk_finish", "tri._sparse_attn_part", "tri._sparse_attn_merge", "tri._sparse_attn_merge_rot2",
+    "tri._fp4_store", "tri._fp4qd_p2", "tri._gemm", "exl3.rot_many", "exl3.glinear", "exl3.rot_in", "exl3.unpack",
+    "exl3.experts.group_count", "exl3.experts.group_place", "exl3.experts.work_list", "exl3.experts.rot_in",
+    "exl3.experts.gateup_epilogue", "exl3.experts.down_combine", "exl3.experts.decode_prep",
+    "exl3.experts.grouped_mma", "exl3.experts.grouped_rows", "exl3.experts.grouped_cp",
+    "aux.sparse_attn", "aux.index_rows", "aux.hc_mix_pf"
+   ],
+   "drafts": [
+    "tri._tap", "tri._bias", "tri._score", "tri._finish", "tri._pick"
+   ],
+   "engram": [
+    "tri._engram_gate"
+   ],
+   "graphs": [
+    "coll.stage", "coll.collect"
+   ]
+  }
+ },
+ "sources": [
+  {
+   "source": "abi_echo.hip",
+   "owner": "w-arch",
+   "kit": "test",
+   "kernels": [
+    { "id": "abi.echo_mixed", "symbol": "tf_ds_abi_echo_mixed", "block": [64, 1, 1], "numerics": "exact" },
+    { "id": "abi.echo_big", "symbol": "tf_ds_abi_echo_big", "block": [256, 1, 1], "numerics": "exact" },
+    { "id": "abi.echo_params", "symbol": "tf_ds_abi_echo_params", "block": [32, 1, 1], "numerics": "exact" },
+    { "id": "abi.echo_exl3_gargs", "symbol": "tf_ds_abi_echo_exl3_gargs", "block": [256, 1, 1], "numerics": "exact" },
+    { "id": "abi.echo_exl3_rargs", "symbol": "tf_ds_abi_echo_exl3_rargs", "block": [256, 1, 1], "numerics": "exact" },
+    { "id": "abi.echo_exl3_cp", "symbol": "tf_ds_abi_echo_exl3_cp", "block": [64, 1, 1], "numerics": "exact" },
+    { "id": "tri._echo", "symbol": "tf_ds_abi_tri_echo_a", "numerics": "exact",
+      "triton": { "fn": "_echo", "num_warps": 2, "shared": 0, "hidden": ["global_scratch", "profile_scratch"],
+                  "params": [ { "name": "X", "type": "*fp32", "div16": true }, { "name": "n", "type": "i32", "div16": true },
+                              { "name": "s", "type": "fp32" }, { "name": "OUT", "type": "*u64", "div16": true } ],
+                  "consts": { "BLOCK": { "int": 32 } } } },
+    { "id": "tri._echo", "symbol": "tf_ds_abi_tri_echo_b", "numerics": "exact", "spec": { "variant": 1 },
+      "triton": { "fn": "_echo", "num_warps": 1, "shared": 0, "hidden": ["global_scratch", "profile_scratch"],
+                  "params": [ { "name": "X", "type": "*fp32" }, { "name": "n", "type": "i32" },
+                              { "name": "s", "type": "fp32" }, { "name": "OUT", "type": "*u64", "div16": true } ],
+                  "consts": { "BLOCK": { "int": 32 } } } }
+   ]
+  },
+  {
+   "source": "glue.hip",
+   "owner": "w-arch",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "glue.bf16_to_f32", "symbol": "tf_ds_glue_bf16_to_f32", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "glue.f16_to_f32", "symbol": "tf_ds_glue_f16_to_f32", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "glue.add2_bf16", "symbol": "tf_ds_glue_add2_bf16", "block": [256, 1, 1], "numerics": "add2_bf16"},
+    {"id": "glue.scatter_rows", "symbol": "tf_ds_glue_scatter_rows", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "glue.gather_rows", "symbol": "tf_ds_glue_gather_rows", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "glue.strided_copy", "symbol": "tf_ds_glue_strided_copy", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "glue.copy_rows16", "symbol": "tf_ds_glue_copy_rows16", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "glue.argmax_rows", "symbol": "tf_ds_glue_argmax_rows", "block": [1024, 1, 1], "numerics": "argmax_first_index"},
+    {"id": "glue.clock", "symbol": "tf_ds_glue_clock", "block": [32, 1, 1], "numerics": "clock_ns", "feature": "profile"}
+   ]
+  },
+  {
+   "source": "aux.hip",
+   "owner": "w-tri",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "aux.topk_i64", "symbol": "tf_ds_aux_topk_i64", "block": [1024, 1, 1], "numerics": "exact"},
+    {"id": "aux.topk_indices", "symbol": "tf_ds_aux_topk_indices", "block": [1024, 1, 1], "numerics": "exact"},
+    {"id": "aux.iota_vis", "symbol": "tf_ds_aux_iota_vis", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "aux.cand_fast", "symbol": "tf_ds_aux_cand_fast", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "aux.block_max", "symbol": "tf_ds_aux_block_max", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "aux.pool_pick", "symbol": "tf_ds_aux_pool_pick", "block": [1024, 1, 1], "numerics": "exact"},
+    {"id": "aux.apply_pool", "symbol": "tf_ds_aux_apply_pool", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "aux.rms_norm", "symbol": "tf_ds_aux_rms_norm", "lds_dynamic_max": 2048, "numerics": "rms_norm_torch_order"},
+    {"id": "aux.compress2", "symbol": "tf_ds_aux_compress2", "block": [256, 1, 1], "numerics": "compress2_softmax"},
+    {"id": "aux.rope", "symbol": "tf_ds_aux_rope", "block": [256, 1, 1], "numerics": "rope_complex_fma"},
+    {"id": "aux.bf16_scale", "symbol": "tf_ds_aux_bf16_scale", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "aux.hc_mean4", "symbol": "tf_ds_aux_hc_mean4", "block": [256, 1, 1], "numerics": "mean4", "feature": "drafts"}
+   ]
+  },
+  {
+   "source": "aux_attn.hip",
+   "owner": "w-tri",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "aux.sparse_attn", "symbol": "tf_ds_aux_sparse_attn_h32_d512", "spec": {"heads": 32, "hd": 512}, "block": [256, 1, 1], "numerics": "sparse_attn_sink_bf16p", "allow_scratch": true}
+   ]
+  },
+  {
+   "source": "aux_index.hip",
+   "owner": "w-tri",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "aux.index_rows", "symbol": "tf_ds_aux_index_rows_h32_d128", "spec": {"heads": 32, "dim": 128}, "block": [256, 1, 1], "numerics": "index_scores_fp32_bound"}
+   ]
+  },
+  {
+   "source": "aux_hc.hip",
+   "owner": "w-tri",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "aux.hc_mix_pf", "symbol": "tf_ds_aux_hc_mix_pf_d5120", "spec": {"d": 5120, "nb": 40}, "block": [256, 1, 1], "numerics": "hc_mix_fp32_bound"}
+   ]
+  },
+  {
+   "source": "exl3.hip",
+   "owner": "w-exl3",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "exl3.rot_many", "symbol": "tf_ds_exl3_rot_many", "block": [128, 1, 1], "numerics": "exl3_rot128_in"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k4_w4", "spec": {"k2": 4, "cb": 2, "warps": 4}, "block": [128, 1, 1], "lds_dynamic_max": 16384, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k4_w8", "spec": {"k2": 4, "cb": 2, "warps": 8}, "block": [256, 1, 1], "lds_dynamic_max": 32768, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k6_w4", "spec": {"k2": 6, "cb": 2, "warps": 4}, "block": [128, 1, 1], "lds_dynamic_max": 16384, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k6_w8", "spec": {"k2": 6, "cb": 2, "warps": 8}, "block": [256, 1, 1], "lds_dynamic_max": 32768, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k8_w4", "spec": {"k2": 8, "cb": 2, "warps": 4}, "block": [128, 1, 1], "lds_dynamic_max": 16384, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k8_w8", "spec": {"k2": 8, "cb": 2, "warps": 8}, "block": [256, 1, 1], "lds_dynamic_max": 32768, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k10_w4", "spec": {"k2": 10, "cb": 2, "warps": 4}, "block": [128, 1, 1], "lds_dynamic_max": 16384, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k10_w8", "spec": {"k2": 10, "cb": 2, "warps": 8}, "block": [256, 1, 1], "lds_dynamic_max": 32768, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k12_w4", "spec": {"k2": 12, "cb": 2, "warps": 4}, "block": [128, 1, 1], "lds_dynamic_max": 16384, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k12_w8", "spec": {"k2": 12, "cb": 2, "warps": 8}, "block": [256, 1, 1], "lds_dynamic_max": 32768, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k16_w4", "spec": {"k2": 16, "cb": 2, "warps": 4}, "block": [128, 1, 1], "lds_dynamic_max": 16384, "numerics": "exl3.linear"},
+    {"id": "exl3.glinear", "symbol": "tf_ds_exl3_glinear_k16_w8", "spec": {"k2": 16, "cb": 2, "warps": 8}, "block": [256, 1, 1], "lds_dynamic_max": 32768, "numerics": "exl3.linear"},
+    {"id": "exl3.rot_in", "symbol": "tf_ds_exl3_rot_in", "block": [128, 1, 1], "numerics": "exl3_rot128_in"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k8_m128", "spec": {"k2": 8, "cb": 2, "bm": 128}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k8_m256", "spec": {"k2": 8, "cb": 2, "bm": 256}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k10_m128", "spec": {"k2": 10, "cb": 2, "bm": 128}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k10_m256", "spec": {"k2": 10, "cb": 2, "bm": 256}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k12_m128", "spec": {"k2": 12, "cb": 2, "bm": 128}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k12_m256", "spec": {"k2": 12, "cb": 2, "bm": 256}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k16_m128", "spec": {"k2": 16, "cb": 2, "bm": 128}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.gemm", "symbol": "tf_ds_exl3_gemm_k16_m256", "spec": {"k2": 16, "cb": 2, "bm": 256}, "block": [256, 1, 1], "numerics": "exl3.linear"},
+    {"id": "exl3.unpack", "symbol": "tf_ds_exl3_unpack_k4", "spec": {"k2": 4, "cb": 2}, "block": [32, 1, 1], "numerics": "exact"},
+    {"id": "exl3.unpack", "symbol": "tf_ds_exl3_unpack_k6", "spec": {"k2": 6, "cb": 2}, "block": [32, 1, 1], "numerics": "exact"},
+    {"id": "exl3.unpack", "symbol": "tf_ds_exl3_unpack_k8", "spec": {"k2": 8, "cb": 2}, "block": [32, 1, 1], "numerics": "exact"},
+    {"id": "exl3.unpack", "symbol": "tf_ds_exl3_unpack_k10", "spec": {"k2": 10, "cb": 2}, "block": [32, 1, 1], "numerics": "exact"},
+    {"id": "exl3.unpack", "symbol": "tf_ds_exl3_unpack_k12", "spec": {"k2": 12, "cb": 2}, "block": [32, 1, 1], "numerics": "exact"},
+    {"id": "exl3.unpack", "symbol": "tf_ds_exl3_unpack_k16", "spec": {"k2": 16, "cb": 2}, "block": [32, 1, 1], "numerics": "exact"},
+    {"id": "exl3.experts.group_count", "symbol": "tf_ds_exl3_experts_group_count", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "exl3.experts.group_place", "symbol": "tf_ds_exl3_experts_group_place", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "exl3.experts.work_list", "symbol": "tf_ds_exl3_experts_work_list", "block": [1024, 1, 1], "numerics": "exact"},
+    {"id": "exl3.experts.rot_in", "symbol": "tf_ds_exl3_experts_rot_in", "block": [32, 1, 1], "numerics": "exl3_rot128_in"},
+    {"id": "exl3.experts.gateup_epilogue", "symbol": "tf_ds_exl3_experts_gateup_epilogue", "block": [32, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.down_combine", "symbol": "tf_ds_exl3_experts_down_combine", "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.decode_prep", "symbol": "tf_ds_exl3_experts_decode_prep", "block": [256, 1, 1], "lds_dynamic_max": 16128, "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_mma", "symbol": "tf_ds_exl3_experts_grouped_mma_lo8_hi8", "spec": {"cb": 2, "lo": 8, "hi": 8}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_rows", "symbol": "tf_ds_exl3_experts_grouped_rows_lo8_hi8", "spec": {"cb": 2, "lo": 8, "hi": 8}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_cp", "symbol": "tf_ds_exl3_experts_grouped_cp_lo8_hi8_epi1", "spec": {"cb": 2, "lo": 8, "hi": 8, "epi": 1}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_cp", "symbol": "tf_ds_exl3_experts_grouped_cp_lo8_hi8_epi2", "spec": {"cb": 2, "lo": 8, "hi": 8, "epi": 2}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_mma", "symbol": "tf_ds_exl3_experts_grouped_mma_lo2_hi10", "spec": {"cb": 2, "lo": 2, "hi": 10}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_rows", "symbol": "tf_ds_exl3_experts_grouped_rows_lo2_hi10", "spec": {"cb": 2, "lo": 2, "hi": 10}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_cp", "symbol": "tf_ds_exl3_experts_grouped_cp_lo2_hi10_epi1", "spec": {"cb": 2, "lo": 2, "hi": 10, "epi": 1}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_cp", "symbol": "tf_ds_exl3_experts_grouped_cp_lo2_hi10_epi2", "spec": {"cb": 2, "lo": 2, "hi": 10, "epi": 2}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_mma", "symbol": "tf_ds_exl3_experts_grouped_mma_lo2_hi16", "spec": {"cb": 2, "lo": 2, "hi": 16}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_rows", "symbol": "tf_ds_exl3_experts_grouped_rows_lo2_hi16", "spec": {"cb": 2, "lo": 2, "hi": 16}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_cp", "symbol": "tf_ds_exl3_experts_grouped_cp_lo2_hi16_epi1", "spec": {"cb": 2, "lo": 2, "hi": 16, "epi": 1}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.experts.grouped_cp", "symbol": "tf_ds_exl3_experts_grouped_cp_lo2_hi16_epi2", "spec": {"cb": 2, "lo": 2, "hi": 16, "epi": 2}, "block": [128, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.l2_prefetch", "symbol": "tf_ds_exl3_l2_prefetch", "block": [256, 1, 1], "numerics": "no_output"}
+    ]
+   },
+   {
+    "source": "exl3_pf.hip",
+    "owner": "w-pf (kernel bodies) / w-exl3 (kit entry, wiring)",
+    "kit": "dsv41",
+    "kernels": [
+    {"id": "exl3.pf_experts.count", "symbol": "tf_ds_exl3_pf_experts_count", "block": [1024, 1, 1], "numerics": "exact"},
+    {"id": "exl3.pf_experts.place", "symbol": "tf_ds_exl3_pf_experts_place", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "exl3.pf_experts.rot", "symbol": "tf_ds_exl3_pf_experts_rot", "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.combine", "symbol": "tf_ds_exl3_pf_experts_combine", "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu64_k4", "spec": {"k2": 4, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down64_k4", "spec": {"k2": 4, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu128_k4", "spec": {"k2": 4, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down128_k4", "spec": {"k2": 4, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu64_k6", "spec": {"k2": 6, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down64_k6", "spec": {"k2": 6, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu128_k6", "spec": {"k2": 6, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down128_k6", "spec": {"k2": 6, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu64_k8", "spec": {"k2": 8, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down64_k8", "spec": {"k2": 8, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu128_k8", "spec": {"k2": 8, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down128_k8", "spec": {"k2": 8, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu64_k10", "spec": {"k2": 10, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down64_k10", "spec": {"k2": 10, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu128_k10", "spec": {"k2": 10, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down128_k10", "spec": {"k2": 10, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu64_k12", "spec": {"k2": 12, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down64_k12", "spec": {"k2": 12, "cb": 2, "nm": 64}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.gu", "symbol": "tf_ds_exl3_pf_experts_gu128_k12", "spec": {"k2": 12, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"},
+    {"id": "exl3.pf_experts.down", "symbol": "tf_ds_exl3_pf_experts_down128_k12", "spec": {"k2": 12, "cb": 2, "nm": 128}, "block": [256, 1, 1], "numerics": "exl3.experts_grouped"}
+    ]
+   },
+   {
+   "source": "coll.hip",
+   "owner": "w-link",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "coll.stage", "symbol": "tf_ds_coll_stage", "block": [256, 1, 1], "numerics": "exact"},
+    {"id": "coll.collect", "symbol": "tf_ds_coll_collect", "block": [256, 1, 1], "numerics": "exact"}
+   ]
+  },
+  {
+   "source": "aux_gate.hip",
+   "owner": "w-tri",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "aux.gate_logits", "symbol": "tf_ds_aux_gate_logits_d5120", "spec": {"d": 5120, "bn": 64}, "block": [256, 1, 1], "numerics": "gate_logits_fp32_bound"},
+    {"id": "aux.gate_logits", "symbol": "tf_ds_aux_gate_logits_n32_d5120", "spec": {"d": 5120, "bn": 32}, "block": [128, 1, 1], "numerics": "gate_logits_fp32_bound"}
+   ]
+  },
+  {
+   "source": "aux_rope.hip",
+   "owner": "w-tri",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "aux.rope_heads", "symbol": "tf_ds_aux_rope_heads", "block": [256, 1, 1], "numerics": "rope_heads_triton_bits"}
+   ]
+  },
+  {
+   "source": "dense.hip",
+   "owner": "p-par",
+   "kit": "dsv41",
+   "kernels": [
+    {"id": "dense.gemv", "symbol": "tf_ds_dense_gemv", "block": [256, 1, 1], "numerics": "dense_bf16_gemv_row_invariant"},
+    {"id": "dense.swiglu", "symbol": "tf_ds_dense_swiglu", "block": [256, 1, 1], "numerics": "swiglu_bf16"}
+   ]
+  }
+ ]
+}
