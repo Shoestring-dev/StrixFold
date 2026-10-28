@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const cuda_build = @import("zig/build/cuda.zig");
+const hip_dsv41_build = @import("zig/build/hip_dsv41.zig");
 const dist_build = @import("zig/build/dist.zig");
 
 comptime {
@@ -130,7 +131,10 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Host-side unit tests (no GPU work)");
     switch (target.result.os.tag) {
         .macos => metalTargets(b, target, optimize, draft_ids, build_options, test_step),
-        .linux => cuda_build.targets(b, target, optimize, draft_ids, build_options),
+        .linux => {
+            cuda_build.targets(b, target, optimize, draft_ids, build_options);
+            hip_dsv41_build.targets(b, target, optimize, build_options);
+        },
         else => {},
     }
     dist_build.targets(b, draft_ids, build_options, release_version);

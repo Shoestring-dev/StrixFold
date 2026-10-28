@@ -110,6 +110,10 @@ pub fn targets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
     const ds_check = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/check_main.zig"), .target = target, .optimize = optimize, .link_libc = true });
     ds_check.addImport("dsv41", engines(b, target, optimize, cuda, mods.lanes, mods.nemotron, mods.core).dsv41);
     b.installArtifact(b.addExecutable(.{ .name = "tf-dsv41-check", .root_module = ds_check }));
+    // each rank's weight file (the lane's rank cache) from the checkpoint alone, no GPU and no Python
+    const ds_rank_cache = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/rank_cache_main.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    ds_rank_cache.addImport("dsv41", ds_check.import_table.get("dsv41").?);
+    b.installArtifact(b.addExecutable(.{ .name = "tf-dsv41-rank-cache", .root_module = ds_rank_cache }));
     const ds_load = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/load_main.zig"), .target = target, .optimize = optimize, .link_libc = true });
     ds_load.addImport("dsv41", ds_check.import_table.get("dsv41").?);
     ds_load.addImport("cuda", cuda);
@@ -121,6 +125,7 @@ pub fn targets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
     const ds_layer = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/layer_main.zig"), .target = target, .optimize = optimize, .link_libc = true });
     ds_layer.addImport("dsv41", ds_check.import_table.get("dsv41").?);
     ds_layer.addImport("cuda", cuda);
+    ds_layer.addImport("gpu", ds_check.import_table.get("dsv41").?.import_table.get("gpu").?);
     b.installArtifact(b.addExecutable(.{ .name = "tf-dsv41-layer", .root_module = ds_layer }));
     // the RDMA ring across real nodes (rdma.zig): rendezvous, gathers at each row count, every float checked
     const ds_rdma = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/rdma_bench_main.zig"), .target = target, .optimize = optimize, .link_libc = true });
@@ -149,6 +154,7 @@ pub fn targets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
     const ds_lanes = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/lanes_main.zig"), .target = target, .optimize = optimize, .link_libc = true });
     ds_lanes.addImport("dsv41", ds_check.import_table.get("dsv41").?);
     ds_lanes.addImport("cuda", cuda);
+    ds_lanes.addImport("gpu", ds_check.import_table.get("dsv41").?.import_table.get("gpu").?);
     ds_lanes.addImport("lanes", mods.lanes);
     b.installArtifact(b.addExecutable(.{ .name = "tf-dsv41-lanes", .root_module = ds_lanes }));
     _ = nativeServer(b, target, optimize, cuda, mods.lanes, mods.nemotron, mods.core, mods.tokenizer, build_options, true);
@@ -159,6 +165,10 @@ fn engines(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
     // DeepSeek-V4.1-Flash (our port): its module reads the runtime and the lane core, as Nemotron's does
     const dsv41 = b.createModule(.{ .root_source_file = b.path("zig/src/families/dsv41/dsv41.zig"), .target = target, .optimize = optimize, .link_libc = true });
     dsv41.addImport("cuda", cuda);
+    // the family's backend-neutral GPU module over this runtime (zig/src/gpu/cuda_facade.zig, tools/dsv41-hip/ADAPTER.md D1)
+    const gpu = b.createModule(.{ .root_source_file = b.path("zig/src/gpu/cuda_facade.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    gpu.addImport("cuda", cuda);
+    dsv41.addImport("gpu", gpu);
     dsv41.addImport("lanes", lanes);
     dsv41.addImport("core", core);
     // the RDMA ring's verbs (rdma.zig)
@@ -196,13 +206,24 @@ fn nativeServer(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
     return exe;
 }
 
-/// Host unit tests of the CUDA runtime, the backend-neutral core, the lane core and the CUDA family (no GPU), on any host.
+/// Host unit tests of the CUDA runtime, the backend-neutral core, the lane core, the engine API with its lane host and the
+/// CUDA family (no GPU), on any host.
 pub fn hostTests(b: *std.Build, draft_ids: *std.Build.Module, step: *std.Build.Step) void {
     const host = b.graph.host;
     const cuda = runtime(b, host, .debug, &.{});
     const mods = family(b, host, .debug, cuda, draft_ids);
     const eng = engines(b, host, .debug, cuda, mods.lanes, mods.nemotron, mods.core);
-    for ([_]*std.Build.Module{ cuda, mods.core, mods.lanes, mods.nemotron, eng.engines, eng.dsv41, stagger(b, host, .debug) }) |m| step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = m })).step);
+    for ([_]*std.Build.Module{ cuda, mods.core, mods.lanes, mods.nemotron, eng.api, eng.engines, eng.dsv41, stagger(b, host, .debug) }) |m| step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = m })).step);
+    // every dsv41 tool compiled (not run) against the kernel-less runtime, so a family change that breaks a CUDA-only
+    // tool fails here too (the AMD hosts have no nvcc to build them for real)
+    for ([_][]const u8{ "check_main", "rank_cache_main", "load_main", "comm_main", "layer_main", "rdma_bench_main", "engram_check_main", "picture_main", "vit_main", "ring2d_check_main", "lanes_main" }) |name| {
+        const m = b.createModule(.{ .root_source_file = b.path(b.fmt("zig/src/families/dsv41/{s}.zig", .{name})), .target = host, .optimize = .debug, .link_libc = true });
+        m.addImport("dsv41", eng.dsv41);
+        m.addImport("cuda", cuda);
+        m.addImport("lanes", mods.lanes);
+        m.addImport("gpu", eng.dsv41.import_table.get("gpu").?);
+        step.dependOn(&b.addExecutable(.{ .name = name, .root_module = m }).step);
+    }
     const cli = b.createModule(.{ .root_source_file = b.path("zig/src/cli/cuda_main.zig"), .target = host, .optimize = .debug, .link_libc = true });
     cli.addImport("cuda", cuda);
     cli.addImport("core", mods.core);
