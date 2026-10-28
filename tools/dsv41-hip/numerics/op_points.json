@@ -1,0 +1,41 @@
+{
+ "op_points": {
+  "bf16": {
+   "moe": {
+    "nrmse": 0.016193093778642798,
+    "row_nrmse": 0.020133152604519207,
+    "nrmse_median": 0.008500298476525007,
+    "scale_err": 0.005810308266633899,
+    "layer_scale_z": 213.25697046612186,
+    "twin": {
+     "run": "out/oprep2-twin-native.json",
+     "points": 400,
+     "nrmse_max": 0.005397697926214266,
+     "nrmse_median": 0.0028334328255083356,
+     "row_nrmse_max": 0.006711050868173069,
+     "scale_err_max": 0.0019367694222112999,
+     "layer_scale_z_max": 71.08565682204062
+    }
+   }
+  },
+  "fp32": {
+   "moe": {
+    "nrmse": 0.007398470142741543,
+    "row_nrmse": 0.00752259422272117,
+    "nrmse_median": 0.004614282172274533,
+    "scale_err": 0.002101916844077737,
+    "layer_scale_z": 152.9576206078847,
+    "twin": {
+     "run": "out/oprep2-twin-fp32.json",
+     "points": 400,
+     "nrmse_max": 0.002466156714247181,
+     "nrmse_median": 0.0015380940574248444,
+     "row_nrmse_max": 0.0025075314075737234,
+     "scale_err_max": 0.0007006389480259124,
+     "layer_scale_z_max": 50.98587353596157
+    }
+   }
+  }
+ },
+ "rule": "3 x the worst calibration-twin value per metric (model.py-precision twins, bf16 / fp32 streams, fed through op_replay.py as the engine), floor 1e-7; frozen before any GPU dump was replayed"
+}

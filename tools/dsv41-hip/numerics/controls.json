@@ -1,0 +1,194 @@
+{
+ "layer_gate": {
+  "neg-attn_ranks_swap": {
+   "verdict": "FAIL",
+   "failing_points": {
+    "attn_gather": {
+     "fail": 481,
+     "nrmse_max": 1.5712,
+     "nrmse_median": 1.3601,
+     "scale_err_max": 1.22444
+    }
+   },
+   "routing_violations": null
+  },
+  "neg-attn_scale1pc_l7": {
+   "verdict": "PASS",
+   "failing_points": {},
+   "routing_violations": null
+  },
+  "neg-attn_sign_l7": {
+   "verdict": "FAIL",
+   "failing_points": {
+    "attn_partial": {
+     "fail": 12,
+     "nrmse_max": 2.0057,
+     "nrmse_median": 0.0524,
+     "scale_err_max": 2.00525
+    },
+    "attn_gather_in": {
+     "fail": 12,
+     "nrmse_max": 2.0057,
+     "nrmse_median": 0.0524,
+     "scale_err_max": 2.00525
+    },
+    "attn_gather": {
+     "fail": 12,
+     "nrmse_max": 2.002,
+     "nrmse_median": 0.0523,
+     "scale_err_max": 2.00106
+    }
+   },
+   "routing_violations": null
+  },
+  "neg-hout_scale1pc": {
+   "verdict": "FAIL",
+   "failing_points": {
+    "h_out": {
+     "fail": 2,
+     "nrmse_max": 0.0716,
+     "nrmse_median": 0.0131,
+     "scale_err_max": 0.00852
+    }
+   },
+   "routing_violations": null
+  },
+  "neg-moe_rank1_zero": {
+   "verdict": "FAIL",
+   "failing_points": {
+    "moe_partial": {
+     "fail": 234,
+     "nrmse_max": 1.0,
+     "nrmse_median": 0.5413,
+     "scale_err_max": 1.0
+    },
+    "moe_gather_in": {
+     "fail": 234,
+     "nrmse_max": 1.0,
+     "nrmse_median": 0.5413,
+     "scale_err_max": 1.0
+    },
+    "moe_gather": {
+     "fail": 467,
+     "nrmse_max": 0.7936,
+     "nrmse_median": 0.7089,
+     "scale_err_max": 1.0
+    }
+   },
+   "routing_violations": null
+  },
+  "neg-moe_scale1pc_l7": {
+   "verdict": "FAIL",
+   "failing_points": {
+    "moe_partial": {
+     "fail": 2,
+     "nrmse_max": 0.0826,
+     "nrmse_median": 0.0171,
+     "scale_err_max": 0.01293
+    },
+    "moe_gather_in": {
+     "fail": 2,
+     "nrmse_max": 0.0826,
+     "nrmse_median": 0.0171,
+     "scale_err_max": 0.01293
+    },
+    "moe_gather": {
+     "fail": 2,
+     "nrmse_max": 0.0682,
+     "nrmse_median": 0.0169,
+     "scale_err_max": 0.01073
+    }
+   },
+   "routing_violations": null
+  },
+  "pos-bf16": {
+   "verdict": "PASS",
+   "failing_points": {},
+   "routing_violations": 0
+  },
+  "pos-fp32": {
+   "verdict": "PASS",
+   "failing_points": {},
+   "routing_violations": 0
+  }
+ },
+ "operator_replay": {
+  "neg-moe_rank1_zero": {
+   "verdict": "FAIL",
+   "fail_points": 20,
+   "first_fail": {
+    "step": 0,
+    "layer": 0,
+    "rank": 1,
+    "nrmse": 1.0
+   },
+   "nrmse_max": 1.0,
+   "scale_err_max": 1.0,
+   "worst_scale": {
+    "step": 0,
+    "layer": 0,
+    "rank": 1,
+    "rows": 160,
+    "nrmse": 1.0,
+    "row_nrmse_max": 1.0,
+    "scale_err": 1.0,
+    "nonfinite": 0
+   }
+  },
+  "neg-moe_scale01pc_l7": {
+   "verdict": "PASS",
+   "fail_points": 0,
+   "first_fail": null,
+   "nrmse_max": 0.005397697926214266,
+   "scale_err_max": 0.0019367694222112999,
+   "worst_scale": {
+    "step": 0,
+    "layer": 1,
+    "rank": 1,
+    "rows": 160,
+    "nrmse": 0.0017396466938251656,
+    "row_nrmse_max": 0.0034370778209555784,
+    "scale_err": 0.0019367694222112999,
+    "nonfinite": 0
+   }
+  },
+  "neg-moe_scale1pc_l7": {
+   "verdict": "FAIL",
+   "fail_points": 10,
+   "first_fail": {
+    "step": 0,
+    "layer": 7,
+    "rank": 0,
+    "nrmse": 0.010932988444362322
+   },
+   "nrmse_max": 0.01138087564210621,
+   "scale_err_max": 0.010490696202940753,
+   "worst_scale": {
+    "step": 1,
+    "layer": 7,
+    "rank": 1,
+    "rows": 1,
+    "nrmse": 0.010785572208482905,
+    "row_nrmse_max": 0.010785572208482905,
+    "scale_err": 0.010490696202940753,
+    "nonfinite": 0
+   }
+  },
+  "twin-native (calibration data)": {
+   "moe": {
+    "points": 400,
+    "nrmse_max": 0.005397697926214266,
+    "nrmse_median": 0.0028334328255083356,
+    "scale_err_max": 0.0019367694222112999
+   }
+  },
+  "twin-fp32 (calibration data)": {
+   "moe": {
+    "points": 400,
+    "nrmse_max": 0.002466156714247181,
+    "nrmse_median": 0.0015380940574248444,
+    "scale_err_max": 0.0007006389480259124
+   }
+  }
+ }
+}
