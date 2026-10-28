@@ -20,6 +20,7 @@ test {
     _ = @import("json.zig");
     _ = @import("fields.zig");
     _ = @import("reply_text.zig");
+    _ = @import("reply_dsv41.zig");
     _ = @import("tool_parse.zig");
     _ = @import("tool_stream.zig");
     _ = @import("tool_params.zig");
@@ -36,8 +37,11 @@ test {
     _ = @import("log.zig");
     _ = @import("messages.zig");
     _ = @import("stream_preflight_test.zig");
+    _ = @import("structure_test.zig");
+    _ = @import("top_k_test.zig");
     _ = @import("late_system_test.zig");
     _ = @import("effort_values_test.zig");
+    _ = @import("telemetry_reply_test.zig");
     _ = @import("compact_test.zig");
     _ = @import("decisions.zig");
     _ = @import("decisions_test.zig");

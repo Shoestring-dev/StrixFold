@@ -52,10 +52,14 @@ pub const Config = struct {
     fill_match: u32 = 8, // context tokens a suffix-match branch must match (shorter ones are coincidental phrases)
     fill_floor: f64 = 0.35, // the share of grafted rows a stream must keep to go on reading its chain back every round
     draft_streams: bool,
+    draft_bypass_at: u32 = 0, // experiment: skip next head pass at this many unfinished selected streams; 0 off
     head_trees: bool,
     head_lanes: u32 = 0, // a lone stream's lanes at most, the planner picking each round's (0: the depth rule's chain)
     head_depth: u32 = 16, // and their depth at most
     own_prices: bool = true, // the planner prices each pick from the stream's own measured rounds (seeded from the table)
+    // the round loop learns nothing from the clock: the depth rule's costs, a shared round's overhead and the planner's
+    // prices stay what the tables and defaults say, so a request's widths depend on its tokens only (repeatable runs)
+    frozen_timing: bool = false,
     depth_prior: []f64,
     family_costs: Table,
     shared_costs: Table,
@@ -117,6 +121,13 @@ pub const Config = struct {
             .lane_costs = try alloc.extendCosts(gpa, m.lane_costs, 64),
             .mtp_step_ms = m.mtp_step_ms,
         };
+    }
+
+    /// Only backends with shared, probability-driven draft passes support the experiment.
+    pub fn setDraftBypassAt(c: *Config, at: u32) !void {
+        if (at != 0 and (at < 2 or at > c.batch_streams or !c.family_streams or !c.family_mtp or
+            !c.node_probabilities or !c.draft_streams or c.head_trees)) return error.BadDraftBypass;
+        c.draft_bypass_at = at;
     }
 
     pub fn deinit(c: *Config, gpa: Allocator) void {

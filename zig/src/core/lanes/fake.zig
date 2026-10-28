@@ -30,6 +30,12 @@ pub const Fake = struct {
     lanes: std.AutoHashMapUnmanaged(*Stream, Lane) = .empty,
     drawn: std.ArrayList(u32) = .empty, // handle -> token
     rounds: u64 = 0,
+    // Host test observations; this fake does not model HIP absorption or transport.
+    positive_depth_requests: u64 = 0,
+    zero_depth_requests: u64 = 0,
+    max_draft_depth: u32 = 0,
+    max_verify_streams: usize = 0,
+    max_verify_rows: usize = 0,
     cycle_after: ?usize = null,
     probe_prompt: usize = 0,
     pattern: []const u32 = &.{ 11, 12, 13 },
@@ -39,6 +45,7 @@ pub const Fake = struct {
     prefill_hook: ?*const fn (ctx: *anyopaque, s: *Stream, chunk: usize) void = null,
     prefill_hook_ctx: ?*anyopaque = null,
     refuse_sampled: bool = false, // prefill refuses a sampled stream with error.SamplingRefused
+    refuse_full: usize = 0, // prefill refuses this many times with error.ContextFull while another lane is live
 
     pub fn deinit(x: *Fake) void {
         var it = x.lanes.valueIterator();
@@ -99,6 +106,10 @@ pub const Fake = struct {
     fn prefill(ptr: *anyopaque, s: *Stream) anyerror!void {
         const x = self(ptr);
         if (x.refuse_sampled and s.sampling != null) return error.SamplingRefused;
+        if (x.refuse_full > 0 and x.lanes.count() > 0 and !x.lanes.contains(s)) {
+            x.refuse_full -= 1;
+            return error.ContextFull;
+        }
         const got = try x.lanes.getOrPut(x.gpa, s);
         if (got.found_existing) freeLane(x.gpa, got.value_ptr);
         got.value_ptr.* = .{};
@@ -156,6 +167,10 @@ pub const Fake = struct {
     fn verify(ptr: *anyopaque, windows: []const be.Window, out: []be.Verified) anyerror!void {
         const x = self(ptr);
         x.rounds += 1;
+        x.max_verify_streams = @max(x.max_verify_streams, windows.len);
+        var total_rows: usize = 0;
+        for (windows) |w| total_rows += w.rows();
+        x.max_verify_rows = @max(x.max_verify_rows, total_rows);
         for (windows, out) |w, o| {
             const l = x.lane(w.stream);
             l.base = l.history.items.len;
@@ -194,6 +209,8 @@ pub const Fake = struct {
     fn draft(ptr: *anyopaque, requests: []const be.DraftRequest) anyerror!void {
         const x = self(ptr);
         for (requests) |r| {
+            if (r.depth == 0) x.zero_depth_requests += 1 else x.positive_depth_requests += 1;
+            x.max_draft_depth = @max(x.max_draft_depth, r.depth);
             const l = x.lane(r.stream);
             // the head reads the last verify's kept rows (a shared round drafts before its rollback)
             var guess: std.ArrayList(u32) = .empty;

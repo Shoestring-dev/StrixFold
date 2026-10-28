@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const Proposer = @import("proposer.zig").Proposer;
 const Sampling = @import("sampling.zig").Sampling;
 const State = @import("depth.zig").State;
+const Structure = @import("grammar/grammar.zig").Structure;
 
 pub const Reason = enum {
     none,
@@ -136,6 +137,7 @@ pub const Spec = struct {
     chunks: []const u32 = &.{}, // where prefill chunks start after 0 (Python's PrefillPlan); empty: the backend's step
     reuse: Reuse = .{},
     images: []const Image = &.{}, // in prompt order; the caller's until the stream is released
+    structure: ?Structure = null, // the grammar every reply token keeps to (a backend's draws enforce it)
 };
 
 pub const Stream = struct {
@@ -157,6 +159,7 @@ pub const Stream = struct {
     chunks: []const u32,
     reuse: Reuse = .{},
     images: []const Image = &.{},
+    structure: ?Structure = null,
     cached: u32 = 0, // prompt tokens the backend restored from `reuse` (its prompt pass started there)
     reuse_failed: bool = false, // the backend's restore of `reuse` failed: it prefilled from 0
     context: std.ArrayList(u32) = .empty,
@@ -169,6 +172,9 @@ pub const Stream = struct {
     drafted: u64 = 0,
     accepted: u64 = 0,
     branch_rows: u64 = 0, // suffix-match branch rows verified (lanes/fill.zig)
+    // the backend's own counters for this request as one JSON object (written at release; the reply's telemetry)
+    telemetry_buf: [3072]u8 = undefined,
+    telemetry_len: usize = 0,
     branch_accepted: u64 = 0, // of those, rows on the accepted path
     graft_hit: f64 = 1, // recent share of grafted rows kept; a read of the chain that grafted none counts as a miss
     odds: ?shape.Odds = null, // how often the target took the head's rank-r lane at each depth (head trees)
@@ -210,6 +216,7 @@ pub const Stream = struct {
             .chunks = spec.chunks,
             .reuse = spec.reuse,
             .images = spec.images,
+            .structure = spec.structure,
         };
         try s.context.appendSlice(gpa, spec.prompt);
         return s;

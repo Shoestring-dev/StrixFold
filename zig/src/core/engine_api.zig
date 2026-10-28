@@ -37,14 +37,12 @@ pub const CallGate = struct {
     think_end: ?u32 = null,
 };
 
-/// response_format and the guided_* fields: every token keeps the reply inside this grammar.
-pub const Structure = struct {
-    kind: enum { json, json_schema, regex, choice, grammar },
-    /// The schema (JSON text), regex, choices (a JSON array) or EBNF; empty for any JSON object.
-    text: []const u8 = "",
-    /// With thinking on, the grammar starts after this token.
-    after: ?u32 = null,
-};
+/// response_format and the guided_* fields (and a required DeepSeek-V4.1 DSML call, kind `calls`): every token keeps
+/// the reply inside this grammar (lanes.grammar.Structure).
+pub const Structure = lanes.grammar.Structure;
+
+/// Structured output's compiler and machine, for the server's checks before any header (lanes/grammar).
+pub const grammar = lanes.grammar;
 
 /// A reply to decode. The request and every slice in it stay valid until its ``finished`` event.
 pub const Request = struct {
@@ -127,6 +125,10 @@ pub const Info = struct {
     /// The engine observes loop_guard requests in its lane stream.
     loop_guard: bool = false,
     structures: bool = false,
+    /// The largest top_k the engine's sampler draws (0: no limit), and whether a sampled request must set one (its
+    /// sampler has no top_k-off path, the nucleus over the whole vocabulary): the server refuses requests past either.
+    top_k_max: u32 = 0,
+    needs_top_k: bool = false,
     /// Prompt rows a prefill chunk at most, for the server's chunk starts (0: the engine cuts prompts itself).
     prefill_step: u32 = 0,
     /// A line the server prints once at startup (the engine's memory plan); empty: none.

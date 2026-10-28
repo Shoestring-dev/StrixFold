@@ -42,10 +42,21 @@ pub const LaneHost = struct {
     memory: ?api.MemorySource = null, // the backend's memory counts; null: Engine.memory reports none
     explain: ?api.Explain = null, // the backend's words for a request it refuses; null: the error's name
     // the request at the queue's front waits for room in the backend's pool (its prompt pass refused ContextFull while
-    // other streams ran): admitted again once fewer than this many streams are active
+    // other streams ran): admitted again once fewer than this many streams are active, or at full_retry (a backend
+    // may refuse for a while to keep its kept states, waiting for one stream, and then place it)
     full_wait: ?usize = null,
+    full_retry: i96 = 0,
+    // after a long prompt pass (the whole pass runs inside its admission, no round meanwhile), the streams within
+    // finish_left tokens of their max_tokens decode before the next admission, finish_ns at most: such a stream ends
+    // and frees its extent (its kept state then resumes in place) instead of waiting out every queued pass, as the
+    // Python lane's fills leave decoding its share
+    finish_until: ?i96 = null,
 
     const Mark = struct { at: i96, tokens: u64 };
+    const full_retry_ns: i96 = std.time.ns_per_s;
+    const long_pass_ns: i96 = std.time.ns_per_s;
+    const finish_ns: i96 = 5 * std.time.ns_per_s;
+    const finish_left: i64 = 256;
     const window_ns: i96 = 2 * std.time.ns_per_s;
 
     const Job = struct {
@@ -222,7 +233,7 @@ pub const LaneHost = struct {
         job.reported();
         h.gpa.free(job.marks);
         const s = &job.stream;
-        const stats: Stats = if (job.started) .{ .rounds = s.rounds, .drafted = s.drafted, .accepted = s.accepted, .min_rows = s.min_rows, .loop_period = s.loop_period, .prefill_seconds = if (job.prefilled) |done| @as(f64, @floatFromInt(@as(i64, @intCast(@max(0, done - job.began))))) / 1e9 else null } else .{};
+        const stats: Stats = if (job.started) .{ .rounds = s.rounds, .drafted = s.drafted, .accepted = s.accepted, .min_rows = s.min_rows, .loop_period = s.loop_period, .prefill_seconds = if (job.prefilled) |done| @as(f64, @floatFromInt(@as(i64, @intCast(@max(0, done - job.began))))) / 1e9 else null, .telemetry_json = s.telemetry_buf[0..s.telemetry_len] } else .{};
         emit(job, .{ .finished = .{ .reason = reason, .stats = stats, .message = message } });
         if (job.started) {
             s.deinit(h.gpa);
@@ -290,11 +301,18 @@ pub const LaneHost = struct {
         }
         if (h.full_wait) |n| {
             const active = h.core.activeCount();
-            if (active > 0 and active >= n) {
+            if (active > 0 and active >= n and std.Io.Clock.awake.now(h.io).toNanoseconds() < h.full_retry) {
                 h.unlock();
                 return false;
             }
             h.full_wait = null;
+        }
+        if (h.finish_until) |t| {
+            if (std.Io.Clock.awake.now(h.io).toNanoseconds() < t and h.nearEnd()) {
+                h.unlock();
+                return false;
+            }
+            h.finish_until = null;
         }
         const job = h.queued.orderedRemove(0);
         h.admitted.append(h.gpa, job) catch {
@@ -330,6 +348,7 @@ pub const LaneHost = struct {
             .chunks = r.chunks,
             .reuse = reuse,
             .images = r.images,
+            .structure = r.structure,
         }) catch {
             job.proposer.deinit();
             return h.drop(job, "out of memory");
@@ -344,8 +363,20 @@ pub const LaneHost = struct {
             return h.drop(job, h.words(e));
         };
         h.prefilled(job, began);
+        const now = std.Io.Clock.awake.now(h.io).toNanoseconds();
+        if (now - began >= long_pass_ns) {
+            h.lock();
+            h.finish_until = now + finish_ns;
+            h.unlock();
+        }
         if (h.deliver(job)) h.remove(job);
         return true;
+    }
+
+    /// Whether an admitted stream decodes within finish_left tokens of its max_tokens (the lock held).
+    fn nearEnd(h: *LaneHost) bool {
+        for (h.admitted.items) |job| if (job.started and !job.stream.finished and job.stream.budgetLeft() <= finish_left) return true;
+        return false;
     }
 
     fn prefilled(h: *LaneHost, job: *Job, began: i96) void {
@@ -426,7 +457,8 @@ pub const LaneHost = struct {
 
     /// A request whose prompt pass the backend's pool cannot hold while other streams run (error.ContextFull, before
     /// anything of it was placed) goes back to the queue's front and waits until one of them ends, as the Python
-    /// lane's window waits, instead of failing. Returns false: nothing more is admitted now.
+    /// lane's window waits, instead of failing, or a second at most (the backend may place it by then). Returns
+    /// false: nothing more is admitted now.
     fn requeue(h: *LaneHost, job: *Job) bool {
         h.remove(job);
         h.core.discard(&job.stream);
@@ -447,6 +479,7 @@ pub const LaneHost = struct {
             return true;
         };
         h.full_wait = h.core.activeCount();
+        h.full_retry = std.Io.Clock.awake.now(h.io).toNanoseconds() + full_retry_ns;
         h.unlock();
         return false;
     }

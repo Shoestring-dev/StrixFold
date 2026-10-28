@@ -17,10 +17,15 @@ const clock = @import("clock.zig");
 const prompt = @import("prompt.zig");
 const tool_specs = @import("tool_specs.zig");
 const chunk_plan = @import("chunk_plan.zig");
+const messages_mod = @import("messages.zig");
 const log = @import("log.zig");
 const Value = json.Value;
 const Cx = errors.Cx;
 const Allocator = std.mem.Allocator;
+
+/// Requests so far that drew a random seed (TF_SEED_RANDOM), and the second of the last top_k warning.
+var seed_counter: std.atomic.Value(u64) = .init(0);
+var clamp_warned_s: std.atomic.Value(i64) = .init(-60);
 
 /// auto compacts near the window. fraction compacts past that share of it.
 pub const CompactAt = union(enum) { auto, fraction: f64 };
@@ -62,6 +67,8 @@ pub const Server = struct {
     keys: ?*auth.Store,
     late_system: []const u8 = "system",
     needs_user_after_tool: bool = false,
+    /// The message rules the template asks for (messages_mod.dialectOf): DeepSeek-V4.1's encoder rules, or the generic ones.
+    dialect: messages_mod.Dialect = .generic,
     markers: reply_text.Markers = reply_text.think_markers,
     chunks: chunk_plan.Plan = .{},
     effort_levels: []const []const u8 = &.{},
@@ -102,6 +109,7 @@ pub const Server = struct {
         } else srv.effort_levels = try fields.effortLevels(a, text.templateSource());
         srv.late_system = try lateSystem(a, text);
         srv.needs_user_after_tool = needsUserAfterTool(text.templateSource());
+        srv.dialect = messages_mod.dialectOf(text.templateSource());
         if (text.tokenId("</think>")) |end| {
             const lead = try text.encode(a, "\n", false);
             const trail = try text.encode(a, "\n\n", false);
@@ -135,6 +143,39 @@ pub const Server = struct {
         return null;
     }
 
+    /// TF_SEED_RANDOM=1: the value mixed into the salt of a request that names no seed, so identical requests sample
+    /// differently (off: the seed is keyed to the prompt alone, as before). A request that sends `seed` keeps it exactly.
+    fn seedMix(srv: *const Server) i64 {
+        const v = std.c.getenv("TF_SEED_RANDOM") orelse return 0;
+        if (!std.mem.eql(u8, std.mem.span(v), "1")) return 0;
+        const ns: u64 = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(srv.io).toNanoseconds())));
+        const n = seed_counter.fetchAdd(1, .monotonic);
+        return @bitCast((ns ^ (n *% 0x9E3779B97F4A7C15)) *% 0xBF58476D1CE4E5B9);
+    }
+
+    /// TF_TOP_K_MAX=N: the largest top_k the engine's sampler takes (DeepSeek-V4.1: 56). A request top_k of 0 or below
+    /// (vLLM's "off") means the server default, and one above N is cut to N, with a warning at most once a minute.
+    fn topKFor(srv: *const Server, asked: i64) i64 {
+        const v = std.c.getenv("TF_TOP_K_MAX") orelse return asked;
+        const max = std.fmt.parseInt(i64, std.mem.span(v), 10) catch return asked;
+        if (max <= 0) return asked;
+        var k = asked;
+        if (k <= 0) {
+            k = 20;
+            if (srv.config.default_sampling) |d| if (d.get("top_k")) |dk| if (dk.int64()) |n| if (n > 0) {
+                k = n;
+            };
+        }
+        if (k > max) {
+            const now_s: i64 = @intCast(@divFloor(clock.nowNs(srv.io), std.time.ns_per_s));
+            const last = clamp_warned_s.load(.monotonic);
+            if (now_s - last >= 60 and clamp_warned_s.cmpxchgStrong(last, now_s, .monotonic, .monotonic) == null)
+                log.line("warning: top_k {d} is above this engine's sampler limit; using {d} (at most one warning a minute)", .{ k, max });
+            k = max;
+        }
+        return k;
+    }
+
     /// ``_resolve_sampling``: omitted or null fields keep the defaults; an omitted seed is keyed to the prompt.
     pub fn resolveSampling(srv: *Server, cx: *Cx, f: Value, temperature: f64, prompt_ids: []const u32) errors.Refused!?api.Sampling {
         _ = temperature; // the request's own temperature field decides, as in the Python server
@@ -143,11 +184,17 @@ pub const Server = struct {
         try merge(options, cx, try fields.parseNumbers(cx, f));
         const temp = number(options.get("temperature")) orelse 0;
         if (temp <= 0) return null;
-        const seed: u64 = if (options.get("seed")) |s| seedBits(s) else api.seedFor(prompt_ids, srv.config.seed_salt);
+        const seed: u64 = if (options.get("seed")) |s| seedBits(s) else api.seedFor(prompt_ids, srv.config.seed_salt +% srv.seedMix());
+        const top_k: u32 = @intCast(@min(@max(0, srv.topKFor((if (options.get("top_k")) |k| k.int64() else null) orelse 0)), std.math.maxInt(u32)));
+        // an engine whose sampler draws only among its best top_k tokens (DeepSeek-V4.1's: 1 to 56) refuses the rest
+        // here, before any header, rather than failing the request when it reaches the sampler
+        const max = srv.info.top_k_max;
+        if (top_k == 0 and srv.info.needs_top_k) return cx.refuse(try std.fmt.allocPrint(cx.a, "top_k: this engine samples (temperature above 0) only with top_k set{s}; top_k off (the nucleus over the whole vocabulary) is not supported yet: send top_k, or temperature 0", .{if (max > 0) try std.fmt.allocPrint(cx.a, ", from 1 to {d}", .{max}) else ""}));
+        if (max > 0 and top_k > max) return cx.refuse(try std.fmt.allocPrint(cx.a, "top_k {d} is above this engine's sampler limit: send top_k from 1 to {d}", .{ top_k, max }));
         return .{
             .seed = seed,
             .temperature = @floatCast(temp),
-            .top_k = @intCast(@min(@max(0, (if (options.get("top_k")) |k| k.int64() else null) orelse 0), std.math.maxInt(u32))),
+            .top_k = top_k,
             .top_p = @floatCast(number(options.get("top_p")) orelse 1.0),
             .min_p = @floatCast(number(options.get("min_p")) orelse 0.0),
         };
@@ -157,7 +204,19 @@ pub const Server = struct {
     pub fn checkFeatures(srv: *Server, cx: *Cx, f: Value, has_tools: bool, thinking: bool, prompt_ids: []const u32, tools: []const Value, request: *api.Request) errors.Refused!void {
         _ = prompt_ids;
         const required = if (f.get("tool_call_required")) |r| r.truthy() else false;
-        if (has_tools and required) {
+        const after: ?u32 = if (thinking) srv.text.tokenId(srv.markers.close) else null;
+        if (has_tools and required and srv.dialect == .deepseek_v41) {
+            // DeepSeek-V4.1 writes calls as a DSML block, whose opener is several tokens: the engine's grammar holds
+            // the whole block to the offered tools and their parameter schemas (encoding.py's rendering)
+            if (!srv.info.structures) return cx.refuse("tool_choice \"required\" or a named function is not supported by this engine yet: send \"auto\"");
+            // parallel_tool_calls false: one call ({"tools": [...], "parallel_tool_calls": false}), else any number
+            const list = try json.stringify(cx.a, .{ .array = @constCast(tools) }, .{ .ascii = false });
+            const one_call = if (f.get("parallel_tool_calls")) |p| p == .bool and !p.bool else false;
+            const text = if (one_call) try std.fmt.allocPrint(cx.a, "{{\"tools\": {s}, \"parallel_tool_calls\": false}}", .{list}) else list;
+            const s: api.Structure = .{ .kind = .calls, .text = text, .after = after };
+            try supported(cx, s, "tool_choice");
+            request.structure = s;
+        } else if (has_tools and required) {
             const form = try srv.callForm(cx);
             const opener = if (form) |fm| srv.text.tokenId(fm.opener) else null;
             if (opener == null) return cx.refuse("tool_choice \"required\" or a named function needs a chat template that marks tool calls (<tool_call> or <|tool_call>), and this one does not: send \"auto\"");
@@ -175,8 +234,17 @@ pub const Server = struct {
         }
         if (try grammar.spec(cx, f)) |s| {
             if (!srv.info.structures) return cx.refuse("structured output (response_format and the guided_* fields) is not supported by this engine yet");
-            request.structure = .{ .kind = s.kind, .text = s.text, .after = if (thinking) srv.text.tokenId(srv.markers.close) else null };
+            const st: api.Structure = .{ .kind = s.kind, .text = s.text, .after = after };
+            try supported(cx, st, s.field);
+            request.structure = st;
         }
+    }
+
+    /// A structure the engine's grammar compiler refuses (a schema keyword it cannot enforce, a bad regex), refused
+    /// here before any header with the compiler's words.
+    fn supported(cx: *Cx, s: api.Structure, field: []const u8) errors.Refused!void {
+        var diag: api.grammar.Diag = .{};
+        if (try api.grammar.check(cx.a, s, &diag)) |why| return cx.fail(.request, "{s}: {s}", .{ field, why });
     }
 
     const Form = struct { opener: []const u8, lead: ?[]const u8, tail: ?[]const u8 };

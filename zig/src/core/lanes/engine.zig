@@ -97,7 +97,9 @@ pub const Engine = struct {
         var asked: ?u32 = null;
         if (e.cfg.family_mtp and s.drafts) {
             // the head reads the prompt's last row and the first token, and drafts the one after it
-            const d: u32 = @intCast(try e.rule.depth(win.who(s)));
+            // a stream joining at the bypass load drafts nothing (its first shared round would drop the drafts)
+            const bypassed = e.cfg.draft_bypass_at != 0 and e.activeCount() + 1 >= e.cfg.draft_bypass_at;
+            const d: u32 = if (bypassed) 0 else @intCast(try e.rule.depth(win.who(s)));
             asked = d;
             try e.backend.draft(&.{.{ .stream = s, .follow = &.{}, .first = feed, .rows = null, .start = s.prompt_len, .position = position + 1, .depth = d }});
             s.dropHeld(e.gpa);
@@ -259,10 +261,10 @@ pub const Engine = struct {
                 const ms = e.clock.elapsedMs(.cost);
                 const first = s.rounds == 1; // a stream's first round carries the prefill-to-decode switch
                 try trail.event(e, &.{ f("ev", str("cost")), f("stream", str(s.id)), f("drafts", int(rows - 1)), f("init", .{ .bool = first }), f("ms", ev.bits(ms)) });
-                try e.rule.observeCost(@intCast(rows - 1), ms, first, win.who(s));
+                if (!e.cfg.frozen_timing) try e.rule.observeCost(@intCast(rows - 1), ms, first, win.who(s));
             }
         }
-        if (s.graft_room != null and s.rounds > 1) {
+        if (s.graft_room != null and s.rounds > 1 and !e.cfg.frozen_timing) {
             // the stream's round time beyond its window and head levels, for the lane planner
             if (e.cfg.lane_costs.get(@intCast(rows))) |w| {
                 const over = e.clock.elapsedMs(.cost) - w - e.cfg.mtp_step_ms * @as(f64, @floatFromInt(held_levels));
@@ -275,7 +277,7 @@ pub const Engine = struct {
         if (plan.kind == .head) {
             const ms = e.clock.elapsedMs(.overhead);
             try trail.event(e, &.{ f("ev", str("overhead")), f("streams", int(1)), f("rows", int(rows)), f("ms", ev.bits(ms)) });
-            try e.rule.observeOverhead(1, rows, ms);
+            if (!e.cfg.frozen_timing) try e.rule.observeOverhead(1, rows, ms);
         }
         return .{ .rows = @intCast(rows), .keep = @intCast(o.path.len), .got = o.got };
     }
@@ -286,6 +288,13 @@ pub const Engine = struct {
         const a = e.arena.allocator();
         const plans = try a.alloc(Plan, entries.len);
         for (entries, plans) |s, *p| p.* = try win.plan(e, s, null);
+        if (e.cfg.draft_bypass_at != 0 and plans.len >= e.cfg.draft_bypass_at) {
+            // at the bypass load every stream verifies its pending row alone, as with drafts off: held or copied rows
+            // would advance the streams unevenly, and streams decoding alike in step share their rows' experts
+            for (plans) |*p| {
+                if (p.kind != .forced) p.* = .{ .stream = p.stream, .position = p.position, .kind = .none };
+            }
+        }
         try win.allocate(e, plans);
         const windows = try a.alloc(be.Window, plans.len);
         const out = try a.alloc(be.Verified, plans.len);
@@ -313,6 +322,14 @@ pub const Engine = struct {
         for (whos, heads.items) |*w, i| w.* = win.who(plans[i].stream);
         const budgets = try a.alloc(i64, heads.items.len);
         try e.rule.budgets(whos, win.probe(e), budgets);
+        // The next pass serves streams that survived this round. Keep s.drafts set:
+        // the backend still absorbs target rows, so its head can resume when load falls.
+        // askDrafts with depth zero clears stale held drafts on both sides of the API.
+        if (e.cfg.draft_bypass_at != 0) {
+            var active: usize = 0;
+            for (plans) |p| active += @intFromBool(!p.stream.finished);
+            if (active >= e.cfg.draft_bypass_at) @memset(budgets, 0);
+        }
         const ids = try a.alloc(ev.Value, heads.items.len);
         for (ids, heads.items) |*id, i| id.* = str(plans[i].stream.id);
         try trail.event(e, &.{ f("ev", str("budgets")), f("streams", .{ .list = ids }), f("depths", .{ .i64s = budgets }) });
@@ -330,7 +347,7 @@ pub const Engine = struct {
         try e.backend.keep(windows, paths);
         const ms = e.clock.elapsedMs(.overhead);
         try trail.event(e, &.{ f("ev", str("overhead")), f("streams", int(plans.len)), f("rows", int(total)), f("ms", ev.bits(ms)) });
-        try e.rule.observeOverhead(@intCast(plans.len), total, ms);
+        if (!e.cfg.frozen_timing) try e.rule.observeOverhead(@intCast(plans.len), total, ms);
     }
 
     /// Commit the target-sampled path (after the thinking budget's cut); the kept rows and their following tokens.

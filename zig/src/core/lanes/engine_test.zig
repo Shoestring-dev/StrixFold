@@ -23,10 +23,31 @@ fn model() !Config {
     return Config.init(gpa, .{ .exact_width = 16, .gpu_tokens = true, .mtp = true, .speculate = true, .speculate_early = false, .drafts = 4, .window_costs = &costs, .mtp_step_ms = 0.5, .hidden_rows = true, .batch_rows = 32, .max_streams = 8, .draft_streams = true }, 16, 15);
 }
 
+// The served HIP geometry: six rows/stream, sixteen per shared round, eight streams,
+// five held proposals. This remains a host fake: it has no HIP tap rings or peer wire.
+fn servedModel() !Config {
+    const ms = [_]f64{ 36.06, 43.76, 50.38, 56.29, 59.52, 61.52, 66.27, 71.02, 75.77, 80.52, 85.27, 90.02, 94.77, 99.52, 104.27, 109.02 };
+    var costs: [16]@import("config.zig").Cost = undefined;
+    for (&costs, ms, 1..) |*c, value, width| c.* = .{ .width = @intCast(width), .ms = value };
+    return Config.init(gpa, .{ .exact_width = 6, .gpu_tokens = true, .mtp = true, .speculate = true, .speculate_early = false, .drafts = 5, .window_costs = costs[0..6], .shared_costs = &costs, .mtp_step_ms = 0, .hidden_rows = true, .batch_rows = 16, .max_streams = 8, .draft_probabilities = true, .draft_streams = true }, 6, 5);
+}
+
 /// Every case's emitted tokens, the cases admitted together and stepped until done.
 fn run(cases: []const Case) ![][]u32 {
-    var cfg = try model();
+    return runWithBypass(cases, null);
+}
+
+fn runWithBypass(cases: []const Case, bypass: ?u32) ![][]u32 {
+    return runWithGeometry(cases, bypass, false);
+}
+
+fn runWithGeometry(cases: []const Case, bypass: ?u32, served: bool) ![][]u32 {
+    var cfg = if (served) try servedModel() else try model();
     defer cfg.deinit(gpa);
+    if (bypass) |at| {
+        cfg.node_probabilities = true;
+        try cfg.setDraftBypassAt(at);
+    }
     var target: fake.Fake = .{ .gpa = gpa };
     defer target.deinit();
     var clock: fake.FixedClock = .{};
@@ -112,6 +133,168 @@ fn freeGuard(runs: []GuardOut) void {
 const p1 = [_]u32{ 3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5 };
 const p2 = [_]u32{ 2, 7, 1, 8, 2, 8, 1, 8, 2, 8, 4, 5, 9 };
 
+test "draft bypass preserves greedy and keyed sampled output with mixed streams and unequal endings" {
+    for ([_]?Sampling{ null, .{ .seed = 5, .temperature = 0.7, .top_k = 0, .top_p = 0.95 } }) |sampling| {
+        const cases = [_]Case{
+            .{ .prompt = &p1, .sampling = sampling, .max_new = 40 },
+            .{ .prompt = &p2, .sampling = sampling, .max_new = 3 },
+            .{ .prompt = &p1, .sampling = sampling, .max_new = 13, .drafts = false },
+        };
+        const normal = try runWithBypass(&cases, 0);
+        defer free(normal);
+        const bypassed = try runWithBypass(&cases, 2);
+        defer free(bypassed);
+        for (normal, bypassed) |a, b| try std.testing.expectEqualSlices(u32, a, b);
+    }
+}
+
+test "draft bypass clears held rows and resumes when active selected load falls" {
+    var cfg = try model();
+    defer cfg.deinit(gpa);
+    cfg.node_probabilities = true;
+    try cfg.setDraftBypassAt(2);
+    var target: fake.Fake = .{ .gpa = gpa };
+    defer target.deinit();
+    var clock: fake.FixedClock = .{};
+    var engine = Engine.init(gpa, &cfg, target.backend(), clock.clock());
+    defer engine.deinit();
+    var one = try sm.Stream.init(gpa, .{ .id = "one", .prompt = &p1, .max_new = 40, .eos = &.{}, .drafts = true });
+    defer one.deinit(gpa);
+    var two = try sm.Stream.init(gpa, .{ .id = "two", .prompt = &p2, .max_new = 40, .eos = &.{}, .drafts = true });
+    defer two.deinit(gpa);
+    try engine.addStream(&one);
+    try engine.addStream(&two);
+    try engine.step();
+    try std.testing.expectEqual(@as(u32, 0), one.next.?.count);
+    try std.testing.expectEqual(@as(u32, 0), two.next.?.count);
+    two.paused = true;
+    try engine.step();
+    try std.testing.expect(one.next.?.count > 0); // paused requests do not hold the bypass on
+    two.paused = false;
+    try engine.step();
+    try std.testing.expectEqual(@as(u32, 0), one.next.?.count);
+    try std.testing.expectEqual(@as(u32, 0), two.next.?.count);
+    while (engine.activeCount() > 0) try engine.step();
+    for ([_]*sm.Stream{ &one, &two }) |s| {
+        var history: std.ArrayList(u32) = .empty;
+        defer history.deinit(gpa);
+        try history.appendSlice(gpa, s.prompt());
+        for (s.emitted()) |token| {
+            try std.testing.expectEqual(fake.next(history.items, s.sampling, history.items.len), token);
+            try history.append(gpa, token);
+        }
+    }
+}
+
+test "draft bypass served geometry preserves eight mixed requests through unequal endings" {
+    for ([_]?Sampling{ null, .{ .seed = 17, .temperature = 0.7, .top_k = 0, .top_p = 0.95 } }) |sampling| {
+        var cases: [8]Case = undefined;
+        for (&cases, 0..) |*c, i| c.* = .{ .prompt = if (i % 2 == 0) &p1 else &p2, .sampling = sampling, .max_new = @intCast(3 + i * 9), .drafts = i != 3, .think_budget = if (i == 5) 9 else 0 };
+        const normal = try runWithGeometry(&cases, 0, true);
+        defer free(normal);
+        const bypassed = try runWithGeometry(&cases, 6, true);
+        defer free(bypassed);
+        for (normal, bypassed) |a, b| try std.testing.expectEqualSlices(u32, a, b);
+    }
+}
+
+test "draft bypass served geometry clears backend holds and resumes at lower selected load" {
+    var cfg = try servedModel();
+    defer cfg.deinit(gpa);
+    try cfg.setDraftBypassAt(6);
+    var target: fake.Fake = .{ .gpa = gpa };
+    defer target.deinit();
+    var clock: fake.FixedClock = .{};
+    var engine = Engine.init(gpa, &cfg, target.backend(), clock.clock());
+    defer engine.deinit();
+    var streams: [8]sm.Stream = undefined;
+    for (&streams, 0..) |*s, i| s.* = try sm.Stream.init(gpa, .{ .id = "served", .prompt = if (i % 2 == 0) &p1 else &p2, .max_new = 128, .eos = &.{}, .drafts = true });
+    defer for (&streams) |*s| s.deinit(gpa);
+    for (&streams) |*s| try engine.addStream(s);
+    // Initial prefill heads are allowed. Inspect only the subsequent round's calls.
+    for ([_]usize{ 8, 6, 2, 1, 8 }) |active| {
+        for (&streams, 0..) |*s, i| s.paused = i >= active;
+        const positive_before = target.positive_depth_requests;
+        const zero_before = target.zero_depth_requests;
+        try engine.step();
+        if (active >= 6) {
+            try std.testing.expectEqual(positive_before, target.positive_depth_requests);
+            try std.testing.expectEqual(@as(u64, @intCast(active)), target.zero_depth_requests - zero_before);
+            for (streams[0..active]) |*s| {
+                try std.testing.expect(s.drafts); // request flag stays set; not proof of HIP absorption
+                try std.testing.expectEqual(@as(u32, 0), s.next.?.count);
+                try std.testing.expectEqual(@as(usize, 0), target.lanes.getPtr(s).?.held.items.len);
+            }
+        } else {
+            try std.testing.expect(target.positive_depth_requests > positive_before);
+            for (streams[0..active]) |*s| {
+                try std.testing.expect(s.next.?.count > 0);
+                try std.testing.expectEqual(@as(usize, s.next.?.count), target.lanes.getPtr(s).?.held.items.len);
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 8), target.max_verify_streams);
+    try std.testing.expect(target.max_verify_rows <= 16);
+    try std.testing.expect(target.max_draft_depth <= 5);
+    // Cancellation releases the backend state; new admission must not inherit held data.
+    engine.discard(&streams[7]);
+    try std.testing.expect(!target.lanes.contains(&streams[7]));
+    var replacement = try sm.Stream.init(gpa, .{ .id = "replacement", .prompt = &p2, .max_new = 5, .eos = &.{}, .drafts = true });
+    defer replacement.deinit(gpa);
+    try engine.addStream(&replacement);
+    try engine.step();
+    for (&streams) |*s| s.paused = false;
+    while (engine.activeCount() > 0) try engine.step();
+    for (&streams) |*s| try expectFakeHistory(s);
+    try expectFakeHistory(&replacement);
+}
+
+test "draft bypass verifies one row a stream from the first shared round at the bypass load" {
+    var cfg = try servedModel();
+    defer cfg.deinit(gpa);
+    try cfg.setDraftBypassAt(6);
+    var target: fake.Fake = .{ .gpa = gpa };
+    defer target.deinit();
+    var clock: fake.FixedClock = .{};
+    var engine = Engine.init(gpa, &cfg, target.backend(), clock.clock());
+    defer engine.deinit();
+    var streams: [8]sm.Stream = undefined;
+    for (&streams, 0..) |*s, i| s.* = try sm.Stream.init(gpa, .{ .id = "step", .prompt = if (i % 2 == 0) &p1 else &p2, .max_new = 24, .eos = &.{}, .drafts = true });
+    defer for (&streams) |*s| s.deinit(gpa);
+    for (&streams) |*s| try engine.addStream(s);
+    // the first five joined below the load and hold drafts; the rest joined at it with none
+    for (streams[0..5]) |*s| try std.testing.expect(s.next.?.count > 0);
+    for (streams[5..]) |*s| try std.testing.expectEqual(@as(u32, 0), s.next.?.count);
+    try engine.step();
+    try std.testing.expectEqual(@as(usize, 8), target.max_verify_rows);
+    for (&streams) |*s| try std.testing.expectEqual(@as(usize, 2), s.emitted().len);
+    while (engine.activeCount() > 0) try engine.step();
+    for (&streams) |*s| try expectFakeHistory(s);
+}
+
+fn expectFakeHistory(s: *sm.Stream) !void {
+    var history: std.ArrayList(u32) = .empty;
+    defer history.deinit(gpa);
+    try history.appendSlice(gpa, s.prompt());
+    for (s.emitted()) |token| {
+        try std.testing.expectEqual(fake.next(history.items, s.sampling, history.items.len), token);
+        try history.append(gpa, token);
+    }
+}
+
+test "draft bypass refuses unsupported backends and invalid thresholds" {
+    var cfg = try model();
+    defer cfg.deinit(gpa);
+    try cfg.setDraftBypassAt(0);
+    try std.testing.expectError(error.BadDraftBypass, cfg.setDraftBypassAt(2)); // no node probabilities
+    cfg.node_probabilities = true;
+    try std.testing.expectError(error.BadDraftBypass, cfg.setDraftBypassAt(1));
+    try std.testing.expectError(error.BadDraftBypass, cfg.setDraftBypassAt(cfg.batch_streams + 1));
+    try cfg.setDraftBypassAt(2);
+    try std.testing.expectEqual(@as(u32, 2), cfg.draft_bypass_at);
+    try cfg.setDraftBypassAt(0);
+}
+
 test "drafted rounds commit the one-token decode, greedy and sampled" {
     for ([_]?Sampling{ null, .{ .seed = 5, .temperature = 0.7, .top_k = 0, .top_p = 0.95 } }) |s| {
         const drafted = try run(&.{.{ .prompt = &p1, .sampling = s }});
@@ -180,4 +363,28 @@ test "a cycle in the answer does not refire or reclose" {
     var close_count: usize = 0;
     for (plain[0].emitted) |token| close_count += @intFromBool(token == 90);
     try std.testing.expectEqual(@as(usize, 1), close_count);
+}
+
+/// The rule's learned overhead entries after one drafted request, with or without frozen timing.
+fn overheadsAfter(frozen: bool) !usize {
+    var cfg = try model();
+    defer cfg.deinit(gpa);
+    cfg.frozen_timing = frozen;
+    var target: fake.Fake = .{ .gpa = gpa };
+    defer target.deinit();
+    var clock: fake.FixedClock = .{};
+    var engine = Engine.init(gpa, &cfg, target.backend(), clock.clock());
+    defer engine.deinit();
+    var p = try SuffixLookup.init(gpa, .{ .min_match = 4 });
+    defer p.deinit();
+    var s = try sm.Stream.init(gpa, .{ .id = "s", .prompt = &.{ 1, 2, 3, 4, 5, 6 }, .max_new = 40, .eos = &.{96}, .sampling = null, .drafts = true, .proposer = p.proposer(), .think_budget = 0, .think_close = &.{ 90, 91, 92 }, .think_end = 91 });
+    defer s.deinit(gpa);
+    try engine.addStream(&s);
+    while (engine.activeCount() > 0) try engine.step();
+    return engine.rule.overhead.items.len;
+}
+
+test "frozen timing: the round loop learns no overhead from the clock" {
+    try std.testing.expect(try overheadsAfter(false) > 0);
+    try std.testing.expectEqual(@as(usize, 0), try overheadsAfter(true));
 }

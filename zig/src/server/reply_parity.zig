@@ -3,6 +3,9 @@
 //! server's (TP4's tools/dsv41/tp4/m7_reply_corpus.py: the served DeepSeek-V4.1 lane's split_thinking and
 //! parse_tool_calls). Corpus: {"tools": [[spec, ..], ..], "cases": [{"text", "tl" (index or null), "thinking", "max"}]}.
 //! Results: [{"reasoning", "answer", "content", "calls": [[name, arguments], ..]}] in case order.
+//! The record of the served lane's reading. Under the DeepSeek-V4.1 dialect the server reads replies as the official
+//! encoder does instead (reply_dsv41.zig, decision U40); tools/dsv41-hip/chat_parity/stream_gate.py lists the deliberate
+//! differences as decided_by_integration_owner.
 const std = @import("std");
 const json = @import("json.zig");
 const reply_text = @import("reply_text.zig");

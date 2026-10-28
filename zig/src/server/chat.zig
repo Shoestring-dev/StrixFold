@@ -5,6 +5,7 @@ const json = @import("json.zig");
 const errors = @import("errors.zig");
 const fields_mod = @import("fields.zig");
 const reply_text = @import("reply_text.zig");
+const reply_dsv41 = @import("reply_dsv41.zig");
 const tool_stream = @import("tool_stream.zig");
 const tool_parse = @import("tool_parse.zig");
 const prompt_mod = @import("prompt.zig");
@@ -46,6 +47,9 @@ pub const Reply = struct {
     content: []const u8,
     stop_sequence: ?[]const u8,
     reasoning: ?[]const u8,
+    /// the DeepSeek-V4.1 dialect: the calls the reply's block holds (reply_dsv41), not yet sent; other dialects parse
+    /// theirs from the content (openai.attachCalls)
+    calls: ?[]Value = null,
     tool_calls_streamed: bool,
     finish_reason: []const u8,
     prompt_tokens: usize,
@@ -241,7 +245,7 @@ pub fn generate(srv: *Server, cx: *Cx, prepared: Prepared, sink: ?Sink, gone: an
     defer srv.noteRequest(prepared.prompt_len, gen.collected.items.len, box.stats.drafted, box.stats.accepted, box.stats.rounds, received, gen.first_ns, gen.last_ns, box.stats.prefill_seconds);
     errdefer if (!gen.engine_done) gen.cancel(); // the engine writes to the mailbox until it says finished
     const result: Failure!Reply = blk: {
-        if (sink != null and input.tools.len > 0) gen.calls = tool_stream.Streamer.init(a, input.tools) catch |e| break :blk e;
+        if (sink != null and input.tools.len > 0 and srv.dialect != .deepseek_v41) gen.calls = tool_stream.Streamer.init(a, input.tools) catch |e| break :blk e;
         gen.loop(gone) catch |e| break :blk e;
         break :blk gen.finish(cx, prepared.prompt_len, received, submitted, thinking, effort, prepared.sampled, prepared.drafts);
     };
@@ -380,6 +384,12 @@ const Generation = struct {
         const all = try g.visible.extend(g.a, g.srv.text, decodeText, fresh.items);
         const text = g.stops.visible(all, true);
         if (g.visible.pending()) return; // a character still split across tokens
+        if (g.srv.dialect == .deepseek_v41) {
+            // the official reading's prefix: reasoning and content, the calls only when the reply ends (finish)
+            const v = reply_dsv41.shown(text, g.thinking);
+            try g.showUpTo(sink, &g.streamed_reasoning, v.reasoning, "reasoning_content");
+            return g.showUpTo(sink, &g.streamed, v.content, null);
+        }
         var answer = text;
         if (g.thinking) {
             const split = try reply_text.splitThinking(g.a, text, false, g.srv.markers);
@@ -403,6 +413,14 @@ const Generation = struct {
             try c.feed(answer, &out); // never the reasoning: a call it mentions is not made
             for (out.items) |d| try g.emit(sink, d);
         }
+    }
+
+    /// Streams what `now` adds to what `shown` sent (a content string, or a `key` delta).
+    fn showUpTo(g: *Generation, sink: Sink, shown: *Shown, now: []const u8, key: ?[]const u8) Failure!void {
+        const piece = shown.after(now, false);
+        if (piece.len == 0) return;
+        try shown.set(g.a, now, piece);
+        try g.emit(sink, if (key) |k| try deltaOf(g.a, k, piece) else .{ .string = piece });
     }
 
     fn emit(g: *Generation, sink: Sink, delta: Value) Failure!void {
@@ -473,12 +491,24 @@ const Generation = struct {
         const content_tokens = if (g.ignore_eos) g.collected.items else reply_text.stripTrailing(g.collected.items, g.srv.eos);
         const raw = try g.srv.text.decode(a, content_tokens);
         const visible = g.stops.visible(raw, false);
-        // closed before the think split, so a call ending an unclosed think block is the answer
-        const close = try g.closeCall(visible);
+        const v41 = g.srv.dialect == .deepseek_v41;
+        // closed before the think split, so a call ending an unclosed think block is the answer (not V4.1's reading,
+        // where an unclosed block is text)
+        const close = if (v41) "" else try g.closeCall(visible);
         const text = if (close.len > 0) try std.mem.concat(a, u8, &.{ visible, close }) else visible;
         var content: []const u8 = text;
         var reasoning: ?[]const u8 = null;
-        if (g.thinking) {
+        var calls: ?[]Value = null;
+        if (v41) {
+            const p = try reply_dsv41.parse(a, text, g.thinking);
+            content = p.content;
+            reasoning = if (p.reasoning.len > 0) p.reasoning else null;
+            calls = try reply_dsv41.openai(a, p.calls);
+            if (g.sink) |sink| {
+                try g.showUpTo(sink, &g.streamed_reasoning, p.reasoning, "reasoning_content");
+                try g.showUpTo(sink, &g.streamed, p.content, null);
+            }
+        } else if (g.thinking) {
             const split = try reply_text.splitThinking(a, text, true, g.srv.markers);
             const r = reply_text.pyStrip(split.reasoning);
             reasoning = if (r.len > 0) r else null;
@@ -488,7 +518,7 @@ const Generation = struct {
             content = h.content;
             reasoning = h.reasoning;
         }
-        if (g.sink) |sink| {
+        if (g.sink) |sink| if (!v41) {
             const thought = g.streamed_reasoning.text.items;
             if (reasoning) |r| if (std.mem.startsWith(u8, r, thought) and r.len > thought.len)
                 try g.emit(sink, try deltaOf(a, "reasoning_content", r[thought.len..]));
@@ -501,7 +531,7 @@ const Generation = struct {
                 try c.feed(if (g.thinking) content else text, &out);
                 for (out.items) |d| try g.emit(sink, d);
             };
-        }
+        };
         const prefilled = m.prefilled_ns;
         const total = seconds(finished_ns - submitted);
         const decode_s: f64 = if (prefilled) |p| @max(0, seconds(finished_ns - p)) else 0;
@@ -542,12 +572,18 @@ const Generation = struct {
         try spec.put(a, "accepted", try json.intValue(a, s.accepted));
         try spec.put(a, "acceptance_rate", .{ .float = if (s.drafted > 0) @as(f64, @floatFromInt(s.accepted)) / @as(f64, @floatFromInt(s.drafted)) else 0 });
         try spec.put(a, "tokens_per_round", .{ .float = if (s.rounds > 0) @as(f64, @floatFromInt(g.collected.items.len)) / @as(f64, @floatFromInt(s.rounds)) else 0 });
-        if (m.telemetry.len > 0) if ((try json.parse(a, m.telemetry)) == .ok) try spec.put(a, "proposer", (try json.parse(a, m.telemetry)).ok);
+        // parsed from a copy in the reply's arena: the parse keeps unescaped strings as slices of its input, and the
+        // mailbox (m.telemetry) is freed before the reply is written
+        if (m.telemetry.len > 0) switch (try json.parse(a, try a.dupe(u8, m.telemetry))) {
+            .ok => |v| try spec.put(a, "proposer", v),
+            .err => {},
+        };
         const think_end: ?u32 = if (thinking) g.srv.text.tokenId(g.srv.markers.close) else null;
         const reply: Reply = .{
             .content = content,
             .stop_sequence = g.stops.matched(raw),
             .reasoning = reasoning,
+            .calls = calls,
             .tool_calls_streamed = g.calls != null and g.calls.?.streamed,
             .finish_reason = reason,
             .prompt_tokens = prompt_len,

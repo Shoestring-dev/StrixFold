@@ -125,10 +125,10 @@ fn plan(srv: *Server, cx: *Cx, is_chat: bool, raw: Value) errors.Refused!Plan {
     var images: messages.Images = .{ .placeholder = if (srv.info.vision) |v| v.placeholder else "" };
     const take: ?*messages.Images = if (srv.info.vision != null) &images else null;
     if (is_chat) {
-        input.messages = try messages.normalizeImages(cx, body.get("messages"), "system", srv.needs_user_after_tool, take);
+        input.messages = try messages.normalizeImages(cx, body.get("messages"), "system", srv.needs_user_after_tool, srv.dialect, take);
         input.tools = try tool_specs.active(cx, body.get("tools"), body.get("tool_choice"));
     } else if (body.get("messages")) |m| if (m == .array and m.array.len > 0) {
-        input.messages = try messages.normalizeImages(cx, m, "system", srv.needs_user_after_tool, take);
+        input.messages = try messages.normalizeImages(cx, m, "system", srv.needs_user_after_tool, srv.dialect, take);
     };
     input.images = images.list.items;
     if (!is_chat and input.messages.array.len == 0) input.prompt = try legacyPrompt(srv, cx, body.get("prompt"));
@@ -141,11 +141,12 @@ fn plan(srv: *Server, cx: *Cx, is_chat: bool, raw: Value) errors.Refused!Plan {
         .null => null,
         else => 0,
     } else null;
+    if (input.max_tokens) |m| if (m < 0) return cx.refuse("max_tokens must be a positive integer");
     if (body.get("temperature")) |t| if (t.truthy()) {
         input.temperature = if (t == .float) t.float else std.fmt.parseFloat(f64, t.int) catch 0;
     };
     const sampling = try json.newObject(cx.a);
-    for ([_][]const u8{ "temperature", "top_p", "top_k", "min_p", "seed", "priority", "draft", "thinking_budget", "ignore_eos", "stop" } ++ grammar.fields) |k| if (body.get(k)) |v| try sampling.put(cx.a, k, v);
+    for ([_][]const u8{ "temperature", "top_p", "top_k", "min_p", "seed", "priority", "draft", "thinking_budget", "ignore_eos", "stop", "parallel_tool_calls" } ++ grammar.fields) |k| if (body.get(k)) |v| try sampling.put(cx.a, k, v);
     try grammar.refusal(cx, body);
     if (input.tools.len > 0 and try tool_specs.choiceRequiresCall(cx.a, body.get("tool_choice"))) try sampling.put(cx.a, "tool_call_required", .{ .bool = true });
     const thinking = try fields.thinkingFields(cx, body, srv.effort_levels);
@@ -297,8 +298,14 @@ const Run = struct {
         try o.put(r.a, "speculative", reply.speculative);
     }
 
-    /// ``ToolCallPolicy.finish``: the reply's calls parsed out of its content.
+    /// ``ToolCallPolicy.finish``: the reply's calls parsed out of its content (the DeepSeek-V4.1 dialect: the calls its
+    /// block holds, offered or not, as the official parser reads them; the one-call policy keeps the first).
     fn attachCalls(r: *Run, reply: *chat.Reply) Allocator.Error!?[]Value {
+        if (r.v41()) {
+            const calls = reply.calls orelse return null;
+            reply.finish_reason = "tool_calls";
+            return if (r.plan.policy.single and calls.len > 1) calls[0..1] else calls;
+        }
         const tools = r.plan.input.tools;
         if (tools.len == 0) return null;
         const parsed = try tool_parse.parse(r.a, reply.content, tools, r.plan.policy.maxCalls());
@@ -310,6 +317,11 @@ const Run = struct {
         reply.finish_reason = "tool_calls";
         if (r.plan.policy.single) reply.tool_calls_streamed = false;
         return if (r.plan.policy.single and calls.len > 1) calls[0..1] else calls;
+    }
+
+    /// The DeepSeek-V4.1 dialect: replies read as the official encoder reads them (reply_dsv41.zig).
+    fn v41(r: *const Run) bool {
+        return r.srv.dialect == .deepseek_v41;
     }
 
     fn fail(r: *Run, cx: *const Cx, field: []const u8) void {
@@ -365,7 +377,8 @@ const Run = struct {
         if (r.is_chat) {
             const message = try json.newObject(a);
             try message.put(a, "role", .{ .string = "assistant" });
-            try message.put(a, "content", if (calls != null) .null else .{ .string = reply.content });
+            // (V4.1: the content before the calls stays, as the official parser keeps it)
+            try message.put(a, "content", if (calls != null and (!r.v41() or reply.content.len == 0)) .null else .{ .string = reply.content });
             if (reply.reasoning) |t| if (t.len > 0) try message.put(a, "reasoning_content", .{ .string = t });
             if (calls) |c| try message.put(a, "tool_calls", .{ .array = c });
             try choice.put(a, "message", .{ .object = message });
@@ -389,6 +402,12 @@ const Run = struct {
         fn call(ctx: *anyopaque, delta: Value) error{Closed}!void {
             const s: *StreamSink = @ptrCast(@alignCast(ctx));
             const r = s.run;
+            if (r.v41() and s.tools) {
+                // V4.1's reading holds no call markup in the prose: nothing to filter, the role before the first piece
+                try r.prose();
+                r.prose_sent.appendSlice(r.a, if (delta == .string) delta.string else delta.strField("content") orelse "") catch return error.Closed;
+                return r.emit(r.chunk(delta, null) catch return error.Closed);
+            }
             if (!s.tools) {
                 if (!r.is_chat and delta != .string) return; // completions stream text only
                 return r.emit(r.chunk(delta, null) catch return error.Closed);
@@ -477,7 +496,14 @@ const Run = struct {
             r.out.vt.event(r.out.ctx, null) catch {};
             return;
         };
-        if (tools) {
+        if (r.v41()) {
+            // the calls once the reply has ended (the reasoning and content streamed as they came)
+            if (r.attachCalls(&reply) catch return) |calls| {
+                r.emit(r.chunk(roleDelta(a) catch return, null) catch return) catch return;
+                const deltas = tool_parse.deltas(a, calls) catch return;
+                for (deltas) |d| r.emit(r.chunk(d, null) catch return) catch return;
+            }
+        } else if (tools) {
             const calls = r.attachCalls(&reply) catch return;
             const tail = r.plan.policy.flush();
             if (tail.len > 0) {
