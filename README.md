@@ -45,7 +45,9 @@ No NVIDIA driver, CUDA or NCCL is used. Text only: image input is not supported 
 
 ## What this fork adds
 
-- An AMD HIP backend for TensorFold's native engine. Upstream runs on NVIDIA and Apple only.
+- An AMD HIP backend for the DeepSeek-V4.1 family. The branch this fork started from had no HIP code; TensorFold's main
+  line has its own HIP backend, and the DeepSeek and two-box USB4 changes are being moved onto it as small pull requests
+  ([#2065](https://github.com/ashhart/TensorFold/issues/2065), [#2066](https://github.com/ashhart/TensorFold/issues/2066)).
 - Strix Halo kernels for the EXL3 weights, sparse attention, top-k and the routed experts.
 - Tensor parallel across two boxes over plain USB4 networking, with prompt reading running while data moves between
   them, and the traffic split over both cables.
