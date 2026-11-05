@@ -1,0 +1,5 @@
+# CPU-only preparation environment tested for this implementation.
+--extra-index-url https://download.pytorch.org/whl/cpu
+numpy==2.3.5
+tokenizers==0.22.1
+torch==2.9.0+cpu

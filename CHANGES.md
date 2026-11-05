@@ -17,6 +17,7 @@ LICENSES/ and THIRD_PARTY_NOTICES.md are unchanged; NOTICE gains one section at 
 | `zig/tests/dsv41_hip/` | GPU smoke, ABI, glue, code-object and collectives tests |
 | `zig/src/server/` (reply_dsv41, tests) | DeepSeek-V4.1 reply handling on this backend, and tests for top-k, structure and telemetry |
 | `tools/dsv41-hip/` | Build, input preparation, serving scripts, output checks (gates, numerics, qualification), the benchmark, and the design notes (ADAPTER, COLLECTIVES-DESIGN, KERNELS, BUILD_AND_RUN, RESULTS) |
+| `tools/dsv41-hip/` input tools (prepare_inputs.py, inventory_checkpoint.py, input_common.py, snapshot_files.py, source_lock.json, assets/) | The CPU input preparation `prepare_inputs.sh` and `verify_inputs.sh` run, vendored unchanged from the component kit at def87879; the chat template is Tech2wild's (MIT, see NOTICE) |
 | `tools/dsv41-zig/inputs/`, `tools/dsv41-zig/kit/` | Token map and per-node input preparation, and kit packing |
 | `docs/RESULTS.md`, `docs/TUNING.md`, `docs/img/` | Measured results with charts, and the two-box tuning notes |
 | `README.md`, `CHANGES.md` | This fork's README and this file. Upstream's README moved to `docs/UPSTREAM-README.md`. |

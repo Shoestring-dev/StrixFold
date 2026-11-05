@@ -1,6 +1,7 @@
-# kit_pin.sh (sourced by prepare_inputs.sh and verify_inputs.sh): the component kit the CPU input tools come from.
-# tensorfold-strix, branch port/strix-halo, restored from tensorfold-strix.bundle (SHA-256 2c0112d2375f8c1f...);
-# Apache-2.0 (its LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, LICENSES/). lock.json records the bundle and both checkouts.
+# kit_pin.sh (sourced by prepare_inputs.sh and verify_inputs.sh): where the CPU input tools come from.
+# They are vendored in this directory (prepare_inputs.py, inventory_checkpoint.py, input_common.py, snapshot_files.py,
+# source_lock.json, assets/), byte-identical to tools/dsv41-hip of the component kit tensorfold-strix (branch
+# port/strix-halo, Apache-2.0) at TFP_KIT_COMMIT, the commit that prepared the measured input bundle.
 TFP_KIT_COMMIT=def87879ce82f7acaf8d8b441c7429776c87a221
 
 # input_tools HERE: the directory holding prepare_inputs.py and friends. TFP_INPUT_TOOLS if set, else HERE when the

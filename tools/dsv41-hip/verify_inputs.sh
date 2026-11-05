@@ -7,7 +7,7 @@
 # rank's cache byte-checked in full (tf-dsv41-check --bytes 1, exact entry and byte counts). Report:
 # BUNDLE.verify-rank<R>-<host>.json. Exit 0 pass, 3 pass-with-skips (a --skip-* flag), 1 fail.
 # Same environment and resource rules as prepare_inputs.sh (TFP_INPUT_TOOLS, TFP_INPUT_PYTHON, TFP_BIN; the input tools
-# must be the kit at kit_pin.sh's commit; house CPU/memory confinement; no lock: the quiet lock is retired; a
+# are the ones vendored here (see kit_pin.sh); house CPU/memory confinement; no lock: the quiet lock is retired; a
 # halo-quiet window may pause it). About 520-730 GB of reads per box (about 15 min).
 set -euo pipefail
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2; }

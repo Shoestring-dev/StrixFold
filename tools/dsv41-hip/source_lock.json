@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "engine": {
+    "repository": "https://github.com/bertholomus/TensorFold",
+    "base_commit": "3ff3b2ac1d71a789cb930068c46d9abed025eefa",
+    "patched_tree": "1beea23831603b98242311979137e91da4e92f25",
+    "license": "Apache-2.0"
+  },
+  "recipe": {
+    "repository": "https://github.com/tonyd2wild/DeepSeek-V4.1-Flash-vLLM-DGX-Spark",
+    "commit": "9fa230d3eb119f588e690bf9b87ce41ed902db60",
+    "run": "runs/2026-10-18-1017-tensorfold-tp2",
+    "license": "MIT; Copyright (c) 2026 Tech2wild"
+  },
+  "patches": [
+    {"file": "0001-feat-dsv41-each-node-s-weight-file-and-token-map-fro.patch", "sha256": "e51f24bca9b3e164b44cbce54ef22fbd0143af465c3059acba12edb62beadef8"},
+    {"file": "0002-server-opt-in-random-sampling-seed-per-request-and-t.patch", "sha256": "4824db1d9db2d2b7cbd464a1cf42b6475bbb7c75d162136af6b853800fc4aa83"},
+    {"file": "0003-dsv41-tf-dsv41-rank-cache-and-tf-dsv41-check-on-this.patch", "sha256": "0451ff82163d7098a30526a339e158479593cb0e27f4adc4c83b7296b668c762"}
+  ],
+  "donors": {
+    "hip": {"repository": "https://github.com/ashhart/TensorFold", "commit": "d46d17a784758b8a8b66badde1f728f36bdc9541", "license": "Apache-2.0"},
+    "historical_kernels": {"repository": "https://github.com/bertholomus/TensorFold", "commit": "222a9c0b6ecaa9fd3c5dbded65a668524c9510ff", "license": "Apache-2.0; preserve third-party notices"},
+    "transport_reference": {"repository": "https://github.com/kyuz0/ds4", "commit": "f46631e483e19d13f23d3c4bced7ade0d086a3ad", "license": "verify donor LICENSE before copying"}
+  },
+  "checkpoint": {
+    "repository": "LibertAIDAI/DeepSeek-V4.1-Flash-1017-EXL3-2.9bpw",
+    "revision": "c178a01284fc5c0e859d8668cffaac81ca8f4042",
+    "license": "MIT",
+    "model_type": "deepseek_v41",
+    "codebook": "mul1",
+    "expected_k2_counts": {"4": 5760, "6": 40320, "8": 1209, "10": 558, "12": 49, "16": 4},
+    "expected_tensors": 192495,
+    "file_manifest": {"path": "assets/checkpoint_files.json", "sha256": "e7ffca9022e774c43bc772ac27218cc8eec6836457fa6f73b6d69cb0a83c2199"}
+  },
+  "original": {
+    "repository": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+    "license": "MIT",
+    "engram_shard_numbers": [47, 48],
+    "file_manifest": {"path": "assets/original_files.json", "sha256": "db4ce7fe585d315038e46430813570f56c0531f2400decfb23d186e80cb7180c"}
+  },
+  "chat_template": {
+    "recipe_path": "runs/2026-10-17-1017-tensorfold/launch/chat_template.jinja",
+    "bundled_path": "assets/chat_template.jinja",
+    "sha256": "c282975e81949382a878e06060d1ef3e6e7b22628f9b51ee2188b2dfbcc7e217"
+  },
+  "limits": {"header_bytes": 67108864, "io_chunk_bytes": 4194304},
+  "qualification": {
+    "full_checkpoint_downloaded": false,
+    "full_rank_caches_verified": false,
+    "deepseek_hip_qualified": false
+  }
+}

@@ -58,3 +58,7 @@ This is a fork of the fork above, at commit 3ff3b2ac, by the StrixFold contribut
 adds an AMD HIP backend for TensorFold's native Zig engine, kernels for AMD Strix Halo (gfx1151), and tensor parallel
 over two Strix Halo boxes over USB4 networking. Everything above this section is unchanged. CHANGES.md lists the added
 and modified files.
+
+tools/dsv41-hip/assets/chat_template.jinja is the chat template of Tech2wild's DeepSeek-V4.1-Flash TensorFold recipe
+(github.com/tonyd2wild), MIT License, Copyright (c) 2026 Tech2wild; the license text is in
+tools/dsv41-hip/assets/CREATOR_LICENSE.
