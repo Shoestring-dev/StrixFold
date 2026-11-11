@@ -32,6 +32,8 @@ serve_load() {
   [ "$GRAPHS" = 0 ] || [ "$COLL_KIND" != proxy ] || [ $((ROUND_ROWS * 64640 * 4)) -le $((COLL_SLOT_KIB * 1024)) ] ||
     die "GRAPHS=1: the head gather at ROUND_ROWS=$ROUND_ROWS ($((ROUND_ROWS * 64640 * 4)) B) exceeds COLL_SLOT_KIB=$COLL_SLOT_KIB"
   # (a configuration written before these settings existed runs with them off)
+  SPAWN_UNIT=${SPAWN_UNIT:-0}
+  case $SPAWN_UNIT in 0|1) ;; *) die "SPAWN_UNIT must be 0 or 1, not $SPAWN_UNIT";; esac
   REPLAY_FLOOR=${REPLAY_FLOOR:-0} HC_SIDE=${HC_SIDE:-0} ENGRAM_AIO=${ENGRAM_AIO:-0} TOP_K_MAX=${TOP_K_MAX:-0} SEED_RANDOM=${SEED_RANDOM:-0}
   L2_PREFETCH=${L2_PREFETCH:-0}
   DRAFT_BYPASS_AT=${DRAFT_BYPASS_AT:-0}
@@ -180,18 +182,47 @@ json.dump({
 PY
 }
 
+# serve_unit NAME DIR: the transient user unit's name for a run's process (SPAWN_UNIT=1): tfp-NAME-<run id>.
+serve_unit() { echo "tfp-$1-$(basename "$2" | tr -dc '0-9A-Za-z' | tail -c 24)"; }
+
+# serve_unit_start UNIT LOG CMD...: CMD as the transient user unit UNIT (its output appended to LOG, cwd the log's
+# directory), outside the caller's session: logind's KillUserProcesses=yes ends a session's processes with the session,
+# a unit under the user manager stays. The unit's main process is CMD; nothing stops it but the caller (serve_stop,
+# serve_lock_release), and a finished unit is collected.
+serve_unit_start() {
+  local unit=$1 log=$2; shift 2
+  systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
+  systemd-run --user --quiet --collect --unit "$unit" -p WorkingDirectory="$(dirname "$log")" \
+    -p StandardOutput=append:"$log" -p StandardError=append:"$log" -- "$@" ||
+    die "systemd-run --user could not start unit $unit on $(hostname) (SPAWN_UNIT=1 needs a user manager)"
+}
+
 # serve_spawn PIDFILE LOG LOCKED: start SERVE_CMD with exactly SERVE_ENV in the background (on ENGINE_CPUS when set),
 # under this box's GPU lock unless LOCKED is 1 (the caller holds it); PIDFILE gets the rank's own pid (not the lock
-# wrapper's: a signal to it reaches the rank), written once the lock is held and the rank starts.
+# wrapper's: a signal to it reaches the rank), written once the lock is held and the rank starts. SPAWN_UNIT=1: the
+# rank runs as the transient user unit tfp-rank<R>-<run id> instead of a nohup'd child of this session.
 serve_spawn() {
   local pidfile=$1 log=$2 locked=$3 lock=() pin=() wrap=() wv=WRAP$RANK
   [ "$locked" = 1 ] || lock=(flock -w "$LOCK_WAIT_S" /var/tmp/halo-gpu.lock)
   [ -n "${ENGINE_CPUS:-}" ] && pin=(taskset -c "$ENGINE_CPUS")
   [ -n "${!wv:-}" ] && read -ra wrap <<< "${!wv}"
   rm -f "$pidfile"
+  local i
+  if [ "$SPAWN_UNIT" = 1 ]; then
+    local unit; unit=$(serve_unit "rank$RANK" "$(dirname "$pidfile")")
+    : > "$log"
+    serve_unit_start "$unit" "$log" "${lock[@]}" "$SERVE_TOOLS/pidexec.sh" "$pidfile" "${pin[@]}" env -i "${SERVE_ENV[@]}" "${wrap[@]}" "${SERVE_CMD[@]}"
+    for i in $(seq 1 "$LOCK_WAIT_S"); do
+      [ -s "$pidfile" ] && return 0
+      systemctl --user is-active --quiet "$unit" || die "the rank did not start (unit $unit ended: lock wait or exec failed; $log)"
+      sleep 1
+    done
+    systemctl --user stop "$unit" >/dev/null 2>&1 || true
+    die "the GPU lock on $(hostname) was not free within ${LOCK_WAIT_S}s"
+  fi
   # in the run's directory (the log's): the deployment is read-only, and a wrapper (rocprofv3) writes beside it
   (cd "$(dirname "$log")" && exec nohup "${lock[@]}" sh -c 'echo $$ > "$0"; exec "$@"' "$pidfile" "${pin[@]}" env -i "${SERVE_ENV[@]}" "${wrap[@]}" "${SERVE_CMD[@]}") </dev/null >"$log" 2>&1 &
-  local wrapper=$! i
+  local wrapper=$!
   for i in $(seq 1 "$LOCK_WAIT_S"); do
     [ -s "$pidfile" ] && return 0
     kill -0 "$wrapper" 2>/dev/null || die "the rank did not start (lock wait or exec failed; $log)"
@@ -220,10 +251,22 @@ serve_stop() {
 # serve_lock_hold DIR [WAIT_S]: hold this box's GPU lock for the run (a holder process; its pid in DIR/lock.pid once
 # held), waiting at most WAIT_S (default LOCK_WAIT_S); a holder that did not get it in time is taken down, never left.
 serve_lock_hold() {
-  local dir=$1 wait=${2:-$LOCK_WAIT_S}
+  local dir=$1 wait=${2:-$LOCK_WAIT_S} i
   rm -f "$dir/lock.pid"
+  if [ "$SPAWN_UNIT" = 1 ]; then  # the holder as a unit (tfp-lock<R>-<run id>): it must outlive this session too
+    local unit; unit=$(serve_unit "lock$RANK" "$dir")
+    serve_unit_start "$unit" "$dir/lock.log" flock -w "$wait" /var/tmp/halo-gpu.lock "$SERVE_TOOLS/pidexec.sh" "$dir/lock.pid" sleep 86400
+    for i in $(seq 1 "$wait"); do
+      [ -s "$dir/lock.pid" ] && return 0
+      systemctl --user is-active --quiet "$unit" || break
+      sleep 1
+    done
+    [ -s "$dir/lock.pid" ] && return 0
+    systemctl --user stop "$unit" >/dev/null 2>&1 || true; rm -f "$dir/lock.pid"
+    die "the GPU lock on $(hostname) was not free within ${wait}s"
+  fi
   nohup flock -w "$wait" /var/tmp/halo-gpu.lock sh -c "echo \$\$ > '$dir/lock.pid'; exec sleep 86400" </dev/null >/dev/null 2>&1 &
-  local holder=$! i
+  local holder=$!
   for i in $(seq 1 "$wait"); do
     [ -s "$dir/lock.pid" ] && return 0
     kill -0 "$holder" 2>/dev/null || break
