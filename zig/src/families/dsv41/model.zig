@@ -50,8 +50,8 @@ const HipKit = if (gpu.backend == .hip) *gpu.Kit else void;
 pub const chunk_rows = 2048;
 
 /// The version of lanes.zig's frames, rank 0 to rank 1 (the handshake compares it): 2 since fill_chunk carries rank 0's
-/// Engram read-ahead plan (2026-10-22).
-pub const frame_protocol = 2;
+/// Engram read-ahead plan (2026-10-22); 3 since pass carries the streams' draft sampling keys (draft_temperature).
+pub const frame_protocol = 3;
 
 /// The prompt chunk buffers' rows: one of chunk_rows, or two halves when chunks split (TF_DS_PREFILL_SPLIT).
 pub fn chunkCaps(split_min: usize) [2]usize {
@@ -1248,14 +1248,21 @@ pub const Model = struct {
         return m.logits[0..m.vocab];
     }
 
+    /// Whether a pass may carry the streams' sampling keys (draft.Drafter.races): the same on both ranks, which run
+    /// one kit.
+    pub fn draftRaces(m: *const Model) bool {
+        return if (m.dr) |*dr| dr.races(&m.eng) else false;
+    }
+
     /// The drafter's batched pass for N streams: each one's pending token at position q0 in its slot (its rings hold
-    /// its positions below q0), `steps` drafts each (the drafter's drafts and confidences on the host).
-    pub fn pass(m: *Model, tokens: []const i64, q0: []const i64, slots: []const i64, steps: usize) !void {
+    /// its positions below q0), `steps` drafts each (the drafter's drafts and confidences on the host). `keys`
+    /// (draftRaces()): each stream's drafts are drawn with its sampling key instead of taken as the best token.
+    pub fn pass(m: *Model, tokens: []const i64, q0: []const i64, slots: []const i64, steps: usize, keys: ?[]const draft.SampleKey) !void {
         if (m.dr == null) return error.NoDrafter;
         const dr = &m.dr.?;
         const pool = &m.dpool.?;
         for (q0, slots) |q, s| pool.absorbed[@intCast(s)] = @intCast(q);
-        try dr.pass(&m.eng, &m.ch, pool, tokens, q0, slots, steps, null);
+        try dr.pass(&m.eng, &m.ch, pool, tokens, q0, slots, steps, keys, null);
         try m.coll.check(); // (the pass read its drafts back: the stream is synchronized)
     }
 };
@@ -1280,6 +1287,6 @@ test "a launch identity is one plan token of at most 16 characters" {
 
 test "the handshake names what orders a prompt chunk's gathers: split, zip, chunk rows, phase timer, frames" {
     var b: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=2", try Model.gatherOrder(&b, 256, true, false));
-    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=2", try Model.gatherOrder(&b, 0, true, true));
+    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=3", try Model.gatherOrder(&b, 256, true, false));
+    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=3", try Model.gatherOrder(&b, 0, true, true));
 }
