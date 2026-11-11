@@ -74,6 +74,9 @@ On a Bosgame M5 (same chip, ships with Windows), first follow [docs/BOSGAME-M5.m
 Driving it from an agent harness (tool calls, and keeping agents out of repeat loops):
 [docs/AGENTS.md](docs/AGENTS.md).
 
+Images for the text-only DeepSeek, through a small local vision model that describes them and answers follow-up
+questions: [docs/LOOK-AT-IMAGE.md](docs/LOOK-AT-IMAGE.md).
+
 ## Tuning the two boxes
 
 What made the link between the boxes fast and steady (MTU, which traffic goes on which cable, TCP retransmit floors,
