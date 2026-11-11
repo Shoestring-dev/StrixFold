@@ -68,6 +68,9 @@ The full list, file by file, is in [CHANGES.md](CHANGES.md).
 The commands this port runs, in order (build, prepare the inputs, serve, check, benchmark), are in
 [tools/dsv41-hip/BUILD_AND_RUN.md](tools/dsv41-hip/BUILD_AND_RUN.md).
 
+On a Bosgame M5 (same chip, ships with Windows), first follow [docs/BOSGAME-M5.md](docs/BOSGAME-M5.md): BIOS, Debian
+13, the 7.2.7 kernel with Secure Boot on, and ROCm 10.0.
+
 ## Tuning the two boxes
 
 What made the link between the boxes fast and steady (MTU, which traffic goes on which cable, TCP retransmit floors,
