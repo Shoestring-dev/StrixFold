@@ -13,7 +13,7 @@
 //!   TF_COLL_STRIPE_MIB  payloads of at least this many MiB are split over both links (default 4)
 //!   TF_COLL_RTO_MIN_US  TCP_RTO_MIN_US per data socket (default 8000; 0 keeps the kernel's 200 ms floor)
 //!   TF_COLL_PROGRESS_MS a call fails with Timeout when nothing moves for this long (default 2000)
-//!   TF_COLL_KIND      host (default; eager only) or proxy (tcp_proxy.zig: kernels + a proxy thread, capturable)
+//!   TF_COLL_KIND      host (default; eager only), proxy (tcp_proxy.zig, capturable) or rdma (rdma_proxy.zig)
 //!   TF_COLL_PIPE_MIB  gathers of at least this many MiB are pipelined in chunks (default 8; 0 disables): the copy
 //!                     of chunk k+1 to host memory and the upload of chunk k-1 overlap the exchange of chunk k; the
 //!                     own block's copy runs on the copy stream too, off the caller's stream
@@ -522,12 +522,13 @@ pub fn openHost(gpa: std.mem.Allocator, d: *const gpu.Driver, rank: u32, se: Ses
     return t;
 }
 
-/// coll.Open for HIP builds: TF_COLL_KIND=host (default) or proxy (tcp_proxy.zig: capturable, needs the kit).
+/// coll.Open for HIP builds: TF_COLL_KIND=host (default), proxy (tcp_proxy.zig) or rdma (rdma_proxy.zig), with the kit.
 pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, kit: ?*const coll.Kit, fan: *const Fan, id: *const coll.Identity) anyerror!coll.Coll {
     const kind = if (c.getenv("TF_COLL_KIND")) |v| std.mem.span(v) else "host";
-    if (std.mem.eql(u8, kind, "proxy")) {
+    const proxy = std.mem.eql(u8, kind, "proxy");
+    if (proxy or std.mem.eql(u8, kind, "rdma")) {
         const k = kit orelse return error.ProxyNeedsKit;
-        return @import("tcp_proxy.zig").open(gpa, io, ctx, k, fan, id);
+        return if (proxy) @import("tcp_proxy.zig").open(gpa, io, ctx, k, fan, id) else @import("rdma_proxy.zig").open(gpa, io, ctx, k, fan, id);
     }
     if (!std.mem.eql(u8, kind, "host")) return error.BadSetting;
     const se = try handshake(fan, id, "kind=host");

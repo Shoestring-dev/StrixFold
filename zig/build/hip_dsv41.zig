@@ -165,8 +165,7 @@ fn lanesModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
     return b.createModule(.{ .root_source_file = b.path("zig/src/core/lanes/lanes.zig"), .target = target, .optimize = optimize, .link_libc = true });
 }
 
-/// The dsv41 family on HIP (`root` dsv41.zig for programs, hip_test.zig for its tests): gpu (HIP), lanes and core;
-/// no cuda, nccl or fabric module exists in this graph. hipblas_abi_check.c checks hipblas.zig against the headers.
+/// The dsv41 family on HIP (dsv41.zig for programs, hip_test.zig for tests): gpu, lanes, core, verbs; no cuda, fabric.
 fn familyModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, o: Options, gpu: *std.Build.Module, lanes: *std.Build.Module, root: []const u8) *std.Build.Module {
     return familyWith(b, target, optimize, o, gpu, lanes, coreModule(b, target, optimize), root);
 }
@@ -176,6 +175,7 @@ fn familyWith(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
     m.addImport("gpu", gpu);
     m.addImport("lanes", lanes);
     m.addImport("core", core);
+    m.addImport("verbs", b.createModule(.{ .root_source_file = b.path("zig/src/fabric/verbs.zig"), .target = target, .optimize = optimize, .link_libc = true }));
     m.addIncludePath(.{ .cwd_relative = o.include });
     m.addCSourceFile(.{ .file = b.path("zig/src/families/dsv41/hipblas_abi_check.c"), .flags = &.{ "-std=c11", "-D__HIP_PLATFORM_AMD__", "-Wall", "-Werror" } });
     // hip_load.zig's test holds its kernel specs to the registry

@@ -5,6 +5,8 @@
 # Each case prints the two ranks' result lines and a PASS/FAIL against the expected errors; the last two are negative
 # controls of the word-for-word check. For the proxy transport:
 #   TF_COLL_KIND=proxy EXTRA_ARGS="--kit DIR" tools/dsv41-hip/coll_fault_matrix.sh
+# For the RDMA proxy (rdma_proxy.zig; both ranks' QPs on this box's one HCA, loopback):
+#   TF_COLL_KIND=rdma TF_RDMA_DEVICES=<ibdev> EXTRA_ARGS="--kit DIR" tools/dsv41-hip/coll_fault_matrix.sh
 # The ranks run on cores 5 and 6 and their proxy threads on 7 and 4: two spinning threads on one core wait for the
 # scheduler tick (4 ms at HZ=250) at every handoff.
 set -u
@@ -45,7 +47,7 @@ ENV0="TF_COLL_RTO_MIN_US=8000" ENV1="TF_COLL_RTO_MIN_US=12000" run_case "handsha
 # by both ranks (and once more in the first graph replay when the transport is capturable)
 run_control() {  # name, corrupt spec
   local name=$1 spec=$2 g=""
-  [ "${TF_COLL_KIND:-host}" = proxy ] && g="--graph 2"
+  [[ "${TF_COLL_KIND:-host}" =~ ^(proxy|rdma)$ ]] && g="--graph 2"
   PORT=$((PORT + 40))
   env TF_COLL_PROXY_CPU=7 ${ENV1:-} taskset -c 5 $BIN 1 127.0.0.1 $PORT --corrupt $spec --prefill-chunks 0 $g ${EXTRA_ARGS:-} > /tmp/w-link-f1.txt 2>&1 &
   local p1=$!

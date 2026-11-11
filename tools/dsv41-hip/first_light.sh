@@ -66,7 +66,16 @@ for k in ("deploy", "kit_manifest_sha256", "config_sha256"):
     x, y = (a[k]["commit"], b[k]["commit"]) if k == "deploy" else (a[k], b[k])
     if x != y:
         sys.exit(f"the ranks differ in {k}: rank 0 {x}, rank 1 {y}")
-print(f"both ranks: deploy {a['deploy']['commit'][:12]}, kit {a['kit_manifest_sha256'][:12]}, config {a['config_sha256'][:12]}")
+# the transport by name: one config hash already says so, but a mixed pair (one rank's TF_COLL_KIND tcp proxy or
+# host, the other's rdma) is named here before any rank starts, and the engines' handshake refuses it too (kind=)
+ea, eb = a["env"], b["env"]
+for k in ("TF_COLL_KIND", "TF_TP_STRIPE", "TF_RDMA_DEVICES", "TF_RDMA_IFNAME", "TF_RDMA_GID_INDEX"):
+    if ea.get(k) != eb.get(k):
+        sys.exit(f"the ranks differ in {k}: rank 0 {ea.get(k, '(unset)')}, rank 1 {eb.get(k, '(unset)')}"
+                 + (" (a tcp/rdma mixed pair)" if k == "TF_COLL_KIND" else ""))
+kind = ea.get("TF_COLL_KIND", "host")
+wire = f"rdma (devices {ea.get('TF_RDMA_DEVICES') or ea.get('TF_RDMA_IFNAME') or 'resolved'}, gid {ea.get('TF_RDMA_GID_INDEX', '3')})" if kind == "rdma" else f"tcp ({kind})"
+print(f"both ranks: deploy {a['deploy']['commit'][:12]}, kit {a['kit_manifest_sha256'][:12]}, config {a['config_sha256'][:12]}, collectives {wire}")
 PY
   trap 'echo "first light failed: taking run $RUN_ID down" >&2; down; exit 1' ERR
   local try

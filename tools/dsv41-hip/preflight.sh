@@ -1,6 +1,7 @@
 #!/bin/bash
 # preflight.sh [OUT_DIR] [--baseline OLD.json] [--no-hip-probe]
 # preflight.sh --diff OLD.json NEW.json
+# preflight.sh --rdma-check [rdma_check.py options]   (the RDMA checks alone, exit 1 on a failure; TRANSPORT=rdma)
 #
 # Host, toolchain, memory, disk, network and power inventory for the TensorFold DeepSeek -> Strix Halo port
 # (handoff section 4). Writes OUT_DIR/preflight-<host>.json and OUT_DIR/raw-<host>/ (every command's raw output).
@@ -21,6 +22,10 @@
 # --baseline OLD.json embeds a drift report against an earlier preflight (packages, holds, kernel, BIOS, toolchain
 # versions and binary hashes); --diff OLD NEW prints that report for two existing files and exits 1 on any drift.
 # Run it at every milestone review and diff against the previous milestone's JSON.
+# The JSON's "rdma" section (rdma_check.py inventory): the box's ibdevs, the chosen one's port state, rate, PCIe link,
+# GID (PREFLIGHT_RDMA_GID, default 3), uverbs node and whether it is writable, and the memlock limit against
+# PREFLIGHT_RDMA_MEMLOCK_MIB (default 256); its "ok" is what a TRANSPORT=rdma rank needs (serve_lib.sh runs the
+# same check before a rank starts). More than one ibdev and no PREFLIGHT_RDMA_DEV / PREFLIGHT_RDMA_IFNAME: not ok.
 set -u
 SCRIPT=$(readlink -f "$0")
 HERE=$(dirname "$SCRIPT")
@@ -30,6 +35,7 @@ while [ $# -gt 0 ]; do
     --baseline) BASELINE=$(readlink -f "$2"); shift 2 ;;
     --diff) DIFF_OLD=$2 DIFF_NEW=$3; shift 3 ;;
     --no-hip-probe) HIP_PROBE=0; shift ;;
+    --rdma-check) shift; exec python3 "$HERE/rdma_check.py" "$@" ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     -*) echo "preflight.sh: unknown option $1" >&2; exit 2 ;;
     *) OUT=$1; shift ;;
@@ -486,6 +492,11 @@ R["network"] = {"interfaces": ifs, "routes": json.loads(ipr) if ipr else None, "
                 "peer_ping": peers,
                 "sysctl": {k: rd("/proc/sys/" + k.replace(".", "/")) for k in ("net.core.busy_poll", "net.core.busy_read", "net.core.rmem_max", "net.core.wmem_max", "net.core.netdev_max_backlog", "net.ipv4.tcp_rmem", "net.ipv4.tcp_wmem", "net.ipv4.tcp_low_latency", "net.ipv4.tcp_congestion_control")}}
 
+# ---- rdma (TRANSPORT=rdma: rdma_proxy.zig's device; the same checks serve_lib.sh makes before a rank starts)
+from rdma_check import inventory as rdma_inventory  # noqa: E402
+R["rdma"] = rdma_inventory(os.environ.get("PREFLIGHT_RDMA_DEV") or None, os.environ.get("PREFLIGHT_RDMA_IFNAME") or None,
+                           int(os.environ.get("PREFLIGHT_RDMA_GID", "3")), int(os.environ.get("PREFLIGHT_RDMA_MEMLOCK_MIB", "256")))
+
 # ---- clocks, power, temperatures
 govs, epps, drivers = {}, {}, {}
 for c in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq"):
@@ -518,7 +529,7 @@ if os.environ.get("BASELINE"):
     R["drift_vs_baseline"] = {"baseline": os.environ["BASELINE"], **drift(json.load(open(os.environ["BASELINE"])), R)}
 out = os.path.join(OUT, f"preflight-{H}.json")
 with open(out, "w") as f: json.dump(R, f, indent=1, default=str)
-print(out, "hip_probe:", R["gpu"]["hip_probe"]["status"], "odirect:",
+print(out, "hip_probe:", R["gpu"]["hip_probe"]["status"], "rdma:", ("ok " + str(R["rdma"]["device"])) if R["rdma"]["ok"] else "FAIL " + ", ".join(k for k, c in R["rdma"]["checks"].items() if not c["ok"]), "odirect:",
       [p.get("status") for p in R["disk"]["odirect_probe"]] if isinstance(R["disk"]["odirect_probe"], list) else R["disk"]["odirect_probe"],
       "zig:", [z["version"] for z in zigs], "unavailable:", R["unavailable"])
 PY

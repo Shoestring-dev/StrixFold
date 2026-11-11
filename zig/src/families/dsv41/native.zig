@@ -188,7 +188,8 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
         .port = port,
         .engram_dir = getenv("TF_DS_ENGRAM"),
         .token_map = getenv("TF_DS_TOKEN_MAP"),
-        .rdma_devices = nonEmpty(getenv("TF_RDMA_DEVICES")),
+        // the verbs ring is CUDA's; on HIP TF_RDMA_DEVICES names rdma_proxy's devices, which reads it itself
+        .rdma_devices = if (gpu.features.verbs_rdma) nonEmpty(getenv("TF_RDMA_DEVICES")) else null,
         .rdma_kernels = getenv("TF_DS_RDMA_KERNELS"),
         .graphs = if (getenv("TF_DS_GRAPHS")) |v| !std.mem.eql(u8, v, "0") else false,
         .side = if (getenv("TF_DS_HC_SIDE")) |v| !std.mem.eql(u8, v, "0") else false,
