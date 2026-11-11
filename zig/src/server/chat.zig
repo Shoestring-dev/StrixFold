@@ -174,6 +174,11 @@ pub fn prepare(srv: *Server, cx: *Cx, input: Input, gone: anytype) Failure!Prepa
     if (system_len > 0) for ([_]i64{ @as(i64, @intCast(system_len)) - 2048, @as(i64, @intCast(system_len)) - 512, @intCast(system_len) }) |cut| {
         if (cut >= 512) try shared.append(a, @intCast(cut));
     };
+    // the client's own shared prefix (`shared_messages`: k): the end of its first k messages, kept as a shared cut
+    if (f.get("shared_messages")) |v| if (v.int64()) |k| if (k > 0 and input.prompt == null) {
+        const cut = prompt_mod.messagesPrefixLen(srv, cx, input.messages, @intCast(k), input.tools, rendered.ids, thinking, effort);
+        if (cut > 0) try shared.append(a, @intCast(cut));
+    };
     const sampling = try srv.resolveSampling(cx, f, input.temperature, rendered.ids);
     const draft_field = f.get("draft");
     const drafts = srv.config.use_drafts and !(draft_field != null and draft_field.? == .bool and !draft_field.?.bool);

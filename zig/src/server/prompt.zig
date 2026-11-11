@@ -151,12 +151,23 @@ pub fn systemPrefixLen(srv: *Server, cx: *Cx, messages: Value, tools: []const Va
         const role = m.get("role") orelse continue;
         if (role == .string and std.mem.eql(u8, role.string, "user")) break i;
     } else return 0;
-    const probe = cx.a.alloc(Value, first_user + 1) catch return 0;
-    @memcpy(probe[0..first_user], messages.array[0..first_user]);
+    return probedPrefix(srv, cx, messages, first_user, tools, prompt_ids, thinking, effort);
+}
+
+/// The tokens the first `k` messages render to as a prefix of `prompt_ids` (`shared_messages`); 0 outside or under 512.
+pub fn messagesPrefixLen(srv: *Server, cx: *Cx, messages: Value, k: usize, tools: []const Value, prompt_ids: []const u32, thinking: bool, effort: ?[]const u8) usize {
+    if (messages != .array or k == 0 or k >= messages.array.len) return 0;
+    return probedPrefix(srv, cx, messages, k, tools, prompt_ids, thinking, effort);
+}
+
+/// The first `n` messages and a probe user turn rendered: how far their ids agree with the prompt's (under 512: 0).
+fn probedPrefix(srv: *Server, cx: *Cx, messages: Value, n: usize, tools: []const Value, prompt_ids: []const u32, thinking: bool, effort: ?[]const u8) usize {
+    const probe = cx.a.alloc(Value, n + 1) catch return 0;
+    @memcpy(probe[0..n], messages.array[0..n]);
     const user = json.newObject(cx.a) catch return 0;
     user.put(cx.a, "role", .{ .string = "user" }) catch return 0;
     user.put(cx.a, "content", .{ .string = "\u{2063}probe" }) catch return 0;
-    probe[first_user] = .{ .object = user };
+    probe[n] = .{ .object = user };
     var scratch: Cx = .{ .a = cx.a };
     const other = renderIds(srv, &scratch, .{ .array = probe }, tools, thinking, effort, true) catch return 0;
     var shared: usize = 0;
