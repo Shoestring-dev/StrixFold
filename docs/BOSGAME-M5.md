@@ -145,12 +145,24 @@ cat /sys/class/drm/card*/device/mem_info_gtt_total   # 133143986176 (124 GiB)
 ## 7. ROCm 10.0
 
 ```bash
-sudo apt install amdrocm-core-sdk10.0-gfx1151=10.0.0-4 amdrocm-core10.0-gfx1151=10.0.0-4
-sudo apt-mark hold $(dpkg-query -W -f '${Package}\n' 'amdrocm*')
+sudo apt install amdrocm-core-sdk10.0-gfx1151=10.0.0-4 amdrocm-core10.0-gfx1151=10.0.0-4 \
+  therock-gfx1151=10.0+rex1bvdebian13.1
+sudo apt-mark hold $(dpkg-query -W -f '${Package}\n' 'amdrocm*') therock-gfx1151
+sudo ldconfig
 sudo usermod -aG render,video "$USER"    # then log out and back in
 /opt/rocm/core-10.0/bin/rocminfo | grep -m1 gfx1151
 /opt/rocm/core-10.0/bin/hipconfig --version   # 7.15...
+ldconfig -p | grep -c libamdhip64             # 2
 ```
+
+`therock-gfx1151` is small but needed: it registers ROCm's libraries with the system. Without it `rocminfo` still
+works, but StrixFold's programs stop with `DriverUnavailable` because they can't load the GPU runtime.
+
+On one M5 we built StrixFold's GPU tests (`zig_build.sh test test-dsv41-hip-host native-hip dsv41-hip-gpu-test`, then
+`run_gpu_tests.sh`): smoke 14 of 14, ABI 6 of 6, glue 9 of 10. The one failure is expected on this box: the GPU's
+timer runs at 100 MHz while ROCm reports 99.81 MHz (the Ryzen AI Halo's timer really runs at 99.81), so the `clock`
+check sees about 0.2% more time than the host. The engine uses that rate only for timings and GPU wait deadlines, so
+on an M5 they run about 0.2% short.
 
 That's the stack in [Tested on](../README.md#tested-on). From here, link the two boxes with two USB4 cables
 ([TUNING.md](TUNING.md)) and follow [BUILD_AND_RUN.md](../tools/dsv41-hip/BUILD_AND_RUN.md). Each M5 has two USB4
@@ -160,6 +172,7 @@ ports, so a pair uses both.
 
 - **The box doesn't see the USB stick:** Fast Boot is still on, or the stick is in a front port; try a rear USB-A port.
 - **It starts Windows instead of the installer:** use Boot Override (step 1) rather than changing the boot order.
+- **`DriverUnavailable` from StrixFold's programs:** `therock-gfx1151` is missing, or run `sudo ldconfig` (step 7).
 - **The GPU shows about 62 GiB instead of 124:** the options from step 5 aren't in the boot menu. Run
   `sudo update-grub` again and restart.
 - **"bad shim signature" or the kernel won't start:** the certificate isn't enrolled. In the GRUB menu choose
