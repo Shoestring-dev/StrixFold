@@ -46,6 +46,8 @@ pub const Rules = struct {
     min_gap: u32 = 256,
     /// Shorter prompts keep nothing: below it a mark's extra prompt call costs more than a later turn's reuse saves.
     min_prompt: u32 = 4096,
+    /// A family keeping states only at multiples of this (0: anywhere): a mark or shared cut sits at the one below.
+    keep_step: u32 = 0,
 };
 
 pub const Entry = struct {
@@ -115,6 +117,13 @@ pub const Store = struct {
         return s.budget -| s.held -| s.spare();
     }
 
+    /// Where a state asked at `w` is kept: the chunk start at or before it (planned), the keep_step multiple, or w
+    fn keepAt(s: *const Store, starts: []const u32, w: u32) u32 {
+        if (s.rules.planned) return floorStart(starts, w);
+        if (s.rules.keep_step > 0) return w / s.rules.keep_step * s.rules.keep_step;
+        return w;
+    }
+
     /// Whether a state at `at` may start or end a prompt pass: anywhere, or a chunk start for planned families.
     fn usable(s: *const Store, at: u32, starts: []const u32) bool {
         return at > 0 and (!s.rules.planned or std.mem.indexOfScalar(u32, starts, at) != null);
@@ -153,7 +162,7 @@ pub const Store = struct {
         if (e == null) s.counts.misses += 1;
         const marks_ = try s.fitting(a, try s.marks(a, prompt, if (e) |x| x.at else 0, history_len, shared, starts, if (e) |x| x.last else &.{}));
         for (shared) |w| { // the shared cuts this pass keeps: their states serve other conversations too
-            const at = if (s.rules.planned) floorStart(starts, w) else w;
+            const at = s.keepAt(starts, w);
             if (std.mem.indexOfScalar(u32, marks_, at) != null) s.noteShared(prompt[0 .. at + s.rules.lookahead]);
         }
         s.reserve(prompt, e, marks_);
@@ -232,7 +241,7 @@ pub const Store = struct {
         }
         try want.appendSlice(a, shared);
         for (want.items, 0..) |w, k| {
-            const at = if (s.rules.planned) floorStart(starts, w) else w;
+            const at = s.keepAt(starts, w);
             if (at <= from or at + s.rules.lookahead > prompt.len or at >= prompt.len or !s.usable(at, starts)) continue;
             if (k > 0) { // the history's mark always; the others only away from it, each other and the resume point
                 if (at - from < s.rules.min_gap) continue;
@@ -340,6 +349,10 @@ pub const Store = struct {
         e.last = s.gpa.dupe(u32, prompt) catch return s.drop(e, have, false);
         const key = m.key;
         e.saved = read(s.family.ptr, im.dir, key, m.at) catch |err| {
+            if (err == error.ContextFull) { // no room for its rows now: the file stays for a later prompt
+                note("the learned {d} tokens wait on disk: no room in the pool now", .{e.at});
+                return s.drop(e, have, false);
+            }
             note("reading the learned {d} tokens failed ({s}); forgotten, a later pass learns them again", .{ e.at, @errorName(err) });
             s.unlearn(im, key);
             return s.drop(e, have, false);

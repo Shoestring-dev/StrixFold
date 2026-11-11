@@ -98,7 +98,28 @@ pub const Snaps = struct {
     save: *const fn (*anyopaque, ?*anyopaque, u32) anyerror!*anyopaque,
     restore: *const fn (*anyopaque, ?*anyopaque, *anyopaque) anyerror!void,
     drop: *const fn (*anyopaque, *anyopaque) void,
+    /// --learn: a kept state to and from each rank's own disk (lanes.zig snap_persist / snap_load / snap_forget).
+    write: ?*const fn (*anyopaque, *anyopaque, [:0]const u8, u64) anyerror!void = null,
+    read: ?*const fn (*anyopaque, [:0]const u8, u64, u32) anyerror!*anyopaque = null,
+    forget: ?*const fn (*anyopaque, [:0]const u8, u64) void = null,
+    /// States are kept only at chunk ends (prompt_cache Rules.keep_step).
+    keep_step: u32 = 0,
+    /// What a learned state's bits depend on, hashed (its directory under --learn-dir).
+    identity: u64 = 0,
 };
+
+/// A learned state's identity: the pinned inputs (rank cache, kit, Engram, token map, deploy, bundle, conf) and layout.
+fn learnIdentity(dir: []const u8, m: *const model.Model) u64 {
+    var h = std.hash.Wyhash.init(0xd541);
+    h.update(dir);
+    for ([_][:0]const u8{ "TF_DS_RANK_CACHE", "TF_DS_KIT", "TF_DS_ENGRAM", "TF_DS_TOKEN_MAP", "TF_DS_DEPLOY", "TF_DS_BUNDLE", "TF_DS_CONF" }) |k| {
+        h.update(k);
+        h.update(getenv(k) orelse "-");
+    }
+    const words = [_]u64{ model.frame_protocol, m.world, m.rowsLayout(), model.chunk_rows };
+    h.update(std.mem.sliceAsBytes(&words));
+    return h.final();
+}
 
 /// The rank's model and the backend over it (what `open` hands the server, freed by `deinit`).
 const State = struct {
@@ -201,7 +222,7 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
     st.lanes.vision = st.vision;
     // the pool is the model's (preallocated): a stream takes no device memory of its own
     const L = lanes_mod.Lanes;
-    const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn };
+    const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn, .write = L.snapWriteFn, .read = L.snapReadFn, .forget = L.snapForgetFn, .keep_step = model.chunk_rows, .identity = learnIdentity(dir, st.m) };
     return .{ .backend = st.lanes.backend(), .facts = st.lanes.facts(), .rows = @intCast(st.m.eng.round_rows), .stream_bytes = 0, .ctx = st, .deinit = deinitFn, .snaps = snaps, .vision = if (gpu.features.vision) (if (st.vision) |v| v.hook() else null) else null, .structures = st.vocab != null, .context_window = lanes_mod.usableContext(st.m.pool_cap, st.m.eng.round_rows) };
 }
 

@@ -20,6 +20,7 @@ const round = @import("round.zig");
 const draft = @import("draft.zig");
 const sampling = @import("sampling.zig");
 const link = @import("link.zig");
+const state_file = @import("state_file.zig");
 const gpu = @import("gpu");
 /// The vision tower's type: CUDA builds only (gpu.features.vision); an empty type a HIP build never fills.
 pub const VisionTower = if (gpu.features.vision) @import("vision.zig").Vision else opaque {};
@@ -75,8 +76,8 @@ fn topTwo(row: []const f32) [2]struct { u32, f32 } {
 /// DIR/<name>.f32 and a JSON beside it (DIR/<name>.json: rows, columns, vocab_size, sha256, the top two ids and logits).
 pub var logits_dump: ?[]const u8 = null;
 
-/// The primitives rank 0 sends rank 1 (each frame: kind u8, step u64, its fields little-endian).
-pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9 };
+/// The primitives rank 0 sends rank 1 (kind u8, step u64, fields little-endian); persist and load get one byte back.
+pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9, snap_persist = 10, snap_load = 11, snap_forget = 12 };
 
 /// A frame being written.
 pub const Wire = struct {
@@ -1140,6 +1141,93 @@ pub const Lanes = struct {
         try self.flush();
     }
 
+    /// --learn: a kept state to `<dir>/<key>.r0` here and rank 1's part to its own `.r1` (snap_persist): both or error.
+    pub fn snapWriteFn(ptr: *anyopaque, saved: *anyopaque, dir: [:0]const u8, key: u64) anyerror!void {
+        return snapWrite(of(ptr), @ptrCast(@alignCast(saved)), dir, key) catch |err| {
+            ended(err);
+            return err;
+        };
+    }
+
+    fn snapWrite(self: *Lanes, sn: *Snap, dir: []const u8, key: u64) !void {
+        if (sn.stale) return error.StaleState; // its rows were placed over
+        try self.sendState(.snap_persist, sn.id, key, sn.base, sn.at, dir);
+        const own = writeState(self.gpa, self.m, sn.buf.ptr, sn.base, sn.at, dir, key, 0);
+        if (self.peer != null and !try self.reply()) return error.PeerLearnFailed;
+        return own;
+    }
+
+    /// --learn: learned state `key` of `at` positions back from each rank's own disk (snap_load): both or neither.
+    pub fn snapReadFn(ptr: *anyopaque, dir: [:0]const u8, key: u64, at: u32) anyerror!*anyopaque {
+        return snapRead(of(ptr), dir, key, at) catch |err| {
+            ended(err);
+            return err;
+        };
+    }
+
+    fn snapRead(self: *Lanes, dir: []const u8, key: u64, at32: u32) !*anyopaque {
+        const at: usize = at32;
+        if (at == 0 or at % model.chunk_rows != 0 or at > self.m.pool_cap) return error.NotAChunkEnd;
+        // room for its rows clear of the live streams (placement may stale a kept state; none at all is ContextFull)
+        var taken: [max_streams][2]usize = undefined;
+        var nt: usize = 0;
+        var it = self.streams.valueIterator();
+        while (it.next()) |l| {
+            taken[nt] = .{ l.base, l.end };
+            nt += 1;
+        }
+        const base = try self.placeKept(taken[0..nt], at, null);
+        self.staleOver(base, base + at, null);
+        const sn = try self.gpa.create(Snap);
+        errdefer self.gpa.destroy(sn);
+        sn.* = .{ .id = self.next_snap, .at = at, .base = base, .end = base + at, .buf = try gpu.DeviceBuffer.alloc(self.m.ctx.d, self.m.snapBytes()) };
+        errdefer sn.buf.free();
+        self.next_snap += 1;
+        try self.sendState(.snap_load, sn.id, key, base, at, dir);
+        const own = readState(self.gpa, self.m, sn.buf.ptr, base, at, dir, key, 0);
+        const peer_ok = if (self.peer != null) try self.reply() else true;
+        if (own) |_| {} else |err| {
+            if (self.peer != null and peer_ok) try self.sendDrop(sn.id); // rank 1's part goes too
+            return err;
+        }
+        if (!peer_ok) return error.PeerLearnFailed;
+        self.snaps.append(self.gpa, sn) catch |err| {
+            try self.sendDrop(sn.id);
+            return err;
+        };
+        return sn;
+    }
+
+    /// --learn: learned state `key`'s file here and, on the pair, rank 1's (snap_forget).
+    pub fn snapForgetFn(ptr: *anyopaque, dir: [:0]const u8, key: u64) void {
+        const self = of(ptr);
+        self.sendState(.snap_forget, 0, key, 0, 0, dir) catch |err| {
+            std.log.warn("dsv41: rank 1 keeps a forgotten learned state: {s}", .{@errorName(err)});
+            ended(err);
+        };
+        var pb: [1100]u8 = undefined;
+        state_file.remove(state_file.path(&pb, dir, key, 0) catch return);
+    }
+
+    /// A state frame to rank 1: the state's id, key, extent base and positions, and the directory (same path there).
+    fn sendState(self: *Lanes, kind: Kind, id: u64, key: u64, base: usize, at: usize, dir: []const u8) !void {
+        if (!try self.begin(kind)) return;
+        try self.wire.int(self.gpa, u64, id);
+        try self.wire.int(self.gpa, u64, key);
+        try self.wire.int(self.gpa, u64, base);
+        try self.wire.int(self.gpa, u64, at);
+        try self.wire.buf.appendSlice(self.gpa, dir);
+        try self.flush();
+    }
+
+    /// Rank 1's answer to the last snap_persist or snap_load: whether its part went to or came from its disk.
+    fn reply(self: *Lanes) !bool {
+        var b: [8]u8 = undefined;
+        const got = try self.peer.?.recv(&b);
+        if (got.len != 1 or got[0] > 1) return error.BadFrame;
+        return got[0] == 1;
+    }
+
     fn releaseFn(ptr: *anyopaque, s: *lanes.Stream) void {
         const self = of(ptr);
         const kv = self.streams.fetchRemove(s) orelse return;
@@ -1152,6 +1240,31 @@ pub const Lanes = struct {
         }
     }
 };
+
+/// Rank `rank`'s part of a kept state (slot part `slot_buf`, rows [base, base + at)) to `<dir>/<key>.r<rank>`.
+fn writeState(gpa: std.mem.Allocator, m: *Model, slot_buf: u64, base: usize, at: usize, dir: []const u8, key: u64, rank: u64) !void {
+    const sb = m.snapBytes();
+    const rb = m.rowsBytes(at);
+    const payload = try gpa.alloc(u8, sb + rb);
+    defer gpa.free(payload);
+    try m.slotCopy(slot_buf, payload[0..sb], false);
+    try m.rowsCopy(base, at, payload[sb..], false);
+    try state_file.makePath(dir);
+    var pb: [1100]u8 = undefined;
+    const h: state_file.Head = .{ .rank = rank, .at = at, .layout = m.rowsLayout(), .slot = sb, .rows = rb };
+    try state_file.write(try state_file.path(&pb, dir, key, rank), &state_file.encode(h, payload), payload);
+}
+
+/// Rank `rank`'s part of learned state `key` from its file into `slot_buf` and rows [base, base + at), when whole.
+fn readState(gpa: std.mem.Allocator, m: *Model, slot_buf: u64, base: usize, at: usize, dir: []const u8, key: u64, rank: u64) !void {
+    var pb: [1100]u8 = undefined;
+    const bytes = try state_file.read(gpa, try state_file.path(&pb, dir, key, rank));
+    defer gpa.free(bytes);
+    const sb = m.snapBytes();
+    const payload = try state_file.decode(bytes, .{ .rank = rank, .at = at, .layout = m.rowsLayout(), .slot = sb, .rows = m.rowsBytes(at) });
+    try m.slotCopy(slot_buf, @constCast(payload[0..sb]), true); // (put: read, never written)
+    try m.rowsCopy(base, at, @constCast(payload[sb..]), true);
+}
 
 /// A fill_chunk frame's fields: the chunk's rows and replay, and rank 0's preRead, which orders a split chunk's Engram
 /// gathers (Model.fillChunk) the same on every rank.
@@ -1188,7 +1301,8 @@ fn oftenEnough(n: u64) bool {
 /// rank 0 kept its own: the ranks then issued a split chunk's Engram gathers in different orders, 22 Oct 2026).
 fn inPass(kind: Kind) bool {
     return switch (kind) {
-        .fill_chunk, .fill_images, .snap_save, .snap_restore, .snap_drop => true,
+        // a keep between chunks may learn (persist) or make room (forget); a learned state is read before its pass
+        .fill_chunk, .fill_images, .snap_save, .snap_restore, .snap_drop, .snap_persist, .snap_load, .snap_forget => true,
         .fill_begin, .verify, .pass, .done => false,
     };
 }
@@ -1286,6 +1400,9 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
             7 => .snap_drop,
             8 => .fill_images,
             9 => .done,
+            10 => .snap_persist,
+            11 => .snap_load,
+            12 => .snap_forget,
             else => return error.BadFrame,
         };
         if (try r.int(u64) != step) return error.OutOfStep;
@@ -1409,6 +1526,41 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
                     var b = kv.value;
                     b.free();
                 }
+            },
+            .snap_persist, .snap_load, .snap_forget => {
+                const id = try r.int(u64);
+                const key = try r.int(u64);
+                const base: usize = @intCast(try r.int(u64));
+                const at: usize = @intCast(try r.int(u64));
+                const dir = r.rest();
+                try r.end();
+                if (kind == .snap_forget) {
+                    var pb: [1100]u8 = undefined;
+                    if (state_file.path(&pb, dir, key, 1)) |p| state_file.remove(p) else |_| {}
+                    continue;
+                }
+                // this rank's part to or from its own disk; its answer keeps rank 0's state whole or gone on both ranks
+                const ok = if (kind == .snap_persist) blk: {
+                    const b = kept.get(id) orelse break :blk false;
+                    writeState(gpa, m, b.ptr, base, at, dir, key, 1) catch |err| {
+                        std.log.warn("lanes: step {d} rank 1 could not learn state {d} ({s})", .{ step - 1, id, @errorName(err) });
+                        break :blk false;
+                    };
+                    break :blk true;
+                } else blk: {
+                    var b = gpu.DeviceBuffer.alloc(m.ctx.d, m.snapBytes()) catch break :blk false;
+                    readState(gpa, m, b.ptr, base, at, dir, key, 1) catch |err| {
+                        std.log.warn("lanes: step {d} rank 1 could not read learned state {x:0>16} ({s})", .{ step - 1, key, @errorName(err) });
+                        b.free();
+                        break :blk false;
+                    };
+                    kept.put(gpa, id, b) catch {
+                        b.free();
+                        break :blk false;
+                    };
+                    break :blk true;
+                };
+                try peer.send(&[_]u8{@intFromBool(ok)});
             },
             .done => {
                 try r.end();

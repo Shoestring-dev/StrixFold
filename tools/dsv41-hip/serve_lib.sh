@@ -146,6 +146,7 @@ serve_cmd() {
     SERVE_CMD=("$BIN/tensorfold-native" serve "$MODEL_DIR" --host "$SERVE_HOST" --port "$SERVE_PORT" --name "$SERVE_NAME"
       --context "$CONTEXT" --parallel "$PARALLEL" --max-tokens "$MAX_TOKENS" --temperature "$TEMPERATURE"
       --prompt-cache-gib "$PROMPT_CACHE_GIB" --no-update-check)
+    [ -n "${LEARN_DIR:-}" ] && SERVE_CMD+=(--learn-dir "$LEARN_DIR" --learn-gib "${LEARN_GIB:-32}")
     [ "$THINKING" = 1 ] && SERVE_CMD+=(--thinking) || SERVE_CMD+=(--no-thinking)
     [ "$DRAFTS" = 1 ] || SERVE_CMD+=(--no-drafts)
   else
