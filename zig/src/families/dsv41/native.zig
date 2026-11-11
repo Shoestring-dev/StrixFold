@@ -23,7 +23,14 @@
 //!   TF_DS_L2_PREFETCH=1                         the paced L2 prefetch of the next kernels' weights
 //!   TF_DS_ENGRAM_AIO=1                          a round's Engram reads by Linux AIO on O_DIRECT
 //!   TF_DS_FIX_K=K                               a measurement: every drafted stream verifies K drafts a round
-//! The kernel set (TENSORFOLD_CUDA_KERNELS) is the recorded Triton set (aot_pack.py). The pool holds --context
+//!   TF_DS_PROMPT_DISK_*                         sf-disk: kept prompt states on disk on both ranks (disk.zig)
+//!   TF_DS_POOL                                  the streams' shared pool in positions (unset: --context); at least
+//!                                               --context, which stays one request's window (and the RoPE tables')
+//!   TF_DS_MODALITIES                            text (HIP's default) or text_image: the vision tower on rank 0
+//!   TF_DS_VISION_DIR                            HIP, text_image: the vision tower's weights (a sidecar with its own
+//!                                               model.safetensors.index.json, kit/make_vision_sidecar.py; unset: the
+//!                                               model directory's index)
+//! The kernel set (TENSORFOLD_CUDA_KERNELS) is the recorded Triton set (aot_pack.py). The pool holds TF_DS_POOL (else --context)
 //! positions for every stream together (each takes an extent: its prompt, its max_tokens and a round's rows).
 //! TF_TP_WORLD=4: the four nodes of the exact 2D split (prompt2d.zig), ranks 1-3 `tf-dsv41-lanes` following on the
 //! other nodes; TF_RDMA_DEVICES (and TF_DS_RDMA_KERNELS: rdma_gather.cu's fatbin, unset: the embedded one) put its
@@ -38,7 +45,7 @@ const draft_mod = @import("draft.zig");
 const link = @import("link.zig");
 const rank_cache = @import("rank_cache.zig");
 const sampling = @import("sampling.zig");
-/// The vision tower exists in CUDA builds only (gpu.features.vision); a HIP build compiles none of it.
+/// The vision tower (gpu.features.vision): CUDA's and HIP's behind vision.zig.
 const vision_mod = if (gpu.features.vision) @import("vision.zig") else struct {
     pub const Vision = lanes_mod.VisionTower;
 };
@@ -83,6 +90,8 @@ pub const Loaded = struct {
     lone: ?LoneRun = null,
     /// Kept prompt states for the host's prompt cache (core/prompt_cache Snapshots: `ptr` and its functions).
     snaps: ?Snaps = null,
+    /// The prompt pass resumes and keeps prompts with images (lanes.zig keys their states by each picture's digest).
+    cache_images: bool = false,
     /// Images in requests (the server renders their placeholders; the tower runs on this rank).
     vision: ?lanes.stream.Vision = null,
     /// Structured output and required calls (the tokenizer's vocabulary read at open).
@@ -119,6 +128,26 @@ fn nonEmpty(v: ?[]const u8) ?[]const u8 {
     return if (s.len == 0) null else s;
 }
 
+/// The streams' shared pool: TF_DS_POOL (empty or unset: the context, one stream may take it all), at least the
+/// context (a request's window: model.contextCap refuses a larger one).
+fn poolOf(context: usize) !usize {
+    return poolFrom(nonEmpty(getenv("TF_DS_POOL")), context);
+}
+
+fn poolFrom(v: ?[]const u8, context: usize) !usize {
+    const t = v orelse return context;
+    const p = std.fmt.parseInt(usize, t, 10) catch return error.BadPool;
+    if (p < context) return error.BadPool;
+    return p;
+}
+
+test "TF_DS_POOL: the context unless set, never below it" {
+    try std.testing.expectEqual(@as(usize, 1048527), try poolFrom(null, 1048527));
+    try std.testing.expectEqual(@as(usize, 2097152), try poolFrom("2097152", 1048527));
+    try std.testing.expectError(error.BadPool, poolFrom("65536", 1048527));
+    try std.testing.expectError(error.BadPool, poolFrom("2M", 1048527));
+}
+
 /// The device bytes this rank's weights take, for the host's memory check: its file in TF_DS_RANK_CACHE (the
 /// checkpoint holds both ranks'); 0 when there is none to read (open then says what to set).
 pub fn weightBytes(io: std.Io, dir: []const u8) u64 {
@@ -133,8 +162,8 @@ pub fn weightBytes(io: std.Io, dir: []const u8) u64 {
     return st.size;
 }
 
-/// Loads rank 0 and links rank 1 (which must start against TF_TP_MASTER:TF_TP_PORT); the pool holds `o.context`
-/// positions. Needs `ctx` current.
+/// Loads rank 0 and links rank 1 (which must start against TF_TP_MASTER:TF_TP_PORT); the pool holds TF_DS_POOL
+/// positions (else `o.context`), a request at most `o.context`. Needs `ctx` current.
 pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []const u8, kernels: []const u8, o: Options) !Loaded {
     const world = std.fmt.parseInt(u32, getenv("TF_TP_WORLD") orelse "2", 10) catch return error.BadWorld;
     if (world != 2 and world != 4) return error.BadWorld; // TP2, or the four-node 2D split
@@ -170,7 +199,8 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
         .side = if (getenv("TF_DS_HC_SIDE")) |v| !std.mem.eql(u8, v, "0") else false,
         .prefetch = if (getenv("TF_DS_L2_PREFETCH")) |v| !std.mem.eql(u8, v, "0") else false,
         .engram_aio = if (getenv("TF_DS_ENGRAM_AIO")) |v| !std.mem.eql(u8, v, "0") else false,
-        .pool = o.context,
+        .pool = poolOf(o.context) catch return error.BadPool,
+        .context = o.context,
         .drafts = o.drafts,
         .arena_bytes = arena_gib << 30,
         .round_rows = if (getenv("TF_DS_ROUND_ROWS")) |v| std.fmt.parseInt(usize, v, 10) catch return error.BadRoundRows else round.default_rows,
@@ -180,9 +210,12 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
         .modalities = mods,
         .hip_kit = getenv("TF_DS_HIP_KIT") orelse if (gpu.backend == .hip) kernels else null, // HIP: the host's kit
         .open_coll = if (gpu.backend == .hip) @import("tcp_coll.zig").open else null,
+        .disk = @import("disk.zig").wanted(world),
     });
     errdefer st.m.close();
     st.lanes = lanes_mod.Lanes.init(gpa, st.m);
+    // sf-disk: this rank's tier, reconciled with rank 1's before the server takes a request (off: nothing changes)
+    try st.lanes.attachDisk();
     if (getenv("TF_DS_FIX_K")) |t| st.lanes.fix_k = std.fmt.parseInt(usize, t, 10) catch return error.BadFixK;
     // structured output: each token's bytes, for the draws that keep a reply inside its grammar (rank 0 draws)
     st.vocab = lanes.grammar.vocab.load(gpa, io, dir) catch |e| blk: {
@@ -191,18 +224,22 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
     };
     errdefer if (st.vocab) |v| v.deinit(gpa);
     st.lanes.vocab = st.vocab;
-    // a vision checkpoint's tower on this rank, from the kit's vision/ (torch's attention cubin, the routing bias),
-    // unless this rank serves text only: config.json still declares the tower, nothing of it is opened, and the server
-    // refuses image parts (Loaded.vision null)
+    // a vision checkpoint's tower on this rank (CUDA: from the kit's vision/, torch's attention cubin; HIP: the sidecar
+    // TF_DS_VISION_DIR and the AMD kit's vision kernels; both: the routing bias), unless this rank serves text only:
+    // config.json still declares the tower, nothing of it is opened, and the server refuses image parts
+    // (Loaded.vision null)
     st.vision = null;
     if (st.m.cfg.vision and mods == .text) std.log.info("config.json declares a vision tower; not opened (text capability)", .{});
-    if (gpu.features.vision and st.m.cfg.vision and mods == .text_image) st.vision = try vision_mod.Vision.open(gpa, io, st.m, dir, getenv("TF_DS_KIT").?);
+    if (gpu.features.vision and st.m.cfg.vision and mods == .text_image) {
+        const weights_dir = if (gpu.backend == .hip) (getenv("TF_DS_VISION_DIR") orelse dir) else dir;
+        st.vision = try vision_mod.Vision.open(gpa, io, st.m, weights_dir, getenv("TF_DS_KIT").?);
+    }
     errdefer if (gpu.features.vision) if (st.vision) |v| v.close();
     st.lanes.vision = st.vision;
     // the pool is the model's (preallocated): a stream takes no device memory of its own
     const L = lanes_mod.Lanes;
     const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn };
-    return .{ .backend = st.lanes.backend(), .facts = st.lanes.facts(), .rows = @intCast(st.m.eng.round_rows), .stream_bytes = 0, .ctx = st, .deinit = deinitFn, .snaps = snaps, .vision = if (gpu.features.vision) (if (st.vision) |v| v.hook() else null) else null, .structures = st.vocab != null, .context_window = lanes_mod.usableContext(st.m.pool_cap, st.m.eng.round_rows) };
+    return .{ .backend = st.lanes.backend(), .facts = st.lanes.facts(), .rows = @intCast(st.m.eng.round_rows), .stream_bytes = 0, .ctx = st, .deinit = deinitFn, .snaps = snaps, .cache_images = true, .vision = if (gpu.features.vision) (if (st.vision) |v| v.hook() else null) else null, .structures = st.vocab != null, .context_window = lanes_mod.usableContext(st.m.context_cap, st.m.eng.round_rows) };
 }
 
 fn deinitFn(ptr: *anyopaque) void {
@@ -230,9 +267,13 @@ pub fn explain(_: ?*anyopaque, err: anyerror) ?[]const u8 {
         error.BadRoundMs => "TF_DS_ROUND_MS: a round's cost in ms by its rows from 1, comma separated, each finite and above 0 (at most 48)",
         error.BadDraftMs => "TF_DS_DRAFT_MS: a drafter pass's cost in ms, finite and not negative",
         error.BadStreams => "TF_DS_STREAMS: the pool's streams, 1 .. 16",
+        error.BadPool => "TF_DS_POOL: the streams' shared pool in positions, at least --context (unset: --context)",
         error.ContextFull => "the streams' prompts and budgets fill the context's pool: lower max_tokens, or retry when a stream ends",
         error.PromptTooLong => "the prompt and its max_tokens do not fit the context window",
-        error.NoVisionKit => "this checkpoint reads images: its kit (TF_DS_KIT) needs vision/torch_fmha_sm120.cubin and vision/gate_bias_vl.safetensors",
+        error.NoVisionKit => if (gpu.backend == .hip) "text_image needs the image routing biases: TF_DS_KIT's vision/gate_bias_vl.safetensors (tools/dsv41-zig/kit/make_bias_vl.py)" else "this checkpoint reads images: its kit (TF_DS_KIT) needs vision/torch_fmha_sm120.cubin and vision/gate_bias_vl.safetensors",
+        error.NoVisionKernels => "text_image on HIP needs the AMD kit's vision.* kernels (vision.hip): a kit built before them",
+        error.NoVisionWeights => "text_image on HIP needs the vision tower's weights: TF_DS_VISION_DIR (a sidecar made by tools/dsv41-zig/kit/make_vision_sidecar.py) with model.safetensors.index.json",
+        error.MissingVisionTensor, error.BadVisionTensor => "the vision weights (TF_DS_VISION_DIR) lack a tower tensor or hold one of another dtype or shape",
         error.VisionUnsupported => "image input is not implemented on this backend: serve text only (TF_DS_MODALITIES=text)",
         error.BadModalities => "TF_DS_MODALITIES: text or text_image",
         error.NoCollective => "this build has no collectives transport for the ranks yet (HIP: w-link's TCP transport, model.Options.open_coll)",

@@ -37,8 +37,9 @@ const rdma = @import("rdma.zig");
 /// What a served request may carry (ADAPTER.md D13): text, or text with images when the vision tower is opened. The
 /// checkpoint's config.json is never changed: a text model keeps its vision_config and simply never opens the tower.
 pub const Modalities = enum { text, text_image };
-/// CUDA keeps serving images when the checkpoint has a tower; the HIP build has no vision path, so text.
-pub const default_modalities: Modalities = if (gpu.features.vision) .text_image else .text;
+/// CUDA keeps serving images when the checkpoint has a tower; HIP serves text unless asked for text_image
+/// (TF_DS_MODALITIES / --modalities): its tower needs the vision sidecar and the kit's vision kernels.
+pub const default_modalities: Modalities = if (gpu.backend == .cuda and gpu.features.vision) .text_image else .text;
 
 /// CUDA-only state (gpu.features): NCCL behind the collectives, the four-node split, its RDMA rings. Empty on HIP.
 const Nccl = if (gpu.backend == .cuda) comm_mod.Comm else void;
@@ -50,12 +51,30 @@ const HipKit = if (gpu.backend == .hip) *gpu.Kit else void;
 pub const chunk_rows = 2048;
 
 /// The version of lanes.zig's frames, rank 0 to rank 1 (the handshake compares it): 2 since fill_chunk carries rank 0's
-/// Engram read-ahead plan (2026-10-22).
-pub const frame_protocol = 2;
+/// Engram read-ahead plan (2026-10-22); 3 since fill_begin carries the prompt's image span key ids (the prompt caches
+/// key a prompt with images by its pictures; rank 1 keys its disk states alike).
+pub const frame_protocol = 3;
 
 /// The prompt chunk buffers' rows: one of chunk_rows, or two halves when chunks split (TF_DS_PREFILL_SPLIT).
 pub fn chunkCaps(split_min: usize) [2]usize {
     return if (split_min > 0) .{ chunk_rows / 2, chunk_rows / 2 } else .{ chunk_rows, 0 };
+}
+
+/// The most positions one stream reaches in a pool of `pool` (Options.context; 0: the pool). A pool larger than the
+/// context holds several streams of that length; one larger than the pool could never be placed.
+pub fn contextCap(pool: usize, context: usize) error{BadPool}!usize {
+    if (pool == 0) return error.BadPool;
+    if (context == 0) return pool;
+    if (context > pool) return error.BadPool;
+    return context;
+}
+
+test "the context defaults to the pool and never exceeds it" {
+    try std.testing.expectEqual(@as(usize, 8192), try contextCap(8192, 0));
+    try std.testing.expectEqual(@as(usize, 1048527), try contextCap(2097152, 1048527));
+    try std.testing.expectEqual(@as(usize, 8192), try contextCap(8192, 8192));
+    try std.testing.expectError(error.BadPool, contextCap(8192, 8193));
+    try std.testing.expectError(error.BadPool, contextCap(0, 0));
 }
 /// The pool's streams (--parallel 4).
 pub const max_streams = draft.max_streams;
@@ -76,6 +95,10 @@ pub const Options = struct {
     engram_dir: ?[]const u8 = null, // the Engram tables (none: a checkpoint without Engram layers)
     token_map: ?[]const u8 = null, // the compressed token map (the lane's JSON cache)
     pool: usize = 1 << 18, // positions of the streams' shared plane (their extents together)
+    // the most positions one stream reaches (its extent: prompt, max_tokens and a round's rows; rank 0's --context):
+    // the RoPE tables' rows, a prompt chunk's compressed keys and a round's context buckets. 0: the pool (one stream
+    // may take the whole pool, the stock layout); below the pool, several streams of that length share it
+    context: usize = 0,
     drafts: bool = true, // load the DSpark drafter
     rdma_devices: ?[]const u8 = null, // the decode gathers over RDMA on these devices (comma separated), else NCCL: TP2's
     // ring (rdma.zig), or at world 4 the 2D split's decode-size exchanges over its rings (ring2d.zig)
@@ -95,6 +118,7 @@ pub const Options = struct {
     modalities: Modalities = default_modalities, // .text: the image routing bias is never loaded (native.zig: the tower)
     open_coll: ?coll.Open = null, // the collectives' transport (HIP: w-link's TCP; null on CUDA: NCCL over the links)
     hip_kit: ?[]const u8 = null, // HIP: the AMD kit (manifest.json); null: kit_dir/hip
+    disk: bool = false, // sf-disk on (disk.zig): the handshake's plan says " disk=1", so both ranks must agree
 };
 
 pub const Model = struct {
@@ -110,6 +134,7 @@ pub const Model = struct {
     round_ms: []const f64, // the lane core's round costs by rows (Options.round_ms, else draft.round_ms)
     draft_ms: f64, // a drafter pass's cost (Options.draft_ms): with round_ms, the profile lanes and chooseK use
     pool_cap: usize,
+    context_cap: usize, // the most positions one stream reaches (Options.context; at most pool_cap)
     cache_dir: std.Io.Dir,
     cache_file: std.Io.File,
     ix: rank_cache.Index,
@@ -195,6 +220,11 @@ pub const Model = struct {
     clk_rounds: u64 = 0,
     t_forward: u64 = 0,
     t_absorb: u64 = 0,
+    // sf-disk's identity (disk.zig): the handshake's plan text and the inputs beyond the bundle
+    plan_text: []const u8 = "",
+    kit_dir: []const u8 = "",
+    engram_dir: ?[]const u8 = null,
+    token_map: ?[]const u8 = null,
     // world 4: the 2D split's exchanges (prompt2d.zig, TP4's), with the RDMA rings when asked
     two: ?TwoNode = null,
     rdma_rings: ?Rings2d = null,
@@ -224,6 +254,10 @@ pub const Model = struct {
         m.ctx = ctx;
         m.rank = o.rank;
         m.world = o.world;
+        m.plan_text = "";
+        m.kit_dir = try a.dupe(u8, o.kit_dir);
+        m.engram_dir = if (o.engram_dir) |e| try a.dupe(u8, e) else null;
+        m.token_map = if (o.token_map) |t| try a.dupe(u8, t) else null;
         if (o.streams == 0 or o.streams > max_streams) return error.BadStreams;
         m.streams = o.streams;
         const profile: draft.scheduler_costs.Profile = .{ .round_ms = o.round_ms orelse &draft.round_ms, .draft_ms = o.draft_ms };
@@ -231,6 +265,7 @@ pub const Model = struct {
         m.round_ms = try a.dupe(f64, profile.round_ms);
         m.draft_ms = profile.draft_ms;
         m.pool_cap = o.pool;
+        m.context_cap = try contextCap(o.pool, o.context);
         m.fill_slot = 0;
         m.prof = false;
         m.timer = null;
@@ -306,6 +341,7 @@ pub const Model = struct {
         if (o.open_coll) |open_coll| {
             var plan: [512]u8 = undefined;
             const id = try m.identity(o, &plan);
+            m.plan_text = try a.dupe(u8, id.plan);
             m.coll = try open_coll(gpa, io, ctx, if (gpu.backend == .hip) m.kit else null, &m.fan, &id);
         } else if (gpu.backend == .cuda) {
             m.nccl = try comm_mod.Comm.fromFan(&m.fan, o.rank, o.world);
@@ -369,9 +405,10 @@ pub const Model = struct {
             return error.MissingKernel;
         };
 
-        // the RoPE tables (the served build's bits: torch CPU pow and polar), every position of the pool
+        // the RoPE tables (the served build's bits: torch CPU pow and polar), every position a stream reaches (positions
+        // count from each stream's own start, whatever its extent's base in the pool)
         const half = c.rope_dim / 2;
-        const rope_rows = o.pool + round.max_rows + 1;
+        const rope_rows = m.context_cap + round.max_rows + 1;
         m.rope_buf = try gpu.DeviceBuffer.alloc(d, 4 * rope_rows * half * 4);
         errdefer m.rope_buf.free();
         {
@@ -380,7 +417,7 @@ pub const Model = struct {
             for ([_][]const u8{ "rope-plain-cos.f32", "rope-plain-sin.f32", "rope-compressed-cos.f32", "rope-compressed-sin.f32" }, 0..) |name, j| {
                 var f = try std.Io.Dir.cwd().openFile(io, try std.fs.path.join(a, &.{ o.kit_dir, name }), .{});
                 defer f.close(io);
-                if (try f.readPositionalAll(io, part, 0) != part.len) return error.ShortRopeTable; // a table of fewer rows than the pool
+                if (try f.readPositionalAll(io, part, 0) != part.len) return error.ShortRopeTable; // a table of fewer rows than the context
                 try m.rope_buf.upload(j * part.len, part);
             }
         }
@@ -416,8 +453,9 @@ pub const Model = struct {
             for (c.engram_layers.slice()) |l| if (l >= c.layers / 2) return error.SplitEngramPastCut;
         }
         const caps = chunkCaps(m.split_min); // (the handshake's chunk_caps)
-        m.ch = try prompt.Chunk.init(&m.eng, &m.arena, caps[0], o.pool);
-        if (caps[1] > 0) m.ch2 = try prompt.Chunk.init(&m.eng, &m.arena, caps[1], o.pool);
+        // a chunk's compressed keys are its stream's (to the context); the caches hold every stream's extent (the pool)
+        m.ch = try prompt.Chunk.init(&m.eng, &m.arena, caps[0], m.context_cap);
+        if (caps[1] > 0) m.ch2 = try prompt.Chunk.init(&m.eng, &m.arena, caps[1], m.context_cap);
         m.caches = try prompt.Caches.init(&m.eng, &m.arena, o.pool, m.streams);
         m.blas = try blas.Blas.open(m.stream, m.ch.blas_ws);
         errdefer m.blas.close();
@@ -428,7 +466,7 @@ pub const Model = struct {
             r.* = try m.arena.take(m.streams * m.eng.ringBytes());
             try gpu.fill8Async(d, m.stream.handle, r.*, 0, m.streams * m.eng.ringBytes());
         }
-        m.rd = try round.Round.init(&m.eng, &m.arena, a, o.pool);
+        m.rd = try round.Round.init(&m.eng, &m.arena, a, m.context_cap); // its buckets to the context (the kit's variants)
         m.amax = try m.arena.take(round.max_rows * 4);
         if (o.graphs) {
             m.graphs = round.Graphs.init(gpa);
@@ -474,7 +512,13 @@ pub const Model = struct {
         // a vision checkpoint's image routing bias (without it a prompt with images is refused; text runs as ever)
         if (gpu.features.vision and c.vision and o.modalities == .text_image) {
             const path = o.vision_bias orelse try std.fs.path.join(a, &.{ o.kit_dir, "vision", "gate_bias_vl.safetensors" });
-            m.loadVisionBias(path) catch |err| if (o.vision_bias != null or err != error.FileNotFound) return err;
+            // HIP: both ranks need it (rank 1 has no tower whose open would refuse its absence; a rank without it would
+            // refuse the image spans its peer routes), so a text_image rank without the file does not start
+            m.loadVisionBias(path) catch |err| if (gpu.backend == .hip or o.vision_bias != null or err != error.FileNotFound) return if (err == error.FileNotFound) error.NoVisionKit else err;
+            // HIP: a request's image rows (image_rows_reserved of them; more grow it) on the device from the start, so a
+            // prompt with images allocates nothing on either rank (a rank-1-only allocation failure would leave the
+            // ranks with different spans)
+            if (gpu.backend == .hip) m.img_buf = try gpu.DeviceBuffer.alloc(m.ctx.d, image_rows_reserved * c.hidden * 2);
         }
 
         // fillSplit's Engram rows exchange: the peer's projection of this rank's columns (both ranks alike)
@@ -560,11 +604,55 @@ pub const Model = struct {
         // rank caches) and serve.conf's hash, each a 16-hex prefix; the KV caches' formats; strict mode
         const strict = if (gpu.backend == .hip) m.kit.strict else false;
         var ob: [128]u8 = undefined;
-        id.plan = try std.fmt.bufPrint(buf, "drafts={} engram={} graphs={} pool={d} streams={d} round_rows={d} chunk_rows={d} replay_floor={} aux={s} {s} engram_rows={} deploy={s} bundle={s} conf={s} kv={s} strict={}", .{
-            o.drafts,           m.cfg.engram_layers.slice().len > 0, o.graphs,                  o.pool,                  o.streams,                  o.round_rows, chunk_rows,
-            prompt.replay_floor, m.aux_which.name(&nb), try gatherOrder(&ob, m.split_min, m.split_zip, m.phase_timer), m.engram_rows, launchId("TF_DS_DEPLOY"), launchId("TF_DS_BUNDLE"), launchId("TF_DS_CONF"), kv_format,    strict,
+        id.plan = try planText(buf, .{
+            .drafts = o.drafts,
+            .engram = m.cfg.engram_layers.slice().len > 0,
+            .graphs = o.graphs,
+            .pool = o.pool,
+            .context = m.context_cap,
+            .streams = o.streams,
+            .round_rows = o.round_rows,
+            .replay_floor = prompt.replay_floor,
+            .aux = m.aux_which.name(&nb),
+            .gather = try gatherOrder(&ob, m.split_min, m.split_zip, m.phase_timer),
+            .engram_rows = m.engram_rows,
+            .deploy = launchId("TF_DS_DEPLOY"),
+            .bundle = launchId("TF_DS_BUNDLE"),
+            .conf = launchId("TF_DS_CONF"),
+            .strict = strict,
+            .disk = o.disk,
         });
         return id;
+    }
+
+    pub const PlanParts = struct {
+        drafts: bool,
+        engram: bool,
+        graphs: bool,
+        pool: usize,
+        context: usize = 0, // a stream's most positions: " context=N" after pool= only when below the pool (0: the pool)
+        streams: usize,
+        round_rows: usize,
+        replay_floor: bool,
+        aux: []const u8,
+        gather: []const u8,
+        engram_rows: bool,
+        deploy: []const u8,
+        bundle: []const u8,
+        conf: []const u8,
+        strict: bool,
+        disk: bool, // sf-disk: " disk=1" at the end, only when on (the text is the stock one when off)
+    };
+
+    /// The handshake's plan text (identity), in `buf`.
+    pub fn planText(buf: []u8, p: PlanParts) ![]u8 {
+        var cb: [32]u8 = undefined;
+        const ctx = if (p.context != 0 and p.context != p.pool) try std.fmt.bufPrint(&cb, " context={d}", .{p.context}) else "";
+        return std.fmt.bufPrint(buf, "drafts={} engram={} graphs={} pool={d}{s} streams={d} round_rows={d} chunk_rows={d} replay_floor={} aux={s} {s} engram_rows={} deploy={s} bundle={s} conf={s} kv={s} strict={}{s}", .{
+            p.drafts,       p.engram, p.graphs,  p.pool,  ctx, p.streams,  p.round_rows, chunk_rows,
+            p.replay_floor, p.aux,    p.gather,  p.engram_rows, p.deploy, p.bundle, p.conf,
+            kv_format,      p.strict, if (p.disk) " disk=1" else "",
+        });
     }
 
     /// The settings that decide the order of a prompt chunk's gathers, for the handshake (two ranks that differ in them
@@ -729,6 +817,9 @@ pub const Model = struct {
             lay.gate_b_vl = dst;
         }
     }
+
+    /// The image rows a text_image rank keeps on the device from its open (four pictures of a whole span).
+    pub const image_rows_reserved = 4096;
 
     /// The filling prompt's image spans (absolute positions, in order) and their rows bf16 [tokens, hidden] from the
     /// host, after fillBegin and before its chunks.
@@ -1141,7 +1232,7 @@ pub const Model = struct {
         const e = &m.eng;
         if (m.prof) try m.stream.synchronize(); // (the GPU idle, so the issue time shows whether the host keeps it fed)
         const t0 = m.now();
-        try round.forward(e, &m.rd, &m.ch, &m.caches, m.rings, if (m.eh) |*x| x else null, &.{}, rows, m.pool_cap, null, if (m.graphs) |*g| g else null);
+        try round.forward(e, &m.rd, &m.ch, &m.caches, m.rings, if (m.eh) |*x| x else null, &.{}, rows, m.context_cap, null, if (m.graphs) |*g| g else null);
         if (m.prof) {
             m.t_enqueue = m.now() - t0;
             try m.stream.synchronize();
@@ -1280,6 +1371,27 @@ test "a launch identity is one plan token of at most 16 characters" {
 
 test "the handshake names what orders a prompt chunk's gathers: split, zip, chunk rows, phase timer, frames" {
     var b: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=2", try Model.gatherOrder(&b, 256, true, false));
-    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=2", try Model.gatherOrder(&b, 0, true, true));
+    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=3", try Model.gatherOrder(&b, 256, true, false));
+    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=3", try Model.gatherOrder(&b, 0, true, true));
+}
+
+test "the handshake's plan text is the stock one with sf-disk off, and says disk=1 only when on" {
+    var gb: [128]u8 = undefined;
+    const gather = try Model.gatherOrder(&gb, 256, true, false);
+    // 70cfb8c's format, byte for byte but for frames=3 (fill_begin's image span key ids; the disk frames did not
+    // change the protocol number)
+    const stock = "drafts=true engram=true graphs=false pool=8192 streams=1 round_rows=16 chunk_rows=2048 replay_floor=false aux=hip prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=3 engram_rows=true deploy=70cfb8c bundle=c178a012 conf=abcd kv=win-fp8qd,cmp-fp4,idx-fp4 strict=true";
+    var p: Model.PlanParts = .{ .drafts = true, .engram = true, .graphs = false, .pool = 8192, .streams = 1, .round_rows = 16, .replay_floor = false, .aux = "hip", .gather = gather, .engram_rows = true, .deploy = "70cfb8c", .bundle = "c178a012", .conf = "abcd", .strict = true, .disk = false };
+    var buf: [512]u8 = undefined;
+    try std.testing.expectEqualStrings(stock, try Model.planText(&buf, p));
+    p.disk = true;
+    try std.testing.expectEqualStrings(stock ++ " disk=1", try Model.planText(&buf, p));
+    // a context at the pool is the stock layout (the same text, the same disk namespace); below it, the ranks compare it
+    p.disk = false;
+    p.context = 8192;
+    try std.testing.expectEqualStrings(stock, try Model.planText(&buf, p));
+    p.context = 4096;
+    const split = try Model.planText(&buf, p);
+    try std.testing.expect(std.mem.indexOf(u8, split, "pool=8192 context=4096 streams=1 ") != null);
+    try std.testing.expect(!@hasField(Options, "disk") or (Options{ .model_dir = "", .cache_dir = "", .kit_dir = "", .rank = 0, .world = 2, .master = .{ 0, 0, 0, 0 }, .port = 0 }).disk == false);
 }

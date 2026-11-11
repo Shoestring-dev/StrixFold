@@ -18,6 +18,13 @@ serve_load() {
   local v
   # in this order: a path may name one expanded before it ($BUNDLE)
   for v in DEPLOY_DIR BUNDLE MODEL_DIR RANK_CACHE DS_KIT ENGRAM_DIR TOKEN_MAP RUN_ROOT; do eval "$v=\"${!v}\""; done
+  PROMPT_DISK_GIB=${PROMPT_DISK_GIB:-0}
+  # images (MODALITIES=text_image): rank 0's tower weights (VISION_DIR, a sidecar with its SHA256SUMS) and both ranks'
+  # routing biases (DS_KIT/vision/gate_bias_vl.safetensors, pinned by VISION_BIAS_SHA256); TEST_FAULT: recovery tests
+  VISION_DIR=${VISION_DIR:-} VISION_BIAS_SHA256=${VISION_BIAS_SHA256:-} TEST_FAULT=${TEST_FAULT:-}
+  [ -n "$VISION_DIR" ] && eval "VISION_DIR=\"$VISION_DIR\""
+  case $MODALITIES in text|text_image) ;; *) die "MODALITIES must be text or text_image, not $MODALITIES";; esac
+  [ -n "${PROMPT_DISK_DIR:-}" ] && eval "PROMPT_DISK_DIR=\"$PROMPT_DISK_DIR\""
   BIN=$DEPLOY_DIR/native-hip/bin
   KIT=$DEPLOY_DIR/$KIT_SUBDIR
   [ "$PARALLEL" -ge 1 ] && [ "$PARALLEL" -le "$STREAMS" ] || die "PARALLEL $PARALLEL must be 1 .. STREAMS ($STREAMS)"
@@ -26,8 +33,12 @@ serve_load() {
     size=$(stat -L -c %s "$DS_KIT/$f.f32" 2>/dev/null) || die "no RoPE table $DS_KIT/$f.f32 (DS_KIT)"
     [ -z "$rows" ] || [ $((size / 128)) -lt "$rows" ] && rows=$((size / 128))
   done
-  # the engine reads the pool's positions plus a round's 48 rows and one (model.zig rope_rows), 128 B a row
+  # the engine reads a stream's most positions (CONTEXT) plus a round's 48 rows and one (model.zig rope_rows), 128 B a row
   [ "$CONTEXT" -le $((rows - 49)) ] || die "CONTEXT $CONTEXT is past the RoPE tables' $rows rows (at most $((rows - 49)))"
+  # POOL: the streams' shared pool (unset: CONTEXT, one stream may take it all); above CONTEXT, several long streams
+  # share it while each request stays within CONTEXT (rank 0 TF_DS_POOL, rank 1 --pool; both ranks --context CONTEXT)
+  POOL=${POOL:-$CONTEXT}
+  [[ $POOL =~ ^[0-9]+$ ]] && [ "$POOL" -ge "$CONTEXT" ] || die "POOL $POOL must be a position count of at least CONTEXT ($CONTEXT)"
   [ "$GRAPHS" = 0 ] || [ "$TRANSPORT" != tcp ] || [ "$COLL_KIND" = proxy ] || die "GRAPHS=1 over tcp needs COLL_KIND=proxy"
   [ "$GRAPHS" = 0 ] || [ "$COLL_KIND" != proxy ] || [ $((ROUND_ROWS * 64640 * 4)) -le $((COLL_SLOT_KIB * 1024)) ] ||
     die "GRAPHS=1: the head gather at ROUND_ROWS=$ROUND_ROWS ($((ROUND_ROWS * 64640 * 4)) B) exceeds COLL_SLOT_KIB=$COLL_SLOT_KIB"
@@ -42,7 +53,20 @@ serve_load() {
   if [ "$DRAFTS" != 1 ] || [ "$WORLD" != 2 ] || [ "$DRAFT_BYPASS_AT" -gt "$STREAMS" ]; then DRAFT_BYPASS_AT=0; fi
   for v in REPLAY_FLOOR HC_SIDE ENGRAM_AIO SEED_RANDOM L2_PREFETCH; do case ${!v} in 0|1) ;; *) die "$v must be 0 or 1, not ${!v}";; esac; done
   [[ $TOP_K_MAX =~ ^[0-9]+$ ]] || die "TOP_K_MAX must be a whole number (0: off), not $TOP_K_MAX"
+  # sf-disk (off unless PROMPT_DISK_GIB > 0): it writes what the memory tier keeps, so that must be on
+  [[ $PROMPT_DISK_GIB =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "PROMPT_DISK_GIB must be a number of GiB (0: off), not $PROMPT_DISK_GIB"
+  if serve_disk_on; then
+    awk -v g="${PROMPT_CACHE_GIB:-0}" 'BEGIN { exit !(g > 0) }' || die "PROMPT_DISK_GIB=$PROMPT_DISK_GIB needs PROMPT_CACHE_GIB > 0 (the disk tier writes the kept states)"
+    [ "$WORLD" = 2 ] || die "PROMPT_DISK_GIB: the disk tier runs on the TP2 pair (WORLD=2)"
+    local k
+    for k in PROMPT_DISK_FLOOR_GIB PROMPT_DISK_QUEUE_MIB PROMPT_DISK_MIN_TOKENS PROMPT_DISK_RATE_MIB; do
+      [ -z "${!k:-}" ] || [[ ${!k} =~ ^[0-9]+$ ]] || die "$k must be a whole number, not ${!k}"
+    done
+  fi
 }
+
+# serve_disk_on: true when the configuration turns sf-disk on (PROMPT_DISK_GIB > 0).
+serve_disk_on() { awk -v g="${PROMPT_DISK_GIB:-0}" 'BEGIN { exit !(g > 0) }'; }
 
 # serve_check: every input this rank reads is here (paths only; verify_inputs.sh checks the bytes).
 serve_check() {
@@ -52,6 +76,17 @@ serve_check() {
     [ -e "$f" ] || die "rank $RANK: missing $f"
   done
   local sum
+  if [ "$MODALITIES" = text_image ]; then
+    local bias=$DS_KIT/vision/gate_bias_vl.safetensors
+    [ -f "$bias" ] || die "rank $RANK: MODALITIES=text_image needs $bias (tools/dsv41-zig/kit/make_bias_vl.py; deploy_rank0.sh --ds-kit copies it)"
+    [ -n "$VISION_BIAS_SHA256" ] || die "rank $RANK: MODALITIES=text_image needs VISION_BIAS_SHA256 (the routing biases' sha256)"
+    sum=$(sha256sum "$bias" | cut -d' ' -f1)
+    [ "$sum" = "$VISION_BIAS_SHA256" ] || die "rank $RANK: $bias is $sum, the config pins $VISION_BIAS_SHA256"
+    if [ "$RANK" = 0 ]; then
+      [ -n "$VISION_DIR" ] && [ -f "$VISION_DIR/SHA256SUMS" ] || die "rank 0: MODALITIES=text_image needs VISION_DIR, the tower's sidecar with its SHA256SUMS (tools/dsv41-zig/kit/make_vision_sidecar.py); now '$VISION_DIR'"
+      (cd "$VISION_DIR" && sha256sum --quiet -c SHA256SUMS) >&2 || die "rank 0: the vision sidecar $VISION_DIR does not match its SHA256SUMS"
+    fi
+  fi
   sum=$(sha256sum "$BUNDLE/inputs_manifest.json" | cut -d' ' -f1)
   [ "$sum" = "$BUNDLE_SHA256" ] || die "rank $RANK: inputs_manifest.json is $sum, the config pins $BUNDLE_SHA256"
   # U16: RANK_CACHE holds exactly the cache file the manifest names for this rank (the engine takes any
@@ -117,6 +152,18 @@ serve_env() {
   [ -n "${PREFILL_SPLIT_ZIP:-}" ] && SERVE_ENV+=(TF_DS_PREFILL_SPLIT_ZIP="$PREFILL_SPLIT_ZIP")
   [ -n "${LOGITS_SHA:-}" ] && SERVE_ENV+=(TF_DS_LOGITS_SHA="$LOGITS_SHA")
   [ -n "${WINDOW_LOGITS:-}" ] && SERVE_ENV+=(TF_DS_WINDOW_LOGITS="$WINDOW_LOGITS")
+  [ "$MODALITIES" = text_image ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_DS_VISION_DIR="$VISION_DIR")
+  [ -n "$TEST_FAULT" ] && SERVE_ENV+=(TF_DS_TEST_FAULT="$TEST_FAULT")
+  # sf-disk, both ranks alike (the handshake compares " disk=1"); nothing at all when off
+  if serve_disk_on; then
+    mkdir -p "${PROMPT_DISK_DIR:-$HOME/strixfold-cache/prefix}" && chmod 700 "${PROMPT_DISK_DIR:-$HOME/strixfold-cache/prefix}" ||
+      die "rank $RANK: cannot make PROMPT_DISK_DIR ${PROMPT_DISK_DIR:-$HOME/strixfold-cache/prefix}"
+    SERVE_ENV+=(TF_DS_PROMPT_DISK_GIB="$PROMPT_DISK_GIB" TF_DS_PROMPT_DISK_DIR="${PROMPT_DISK_DIR:-$HOME/strixfold-cache/prefix}")
+    [ -n "${PROMPT_DISK_FLOOR_GIB:-}" ] && SERVE_ENV+=(TF_DS_PROMPT_DISK_FLOOR_GIB="$PROMPT_DISK_FLOOR_GIB")
+    [ -n "${PROMPT_DISK_QUEUE_MIB:-}" ] && SERVE_ENV+=(TF_DS_PROMPT_DISK_QUEUE_MIB="$PROMPT_DISK_QUEUE_MIB")
+    [ -n "${PROMPT_DISK_MIN_TOKENS:-}" ] && SERVE_ENV+=(TF_DS_PROMPT_DISK_MIN_TOKENS="$PROMPT_DISK_MIN_TOKENS")
+    [ -n "${PROMPT_DISK_RATE_MIB:-}" ] && SERVE_ENV+=(TF_DS_PROMPT_DISK_RATE_MIB="$PROMPT_DISK_RATE_MIB")
+  fi
   # the launch's identity in the peers' handshake (U46): the deployed commit, the bundle's and serve.conf's hashes
   local commit
   commit=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["commit"])' "$DEPLOY_DIR/DEPLOY.json")
@@ -125,7 +172,7 @@ serve_env() {
     SERVE_ENV+=(TF_TP_WORLD="$WORLD" TF_TP_MASTER="$MASTER_IP" TF_TP_PORT="$TP_PORT" TF_DS_RANK_CACHE="$RANK_CACHE"
       TF_DS_KIT="$DS_KIT" TF_DS_ENGRAM="$ENGRAM_DIR" TF_DS_TOKEN_MAP="$TOKEN_MAP" TF_DS_STREAMS="$STREAMS"
       TF_DS_ROUND_ROWS="$ROUND_ROWS" TENSORFOLD_HIP_KERNELS="$KIT" TF_DS_HC_SIDE="$HC_SIDE" TF_DS_ENGRAM_AIO="$ENGRAM_AIO"
-      TF_TOP_K_MAX="$TOP_K_MAX" TF_SEED_RANDOM="$SEED_RANDOM" TF_DS_L2_PREFETCH="$L2_PREFETCH")
+      TF_TOP_K_MAX="$TOP_K_MAX" TF_SEED_RANDOM="$SEED_RANDOM" TF_DS_L2_PREFETCH="$L2_PREFETCH" TF_DS_POOL="$POOL")
   fi
 }
 
@@ -133,7 +180,7 @@ serve_env() {
 # command; with rank 0 and --requests, the lane gate of the same configuration: qual/lane_gate.sh).
 serve_lanes_cmd() {
   SERVE_CMD=("$BIN/tf-dsv41-lanes" "$MODEL_DIR" "$RANK_CACHE" "$RANK" "$WORLD" "$MASTER_IP" "$TP_PORT" "$DS_KIT"
-    --pool "$CONTEXT" --streams "$STREAMS" --round-rows "$ROUND_ROWS" --drafts "$DRAFTS"
+    --pool "$POOL" --context "$CONTEXT" --streams "$STREAMS" --round-rows "$ROUND_ROWS" --drafts "$DRAFTS"
     --engram "$ENGRAM_DIR" --token-map "$TOKEN_MAP" --modalities "$MODALITIES" --hip-kit "$KIT"
     --arena-gib "$ARENA_GIB" --graphs "$GRAPHS" --side "$HC_SIDE" --aio "$ENGRAM_AIO" --prefetch "$L2_PREFETCH")
   [ -n "$ROUND_MS" ] && SERVE_CMD+=(--round-ms "$ROUND_MS")
@@ -141,8 +188,8 @@ serve_lanes_cmd() {
   return 0
 }
 
-# serve_cmd: SERVE_CMD, the rank's argv. Rank 1's --pool, --streams, --round-rows and --graphs are rank 0's --context,
-# TF_DS_STREAMS, TF_DS_ROUND_ROWS and TF_DS_GRAPHS (upstream #25), from the same variables (tf-dsv41-lanes reads
+# serve_cmd: SERVE_CMD, the rank's argv. Rank 1's --pool, --context, --streams, --round-rows and --graphs are rank 0's
+# TF_DS_POOL, --context, TF_DS_STREAMS, TF_DS_ROUND_ROWS and TF_DS_GRAPHS (upstream #25), from the same variables (tf-dsv41-lanes reads
 # --graphs, --side, --aio and --prefetch, not TF_DS_GRAPHS, TF_DS_HC_SIDE, TF_DS_ENGRAM_AIO and TF_DS_L2_PREFETCH).
 serve_cmd() {
   if [ "$RANK" = 0 ]; then
