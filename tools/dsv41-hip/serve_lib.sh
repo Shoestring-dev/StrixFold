@@ -35,7 +35,8 @@ serve_load() {
   SPAWN_UNIT=${SPAWN_UNIT:-0}
   case $SPAWN_UNIT in 0|1) ;; *) die "SPAWN_UNIT must be 0 or 1, not $SPAWN_UNIT";; esac
   REPLAY_FLOOR=${REPLAY_FLOOR:-0} HC_SIDE=${HC_SIDE:-0} ENGRAM_AIO=${ENGRAM_AIO:-0} TOP_K_MAX=${TOP_K_MAX:-0} SEED_RANDOM=${SEED_RANDOM:-0}
-  L2_PREFETCH=${L2_PREFETCH:-0} LOOP_GUARD=${LOOP_GUARD:-0}
+  L2_PREFETCH=${L2_PREFETCH:-0} LOOP_GUARD=${LOOP_GUARD:-0} DRAFT_TEMPERATURE=${DRAFT_TEMPERATURE:-0}
+  [[ $DRAFT_TEMPERATURE =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "DRAFT_TEMPERATURE must be a number from 0 (off), not $DRAFT_TEMPERATURE"
   DRAFT_BYPASS_AT=${DRAFT_BYPASS_AT:-0}
   [[ $DRAFT_BYPASS_AT =~ ^(0|[2-8])$ ]] || die "DRAFT_BYPASS_AT must be 0 or 2..8"
   # the switch acts only on drafted TP2 shared rounds that can hold that many streams; elsewhere it is off
@@ -151,6 +152,8 @@ serve_cmd() {
       --prompt-cache-gib "$PROMPT_CACHE_GIB" --no-update-check)
     [ "$THINKING" = 1 ] && SERVE_CMD+=(--thinking) || SERVE_CMD+=(--no-thinking)
     [ "$LOOP_GUARD" = 1 ] && SERVE_CMD+=(--loop-guard)
+    # (0: the flag is left out, the argv of a build without it)
+    awk -v t="$DRAFT_TEMPERATURE" 'BEGIN { exit !(t > 0) }' && SERVE_CMD+=(--draft-temperature "$DRAFT_TEMPERATURE")
     [ "$DRAFTS" = 1 ] || SERVE_CMD+=(--no-drafts)
   else
     serve_lanes_cmd
