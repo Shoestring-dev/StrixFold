@@ -157,6 +157,7 @@ const Host = struct {
     lone: ?LoneRun = null, // the family's driver for a lone drafted stream, called with `family`
     cache: ?api.prompt_cache.Store = null, // kept prompt states, when the family keeps them
     snap_vt: api.prompt_cache.Snapshots.VTable = undefined,
+    learned: ?api.prompt_imprint.Imprint = null, // --learn: shared states on disk, when the family writes them
 
     fn close(p: *anyopaque) void {
         const h: *Host = @ptrCast(@alignCast(p));
@@ -165,6 +166,7 @@ const Host = struct {
         h.cfg.deinit(h.gpa);
         if (h.gpu) |g| g.ctx.makeCurrent() catch {};
         if (h.cache) |*store| store.deinit(); // the family's kept states go before the family
+        if (h.learned) |*m| m.deinit();
         h.release(h.family);
         if (h.gpu) |g| {
             g.ctx.deinit();
@@ -371,8 +373,30 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
     if (@hasField(@TypeOf(loaded), "snaps")) if (loaded.snaps) |sn| {
         const want: u64 = @intFromFloat((o.prompt_cache_gib orelse 0.5) * gib);
         if (want > 0) {
+            const S = @TypeOf(sn);
             h.snap_vt = .{ .bytes = sn.bytes, .save = sn.save, .restore = sn.restore, .drop = sn.drop };
-            h.cache = api.prompt_cache.Store.init(gpa, .{ .ptr = sn.ptr, .vtable = &h.snap_vt }, .{}, want);
+            if (@hasField(S, "write")) {
+                h.snap_vt.write = sn.write;
+                h.snap_vt.read = sn.read;
+                h.snap_vt.forget = sn.forget;
+            }
+            if (@hasField(S, "export_state")) {
+                h.snap_vt.export_state = sn.export_state;
+                h.snap_vt.import_state = sn.import_state;
+            }
+            const rules: api.prompt_cache.Rules = if (@hasField(S, "keep_step")) .{ .keep_step = sn.keep_step } else .{};
+            h.cache = api.prompt_cache.Store.init(gpa, .{ .ptr = sn.ptr, .vtable = &h.snap_vt }, rules, want);
+            if (@hasField(S, "identity")) h.cache.?.identity = sn.identity; // an exported state imports only into this identity
+            // --learn: the family's shared states on disk under its identity and device name, kept across restarts
+            if (o.learn) |root| if (h.snap_vt.write != null and h.snap_vt.read != null) {
+                var ih = std.hash.Wyhash.init(0x1ea5);
+                const family_id: u64 = if (@hasField(S, "identity")) sn.identity else 0;
+                ih.update(std.mem.asBytes(&family_id));
+                ih.update(name);
+                h.learned = try api.prompt_imprint.Imprint.open(gpa, root, ih.final(), @intFromFloat(o.learn_gib * gib));
+                h.cache.?.imprint = &h.learned.?;
+                std.log.info("learned prompt states in {s} ({d} known, {d} of {d} MiB)", .{ h.learned.?.dir, h.learned.?.metas.items.len, h.learned.?.total() >> 20, h.learned.?.cap >> 20 });
+            };
         }
     };
     // the family cuts its own prompt grid from position 0, as `tensorfold run` does: prefill_step 0

@@ -23,7 +23,7 @@ const Peer = struct {
 };
 
 /// A family over host memory for tests: its live state is a position and a running sum of the prompt's tokens.
-const Fake = struct {
+pub const Fake = struct {
     gpa: Allocator,
     at: u32 = 0,
     sum: u64 = 0,
@@ -32,6 +32,7 @@ const Fake = struct {
     live: usize = 0,
     spare_bytes: u64 = 0,
     peer: ?*Peer = null, // speed-up mode's rank 1: it keeps the same states and drops them only when a request names them
+    full_read: bool = false, // a learned state's read finds no room for it now (the pool is full)
 
     const State = struct { at: u32, sum: u64 };
 
@@ -58,6 +59,7 @@ const Fake = struct {
     }
     fn readFn(ptr: *anyopaque, dir: [:0]const u8, key: u64, at: u32) anyerror!Saved {
         const f = of(ptr);
+        if (f.full_read) return error.ContextFull;
         var path: [512]u8 = undefined;
         const fd = std.c.open(try file(&path, dir, key), .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
         if (fd < 0) return error.ReadFailed;
@@ -65,6 +67,25 @@ const Fake = struct {
         const st = try f.gpa.create(State);
         errdefer f.gpa.destroy(st);
         if (!imprint.readAt(fd, std.mem.asBytes(st), 0) or st.at != at) return error.ReadFailed;
+        f.live += 1;
+        return st;
+    }
+    /// With transfers between engines (POST /cache/export, /cache/import): a state as its position and sum.
+    fn moving(f: *Fake) Snapshots {
+        return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn, .export_state = exportFn, .import_state = importFn } };
+    }
+    fn exportFn(_: *anyopaque, saved: Saved, gpa: Allocator, out: *std.ArrayList(u8)) anyerror!void {
+        try out.appendSlice(gpa, std.mem.asBytes(@as(*State, @ptrCast(@alignCast(saved)))));
+    }
+    fn importFn(ptr: *anyopaque, at: u32, bytes: []const u8) anyerror!Saved {
+        const f = of(ptr);
+        if (bytes.len != @sizeOf(State)) return error.BadState;
+        const st = try f.gpa.create(State);
+        @memcpy(std.mem.asBytes(st), bytes);
+        if (st.at != at) {
+            f.gpa.destroy(st);
+            return error.BadState;
+        }
         f.live += 1;
         return st;
     }
@@ -152,7 +173,7 @@ const Fake = struct {
     }
 };
 
-fn fresh(prompt: []const u32) u64 {
+pub fn fresh(prompt: []const u32) u64 {
     var sum: u64 = 0;
     for (prompt) |t| sum = sum *% 31 +% t;
     return sum;
@@ -474,4 +495,65 @@ test "past the learned-state cap the least recently used state is forgotten, and
     try std.testing.expect(!im.has(imprint.Imprint.keyOf(&two)));
     try std.testing.expectEqual(fresh(&p3), g.pass(&t, &p3, plan));
     try std.testing.expect(im.has(imprint.Imprint.keyOf(&two))); // learned again by that pass
+}
+
+test "a family that keeps only at keep_step multiples marks there, and its shared cut is learned at the multiple below" {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var root_buf: [128]u8 = undefined;
+    const root = try std.fmt.bufPrint(&root_buf, "/tmp/tf-learn-step-{d}", .{std.c.getpid()});
+    defer rmTree(root);
+    // a family keeping at every 4th position: the history (11) and the shared cut (6) are kept at 8 and 4, 4 learned
+    const rules: pc.Rules = .{ .min_prompt = 0, .min_gap = 1, .keep_step = 4 };
+    var im = try imprint.Imprint.open(gpa, root, 3, 1 << 30);
+    defer im.deinit();
+    var f: Fake = .{ .gpa = gpa };
+    var s = Store.init(gpa, f.learned(), rules, 1 << 20);
+    defer s.deinit();
+    s.imprint = &im;
+    const prompt = [_]u32{ 7, 7, 7, 7, 7, 7, 1, 2, 3, 4, 5, 9 };
+    const plan = try s.begin(a, &prompt, 11, &.{6}, &.{}, null);
+    try std.testing.expectEqualSlices(u32, &.{ 4, 8 }, plan.marks);
+    try std.testing.expectEqual(fresh(&prompt), f.pass(&s, &prompt, plan));
+    try std.testing.expect(im.has(imprint.Imprint.keyOf(prompt[0..4])));
+    try std.testing.expect(!im.has(imprint.Imprint.keyOf(prompt[0..8]))); // the history's state is not shared
+}
+
+test "a learned state with no room in the pool now stays on disk for a later prompt" {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var root_buf: [128]u8 = undefined;
+    const root = try std.fmt.bufPrint(&root_buf, "/tmp/tf-learn-full-{d}", .{std.c.getpid()});
+    defer rmTree(root);
+    const rules: pc.Rules = .{ .lookahead = 1, .min_prompt = 0, .min_gap = 1 };
+    const harness = [_]u32{ 7, 7, 7, 7, 7, 7 };
+    const key = imprint.Imprint.keyOf(&harness);
+    var im = try imprint.Imprint.open(gpa, root, 3, 1 << 30);
+    defer im.deinit();
+    {
+        var f: Fake = .{ .gpa = gpa };
+        var s = Store.init(gpa, f.learned(), rules, 1 << 20);
+        defer s.deinit();
+        s.imprint = &im;
+        const first = harness ++ [_]u32{ 1, 2, 9 };
+        _ = f.pass(&s, &first, try s.begin(a, &first, 8, &.{5}, &.{}, null));
+        try std.testing.expect(im.has(key));
+    }
+    var g: Fake = .{ .gpa = gpa, .full_read = true };
+    var t = Store.init(gpa, g.learned(), rules, 1 << 20);
+    defer t.deinit();
+    t.imprint = &im;
+    const second = harness ++ [_]u32{ 3, 4, 9 };
+    const plan = try t.begin(a, &second, 8, &.{5}, &.{}, null);
+    try std.testing.expectEqual(@as(u32, 0), plan.from); // no room: a fresh pass
+    try std.testing.expect(im.has(key)); // and the learned state is still there
+    var path: [512]u8 = undefined;
+    const fd = std.c.open(try Fake.file(&path, im.dir, key), .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    try std.testing.expect(fd >= 0); // its file too
+    _ = std.c.close(fd);
+    try std.testing.expectEqual(fresh(&second), g.pass(&t, &second, plan));
 }

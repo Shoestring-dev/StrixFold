@@ -49,9 +49,8 @@ const HipKit = if (gpu.backend == .hip) *gpu.Kit else void;
 /// The served prompt chunk (TF_DS_PREFILL_CHUNK): a prompt runs in chunks that start at its multiples.
 pub const chunk_rows = 2048;
 
-/// The version of lanes.zig's frames, rank 0 to rank 1 (the handshake compares it): 2 since fill_chunk carries rank 0's
-/// Engram read-ahead plan (2026-10-22).
-pub const frame_protocol = 2;
+/// The version of lanes.zig's frames (the handshake compares it): 2 the read-ahead plan, 3 states to disk, 4 snap_put.
+pub const frame_protocol = 4;
 
 /// The prompt chunk buffers' rows: one of chunk_rows, or two halves when chunks split (TF_DS_PREFILL_SPLIT).
 pub fn chunkCaps(split_min: usize) [2]usize {
@@ -700,6 +699,66 @@ pub const Model = struct {
         }
     }
 
+    /// The planes a kept state's compressed rows lie in, as (plane, positions a row, bytes a row) in layer order.
+    fn rowPlanes(m: *const Model, out: *[4 * 128][3]u64) []const [3]u64 {
+        const c = m.eng.c;
+        const cs = &m.caches;
+        var n: usize = 0;
+        for (m.eng.w.layers, 0..) |lay, i| {
+            if (lay.comp_wkv == null) continue;
+            const r: u64 = lay.ratio;
+            out[n] = .{ cs.comp_codes[i], r, c.head_dim / 2 };
+            out[n + 1] = .{ cs.comp_scales[i], r, c.head_dim / 16 };
+            n += 2;
+            if (lay.idx_wk != null) {
+                out[n] = .{ cs.idx_codes[i], r, c.index_head_dim / 2 };
+                out[n + 1] = .{ cs.idx_scales[i], r, c.index_head_dim / 32 };
+                n += 2;
+            }
+        }
+        return out[0..n];
+    }
+
+    /// The bytes of a kept state's compressed rows at `at` positions (every plane, layer order).
+    pub fn rowsBytes(m: *const Model, at: usize) usize {
+        var buf: [4 * 128][3]u64 = undefined;
+        var n: usize = 0;
+        for (m.rowPlanes(&buf)) |p| n += at / p[1] * p[2];
+        return n;
+    }
+
+    /// A word that changes whenever the planes' layout does (a state file written by another layout is refused).
+    pub fn rowsLayout(m: *const Model) u64 {
+        var buf: [4 * 128][3]u64 = undefined;
+        var h = std.hash.Wyhash.init(0x5d57);
+        for (m.rowPlanes(&buf)) |p| h.update(std.mem.asBytes(&[2]u64{ p[1], p[2] }));
+        const sb: u64 = m.snapBytes();
+        h.update(std.mem.asBytes(&sb));
+        return h.final();
+    }
+
+    /// The compressed rows [base, base + at) of every plane into `host` (rowsBytes(at) long), or back (put); synced.
+    pub fn rowsCopy(m: *Model, base: usize, at: usize, host: []u8, put: bool) !void {
+        if (host.len != m.rowsBytes(at)) return error.BadStateFile;
+        var buf: [4 * 128][3]u64 = undefined;
+        try m.stream.synchronize();
+        var off: usize = 0;
+        for (m.rowPlanes(&buf)) |p| {
+            if (base % p[1] != 0 or at % p[1] != 0) return error.BadView;
+            const n = at / p[1] * p[2];
+            const dev = p[0] + base / p[1] * p[2];
+            if (put) try gpu.copyH2D(m.ctx.d, dev, host[off..][0..n]) else try gpu.copyD2H(m.ctx.d, host[off..][0..n], dev);
+            off += n;
+        }
+    }
+
+    /// A kept state's slot part (`buf`, snapBytes long) into `host`, or back (put), synchronous.
+    pub fn slotCopy(m: *Model, buf: u64, host: []u8, put: bool) !void {
+        if (host.len != m.snapBytes()) return error.BadStateFile;
+        try m.stream.synchronize();
+        if (put) try gpu.copyH2D(m.ctx.d, buf, host) else try gpu.copyD2H(m.ctx.d, host, buf);
+    }
+
     fn copySpan(m: *Model, plane: u64, from: usize, to: usize, n: usize, row: usize) !void {
         const d = m.ctx.d;
         try gpu.copyD2DAsync(d, m.stream.handle, plane + to * row, plane + from * row, n * row);
@@ -1280,6 +1339,6 @@ test "a launch identity is one plan token of at most 16 characters" {
 
 test "the handshake names what orders a prompt chunk's gathers: split, zip, chunk rows, phase timer, frames" {
     var b: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=2", try Model.gatherOrder(&b, 256, true, false));
-    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=2", try Model.gatherOrder(&b, 0, true, true));
+    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=4", try Model.gatherOrder(&b, 256, true, false));
+    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=4", try Model.gatherOrder(&b, 0, true, true));
 }
