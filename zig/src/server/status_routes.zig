@@ -19,6 +19,8 @@ pub fn health(srv: *Server, conn: *Conn, a: Allocator) !void {
     for (srv.config.model_ids, ids) |id, *slot| slot.* = .{ .string = id };
     try o.put(a, "model_ids", .{ .array = ids });
     try o.put(a, "max_batch_size", try json.intValue(a, srv.info.lanes));
+    // the prompt plus reply tokens one request may use: a client sizes its windows from it, not a copied number
+    if (srv.info.context_window > 0) try o.put(a, "context_length", try json.intValue(a, srv.info.context_window));
     var status: api.Status = .{};
     srv.engine.status(&status, &.{});
     try o.put(a, "warming", .{ .bool = status.warming });
