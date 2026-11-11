@@ -5,6 +5,7 @@ const picture = @import("picture.zig");
 const model = @import("model.zig");
 const pil = @import("pil.zig");
 const image_cache = @import("vision_cache.zig");
+const pipe = @import("vision_pipe.zig");
 
 /// A prepared payload is a six-u32 little-endian grid followed by sixteen-byte-aligned BF16 patches.
 const header_bytes = 32;
@@ -20,6 +21,7 @@ pub const Vision = struct {
     hip_code: ?[]const u8,
     hip_digest: ?[]const u8,
     cache: image_cache.Cache,
+    timeout: u32,
     pil: ?*pil.Pil = null, // the formats picture.zig does not decode (null: no python3 with Pillow here)
 
     /// Register the optional tower without loading its weights or starting Torch.
@@ -37,9 +39,12 @@ pub const Vision = struct {
             return error.NoVisionCpuConfig;
         if ((code == null) != (code_digest == null) or cache_mib > 512) return error.NoVisionCpuConfig;
         if (code) |path| if (!std.fs.path.isAbsolute(path) or code_digest.?.len != 64) return error.NoVisionCpuConfig;
+        const timeout = std.fmt.parseInt(u32, env("TF_DS_VISION_TIMEOUT") orelse "240", 10) catch
+            return error.NoVisionCpuConfig;
+        if (timeout == 0) return error.NoVisionCpuConfig;
         const v = try gpa.create(Vision);
         v.* = .{ .gpa = gpa, .m = m, .io = io, .python = python, .weights = weights, .digest = digest,
-            .hip_code = code, .hip_digest = code_digest,
+            .hip_code = code, .hip_digest = code_digest, .timeout = timeout,
             .cache = .{ .allocator = gpa, .budget = cache_mib << 20 } };
         // PNG decoding is native; other formats use the existing bounded Pillow decoder if installed.
         v.pil = pil.Pil.start(gpa, io) catch null;
@@ -124,7 +129,7 @@ pub const Vision = struct {
             g.spanTokens() != tokens or tokens > v.cfg.max_tokens) return error.BadImagePayload;
     }
 
-    fn start(v: *Vision, payload: []const u8) !std.process.Child {
+    fn start(v: *Vision, payload: []const u8, transfer: *const pipe.Transfer) !std.process.Child {
         const cpu = @embedFile("vision_cpu.py");
         const hip = @embedFile("vision_hip.py") ++ "\n" ++ cpu;
         const argv: []const []const u8 = if (v.hip_code) |code|
@@ -136,23 +141,23 @@ pub const Vision = struct {
             .stdin = .pipe, .stdout = .pipe, .stderr = .inherit,
         });
         errdefer child.kill(v.io);
-        try child.stdin.?.writeStreamingAll(v.io, payload);
+        try transfer.write(child.stdin.?.handle, payload);
         child.stdin.?.close(v.io);
         child.stdin = null;
         return child;
     }
 
-    fn finish(v: *Vision, owned: *?std.process.Child, out: []u8, tokens: u32, cancel: ?lanes.stream.CancelCheck) !void {
+    fn finish(v: *Vision, owned: *?std.process.Child, out: []u8, tokens: u32, transfer: *const pipe.Transfer) !void {
         const child = if (owned.*) |*p| p else unreachable;
         const fd = child.stdout.?.handle;
         var head: [16]u8 = undefined;
-        try readReply(fd, &head, cancel);
+        try transfer.read(fd, &head);
         const rows_n = std.mem.readInt(u32, head[4..8], .little);
         const bytes = std.mem.readInt(u64, head[8..16], .little);
         if (!std.mem.eql(u8, head[0..4], "VCPU") or rows_n != tokens or bytes != tokens * 5120 * 2) return error.BadImageRows;
         if (bytes != out.len) return error.BadImageRows;
-        try readReply(fd, out, cancel);
-        try waitForReply(fd, cancel);
+        try transfer.read(fd, out);
+        try transfer.ready(fd, std.c.POLL.IN);
         var trailing: [1]u8 = undefined;
         if (std.c.read(fd, &trailing, trailing.len) != 0) return error.BadImageRows;
         const term = try child.wait(v.io);
@@ -180,11 +185,12 @@ pub const Vision = struct {
                 hits += 1;
                 continue;
             }
-            var child: ?std.process.Child = try v.start(img.bytes);
+            const transfer = pipe.Transfer.init(v.io, request.cancel_check, v.timeout);
+            var child: ?std.process.Child = try v.start(img.bytes, &transfer);
             defer if (child) |*owned| owned.kill(v.io);
             const row_offset = out.items.len;
             try out.resize(gpa, row_offset + size);
-            try v.finish(&child, out.items[row_offset..], img.tokens, request.cancel_check);
+            try v.finish(&child, out.items[row_offset..], img.tokens, &transfer);
             if (request.isCancelled()) return error.Cancelled;
             v.cache.put(digest, out.items[row_offset..]);
             jobs += 1;
@@ -193,39 +199,6 @@ pub const Vision = struct {
     }
 
 };
-
-fn readReply(fd: std.c.fd_t, dest: []u8, cancel: ?lanes.stream.CancelCheck) !void {
-    var at: usize = 0;
-    while (at < dest.len) {
-        try waitForReply(fd, cancel);
-        const n = std.c.read(fd, dest[at..].ptr, dest.len - at);
-        if (n <= 0) return error.VisionCpuPipe;
-        at += @intCast(n);
-    }
-}
-
-/// The owning thread polls cancellation and kills/reaps its child without PID lookups.
-fn waitForReply(fd: std.c.fd_t, cancel: ?lanes.stream.CancelCheck) !void {
-    var fds = [_]std.c.pollfd{.{ .fd = fd, .events = std.c.POLL.IN, .revents = 0 }};
-    while (true) {
-        if (cancel) |c| if (c.check(c.ptr)) return error.Cancelled;
-        const count = std.c.poll(&fds, 1, 100);
-        if (count < 0 or fds[0].revents & std.c.POLL.NVAL != 0) return error.VisionCpuPipe;
-        if (count > 0) return;
-    }
-}
-
-test "a cancelled image does not wait for the encoder" {
-    var marker: u8 = 0;
-    const check = struct {
-        fn call(_: *anyopaque) bool { return true; }
-    }.call;
-    try std.testing.expectError(error.Cancelled, waitForReply(-1, .{ .ptr = &marker, .check = check }));
-}
-
-test "an invalid encoder pipe fails closed" {
-    try std.testing.expectError(error.VisionCpuPipe, waitForReply(1000000, null));
-}
 
 test "a payload's grid reads back" {
     var buf: [header_bytes]u8 = undefined;

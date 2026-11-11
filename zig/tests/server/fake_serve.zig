@@ -6,7 +6,7 @@ const ScriptEngine = @import("fake_engine.zig").ScriptEngine;
 const api = @import("engine_api");
 
 fn imagePrepare(_: *anyopaque, _: std.mem.Allocator, bytes: []const u8, _: *[]const u8) api.Vision.PrepareError!api.Vision.Prepared {
-    return .{ .tokens = 4, .payload = bytes };
+    return .{ .tokens = if (std.mem.eql(u8, bytes, "image-B")) 8 else 4, .payload = bytes };
 }
 
 fn announce(port: u16) void {

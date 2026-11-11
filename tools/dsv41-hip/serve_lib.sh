@@ -14,10 +14,15 @@ serve_load() {
   [ -f "$SERVE_CONF" ] || die "no config $SERVE_CONF"
   # shellcheck source=serve.conf
   source "$SERVE_CONF"
+  local vision_key vision_env
+  for vision_key in VISION_PYTHON VISION_WEIGHTS VISION_SHA256 VISION_BIAS_SHA256 VISION_HIP_CODE VISION_HIP_SHA256 VISION_CACHE_MIB VISION_THREADS VISION_TIMEOUT VISION_RESERVE_MIB; do
+    vision_env=TF_DS_$vision_key
+    printf -v "$vision_key" '%s' "${!vision_key:-${!vision_env:-}}"
+  done
   DEPLOY_DIR_RAW=$DEPLOY_DIR  # unexpanded: another box's own $HOME (first_light.sh names rank 0's tools with it)
   local v
   # in this order: a path may name one expanded before it ($BUNDLE)
-  for v in DEPLOY_DIR BUNDLE MODEL_DIR RANK_CACHE DS_KIT ENGRAM_DIR TOKEN_MAP RUN_ROOT; do eval "$v=\"${!v}\""; done
+  for v in DEPLOY_DIR BUNDLE MODEL_DIR RANK_CACHE DS_KIT ENGRAM_DIR TOKEN_MAP RUN_ROOT VISION_PYTHON VISION_WEIGHTS VISION_HIP_CODE; do eval "$v=\"${!v}\""; done
   BIN=$DEPLOY_DIR/native-hip/bin
   KIT=$DEPLOY_DIR/$KIT_SUBDIR
   [ "$PARALLEL" -ge 1 ] && [ "$PARALLEL" -le "$STREAMS" ] || die "PARALLEL $PARALLEL must be 1 .. STREAMS ($STREAMS)"
@@ -71,6 +76,21 @@ if need_report == "1":
         sys.exit(f"verify report {report}: status {r.get('status')}, rank {r.get('rank')}, manifest "
                  f"{r.get('manifest_sha256', 'not recorded')}; wanted pass for rank {rank} and manifest {sha}")
 PY
+  if [ "$MODALITIES" = text_image ]; then
+    local vision_args=(--bias "$DS_KIT/vision/gate_bias_vl.safetensors" --bias-sha256 "$VISION_BIAS_SHA256")
+    if [ "$RANK" = 0 ]; then
+      vision_args+=(--python "$VISION_PYTHON" --weights "$VISION_WEIGHTS" --weights-sha256 "$VISION_SHA256")
+    fi
+    python3 "$SERVE_TOOLS/verify_vision.py" "${vision_args[@]}" || die "vision input verification failed"
+    if [ "$RANK" = 0 ] && [ -n "$VISION_HIP_CODE$VISION_HIP_SHA256" ]; then
+      python3 - "$SERVE_TOOLS" "$VISION_HIP_CODE" "$VISION_HIP_SHA256" <<'PYCODE' || die "vision HIP code verification failed"
+import sys
+sys.path.insert(0, sys.argv[1])
+from verify_vision import checked_file
+checked_file(sys.argv[2], sys.argv[3])
+PYCODE
+    fi
+  fi
 }
 
 # serve_idle (U25): this box is idle before a rank starts: no other engine process, and MemAvailable at least the
@@ -90,6 +110,18 @@ serve_env() {
     TF_DS_MODALITIES="$MODALITIES" TF_DS_GRAPHS="$GRAPHS" TF_DS_ARENA_GIB="$ARENA_GIB"
     TF_COLL_STRIPE_MIB="$COLL_STRIPE_MIB" TF_COLL_RTO_MIN_US="$COLL_RTO_MIN_US" TF_COLL_PROGRESS_MS="$COLL_PROGRESS_MS"
     TF_COLL_STAGING="$COLL_STAGING" TF_COLL_KIND="$COLL_KIND" TF_DS_AUX="$AUX" TF_DS_REPLAY_FLOOR="$REPLAY_FLOOR")
+  if [ "$MODALITIES" = text_image ] && [ "$RANK" = 0 ]; then
+    local vision_key vision_value
+    for vision_key in PYTHON WEIGHTS SHA256; do
+      vision_value=VISION_$vision_key
+      [ -n "${!vision_value}" ] || die "$vision_value is required for image serving"
+    done
+    for vision_key in PYTHON WEIGHTS SHA256 HIP_CODE HIP_SHA256 CACHE_MIB THREADS TIMEOUT RESERVE_MIB; do
+      vision_value=VISION_$vision_key
+      [ -z "${!vision_value}" ] || SERVE_ENV+=("TF_DS_VISION_$vision_key=${!vision_value}")
+    done
+    SERVE_ENV+=(PATH="$(dirname "$VISION_PYTHON"):/usr/local/bin:/usr/bin:/bin")
+  fi
   [ "$COLL_KIND" = proxy ] && SERVE_ENV+=(TF_COLL_PROXY_CPU="$COLL_PROXY_CPU" TF_COLL_SLOT_KIB="$COLL_SLOT_KIB"
     TF_COLL_PROXY_STRIPE_KIB="${COLL_PROXY_STRIPE_KIB:-0}" TF_COLL_PROXY_CPU2="${COLL_PROXY_CPU2:-7}")
   [ -n "${COLL_GPU_WAIT_S:-}" ] && SERVE_ENV+=(TF_COLL_GPU_WAIT_S="$COLL_GPU_WAIT_S")  # (a conf without them: the engine's)

@@ -3,7 +3,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -36,6 +38,19 @@ class VisionConfigurationTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         cpu.main()
                 cpu.torch.set_num_threads.assert_not_called()
+
+    def test_worker_timeout_covers_torch_import(self):
+        source = ROOT / 'zig/src/families/dsv41/vision_cpu.py'
+        code = ("import builtins,time; original=builtins.__import__\n"
+                "def slow_import(name,*args,**kwargs):\n"
+                " if name=='torch': time.sleep(10)\n"
+                " return original(name,*args,**kwargs)\n"
+                "builtins.__import__=slow_import\n"
+                "exec(compile(open(__import__('sys').argv[1]).read(),'<vision-worker>','exec'),{'__name__':'__main__'})")
+        result = subprocess.run([sys.executable, '-c', code, source],
+                                env={**os.environ, 'TF_DS_VISION_TIMEOUT': '1'},
+                                capture_output=True, timeout=3)
+        self.assertEqual(result.returncode, -signal.SIGALRM)
 
     def test_code_object_build_uses_the_selected_architecture(self):
         with tempfile.TemporaryDirectory() as directory:

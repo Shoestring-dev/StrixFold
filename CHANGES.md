@@ -12,6 +12,8 @@ LICENSES/ and THIRD_PARTY_NOTICES.md are unchanged; NOTICE gains one section at 
 - Add an on-demand CPU encoder with optional hash-pinned HIP attention and configurable resource limits.
 - Support image chat parts, image tool results and expanded image tokenization through the existing lane path.
 - Retain bounded image rows and content-keyed image prefixes when enabled.
+- Preserve image identity when a template reorders tool results, forward image settings through the standard
+  serving launcher, and bound encoder startup and pipe transfer with cancellation and a deadline.
 - Add synthetic extraction, admission and image API tests. Setup and output-check requirements are in
   `tools/dsv41-hip/VISION.md`.
 

@@ -47,10 +47,19 @@ refer to artifacts selected by the operator's existing launch configuration.
 | `TF_DS_VISION_THREADS` | Optional Torch thread count, otherwise Torch chooses |
 | `TF_DS_VISION_TIMEOUT` | Worker timeout in seconds, default 240 |
 
+The standard serving scripts accept the corresponding `VISION_*` names in
+`serve.conf`, including `VISION_BIAS_SHA256` for the routing-bias file. They
+also accept exported `TF_DS_VISION_*` settings when a config entry is empty.
+The launcher forwards these settings through its environment allowlist, adds
+the selected Python directory to `PATH`, and verifies image inputs before
+startup. The deployment helper includes image routing biases when present in
+the selected model kit.
+
 The worker starts on demand and exits before language-model prefill. Its input
 is a bounded picture grid and BF16 patches. Each image has at most 9,216 vision
 patches and 1,024 image-span tokens. The owning request can cancel and reap its
-encoder. Text requests use the existing language-model execution path.
+encoder. One parent-side deadline covers child startup, input writes and output
+reads. The child also installs its timeout before importing Torch. Text requests use the existing language-model execution path.
 
 PNG preparation uses the native image decoder. Other formats use the existing
 Pillow helper, so make the selected Python environment available on the
@@ -79,7 +88,8 @@ Output checks and release gates apply to both paths.
 ## Image API and reuse
 
 Chat requests accept PNG/JPEG base64 data URLs in `image_url` parts, including
-images in tool results. Image spans preserve their order in the prompt.
+images in tool results. Image identities follow their content through template rendering, including
+templates that reorder tool results into tool-call order.
 Tokenization accounts for the expanded image rows.
 
 A nonzero image-row cache budget also enables image-aware prefix retention

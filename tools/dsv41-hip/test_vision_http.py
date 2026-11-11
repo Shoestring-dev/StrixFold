@@ -1,5 +1,7 @@
 """Opt-in GPU-free HTTP regression with the real pinned tokenizer/template."""
 
+import base64
+import itertools
 import json
 import os
 from pathlib import Path
@@ -97,6 +99,29 @@ class ImageHTTPRegression(unittest.TestCase):
         body['messages'][0]['content'][1]['image_url']['url'] = 'http://127.0.0.1/private'
         status, _ = self.post('/v1/chat/completions', body)
         self.assertEqual(status, 400)
+
+    def test_tool_result_reordering_preserves_image_identity(self):
+        def tool_result(identity, payload):
+            data = base64.b64encode(payload.encode()).decode()
+            return {'role': 'tool', 'tool_call_id': identity, 'content': [
+                {'type': 'text', 'text': 'Screenshot ' + identity},
+                {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + data}}]}
+        body = self.body(0)
+        head = [{'role': 'user', 'content': 'Inspect both screenshots.'},
+                {'role': 'assistant', 'content': '', 'tool_calls': [
+                    {'id': 'a', 'type': 'function', 'function': {'name': 'inspect', 'arguments': '{}'}},
+                    {'id': 'b', 'type': 'function', 'function': {'name': 'inspect', 'arguments': '{}'}}]}]
+        results = [tool_result('a', 'image-A'), tool_result('b', 'image-B')]
+        expected = None
+        for order in (results, list(reversed(results))):
+            body['messages'] = head + order
+            status, tokens = self.post('/v1/tokenize', body)
+            self.assertEqual(status, 200, tokens)
+            spans = [len(list(group)) for token, group in itertools.groupby(tokens['tokens']) if token == 129264]
+            self.assertEqual(spans, [4, 8])
+            if expected is not None:
+                self.assertEqual(tokens['tokens'], expected)
+            expected = tokens['tokens']
 
     def test_streamed_image_reply_finishes(self):
         body = self.body()

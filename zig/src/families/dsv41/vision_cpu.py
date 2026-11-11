@@ -113,11 +113,15 @@ def decode_grid(header):
     return nh, nw, n, tokens
 
 
-def main():
+def timeout_seconds():
     timeout = int(os.environ.get('TF_DS_VISION_TIMEOUT', '240'))
     if timeout < 1:
         raise ValueError('vision worker timeout must be positive')
-    signal.alarm(timeout)
+    return timeout
+
+
+def main():
+    timeout_seconds()
     threads = os.environ.get('TF_DS_VISION_THREADS')
     if threads is not None:
         if int(threads) < 1:
@@ -148,6 +152,7 @@ def main():
 
 
 if __name__ == '__main__':
+    signal.alarm(timeout_seconds())
     import torch
     import torch.nn.functional as F
     if torch.__version__ != '2.9.0+cpu':

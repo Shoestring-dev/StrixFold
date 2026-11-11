@@ -61,4 +61,5 @@ test {
     _ = @import("native.zig");
     _ = @import("hipblas.zig");
     _ = @import("hip_load.zig");
+    _ = @import("vision_pipe.zig");
 }
