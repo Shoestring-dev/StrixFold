@@ -71,6 +71,9 @@ The commands this port runs, in order (build, prepare the inputs, serve, check, 
 On a Bosgame M5 (same chip, ships with Windows), first follow [docs/BOSGAME-M5.md](docs/BOSGAME-M5.md): BIOS, Debian
 13, the 7.2.7 kernel with Secure Boot on, and ROCm 10.0.
 
+Driving it from an agent harness (tool calls, and keeping agents out of repeat loops):
+[docs/AGENTS.md](docs/AGENTS.md).
+
 ## Tuning the two boxes
 
 What made the link between the boxes fast and steady (MTU, which traffic goes on which cable, TCP retransmit floors,
