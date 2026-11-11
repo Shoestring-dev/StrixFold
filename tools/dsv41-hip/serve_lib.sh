@@ -39,8 +39,23 @@ serve_load() {
   # share it while each request stays within CONTEXT (rank 0 TF_DS_POOL, rank 1 --pool; both ranks --context CONTEXT)
   POOL=${POOL:-$CONTEXT}
   [[ $POOL =~ ^[0-9]+$ ]] && [ "$POOL" -ge "$CONTEXT" ] || die "POOL $POOL must be a position count of at least CONTEXT ($CONTEXT)"
-  [ "$GRAPHS" = 0 ] || [ "$TRANSPORT" != tcp ] || [ "$COLL_KIND" = proxy ] || die "GRAPHS=1 over tcp needs COLL_KIND=proxy"
-  [ "$GRAPHS" = 0 ] || [ "$COLL_KIND" != proxy ] || [ $((ROUND_ROWS * 64640 * 4)) -le $((COLL_SLOT_KIB * 1024)) ] ||
+  # the transport: tcp (COLL_KIND host or proxy) or rdma (rdma_proxy.zig; kind rdma, one QP per pair: no stripes)
+  TRANSPORT=${TRANSPORT:-tcp} RDMA_DEV0=${RDMA_DEV0:-} RDMA_DEV1=${RDMA_DEV1:-} RDMA_IFNAME=${RDMA_IFNAME:-} RDMA_GID=${RDMA_GID:-3}
+  case $TRANSPORT in
+    tcp) ;;
+    rdma)
+      COLL_KIND=rdma
+      [ -z "$TP_STRIPE" ] || die "TRANSPORT=rdma: TP_STRIPE must be empty (the rdma collective moves every gather over one QP)"
+      [ "${COLL_PROXY_STRIPE_KIB:-0}" = 0 ] || die "TRANSPORT=rdma: COLL_PROXY_STRIPE_KIB must be empty or 0 (no second proxy thread)"
+      if [ -n "$RDMA_DEV0$RDMA_DEV1" ]; then
+        [ -n "$RDMA_DEV0" ] && [ -n "$RDMA_DEV1" ] || die "TRANSPORT=rdma: RDMA_DEV0 and RDMA_DEV1 come together (both or neither)"
+      fi
+      [[ $RDMA_GID =~ ^[0-9]+$ ]] && [ "$RDMA_GID" -le 255 ] || die "RDMA_GID must be a GID index 0..255, not $RDMA_GID";;
+    *) die "TRANSPORT must be tcp or rdma, not $TRANSPORT";;
+  esac
+  case $COLL_KIND in host|proxy|rdma) ;; *) die "COLL_KIND must be host or proxy (over tcp), not $COLL_KIND";; esac
+  [ "$GRAPHS" = 0 ] || [ "$COLL_KIND" = proxy ] || [ "$COLL_KIND" = rdma ] || die "GRAPHS=1 needs COLL_KIND=proxy or TRANSPORT=rdma (tcp_host is not capturable)"
+  [ "$GRAPHS" = 0 ] || [ "$COLL_KIND" = host ] || [ $((ROUND_ROWS * 64640 * 4)) -le $((COLL_SLOT_KIB * 1024)) ] ||
     die "GRAPHS=1: the head gather at ROUND_ROWS=$ROUND_ROWS ($((ROUND_ROWS * 64640 * 4)) B) exceeds COLL_SLOT_KIB=$COLL_SLOT_KIB"
   # (a configuration written before these settings existed runs with them off)
   SPAWN_UNIT=${SPAWN_UNIT:-0}
@@ -110,6 +125,21 @@ if need_report == "1":
         sys.exit(f"verify report {report}: status {r.get('status')}, rank {r.get('rank')}, manifest "
                  f"{r.get('manifest_sha256', 'not recorded')}; wanted pass for rank {rank} and manifest {sha}")
 PY
+  [ "$TRANSPORT" = rdma ] && serve_rdma_check
+  return 0
+}
+
+# serve_rdma_check (TRANSPORT=rdma): this rank's device, port, GID, memlock and uverbs (rdma_check.py). The slab the
+# proxy registers is 2 x 8 slots x COLL_SLOT_KIB (the engine's TF_COLL_SLOTS default); memlock must hold at least
+# that, and 256 MiB.
+serve_rdma_check() {
+  local dv=RDMA_DEV$RANK need args=()
+  need=$(( (2 * 8 * COLL_SLOT_KIB + 1023) / 1024 ))
+  [ "$need" -ge 256 ] || need=256
+  [ -n "${!dv:-}" ] && args+=(--dev "${!dv}")
+  [ -n "$RDMA_IFNAME" ] && args+=(--ifname "$RDMA_IFNAME")
+  python3 "$SERVE_TOOLS/rdma_check.py" "${args[@]}" --gid "$RDMA_GID" --memlock-mib "$need" >&2 ||
+    die "rank $RANK: the rdma check failed on $(hostname) (rdma_check.py above)"
 }
 
 # serve_idle (U25): this box is idle before a rank starts: no other engine process, and MemAvailable at least the
@@ -129,8 +159,14 @@ serve_env() {
     TF_DS_MODALITIES="$MODALITIES" TF_DS_GRAPHS="$GRAPHS" TF_DS_ARENA_GIB="$ARENA_GIB"
     TF_COLL_STRIPE_MIB="$COLL_STRIPE_MIB" TF_COLL_RTO_MIN_US="$COLL_RTO_MIN_US" TF_COLL_PROGRESS_MS="$COLL_PROGRESS_MS"
     TF_COLL_STAGING="$COLL_STAGING" TF_COLL_KIND="$COLL_KIND" TF_DS_AUX="$AUX" TF_DS_REPLAY_FLOOR="$REPLAY_FLOOR")
-  [ "$COLL_KIND" = proxy ] && SERVE_ENV+=(TF_COLL_PROXY_CPU="$COLL_PROXY_CPU" TF_COLL_SLOT_KIB="$COLL_SLOT_KIB"
-    TF_COLL_PROXY_STRIPE_KIB="${COLL_PROXY_STRIPE_KIB:-0}" TF_COLL_PROXY_CPU2="${COLL_PROXY_CPU2:-7}")
+  # the proxy settings serve both slot collectives (tcp_proxy and rdma_proxy); the stripe thread is tcp_proxy's only
+  case $COLL_KIND in proxy|rdma) SERVE_ENV+=(TF_COLL_PROXY_CPU="$COLL_PROXY_CPU" TF_COLL_SLOT_KIB="$COLL_SLOT_KIB");; esac
+  [ "$COLL_KIND" = proxy ] && SERVE_ENV+=(TF_COLL_PROXY_STRIPE_KIB="${COLL_PROXY_STRIPE_KIB:-0}" TF_COLL_PROXY_CPU2="${COLL_PROXY_CPU2:-7}")
+  if [ "$TRANSPORT" = rdma ]; then
+    SERVE_ENV+=(TF_RDMA_GID_INDEX="$RDMA_GID")
+    [ -n "$RDMA_DEV0" ] && SERVE_ENV+=(TF_RDMA_DEVICES="$RDMA_DEV0,$RDMA_DEV1")   # rank order: rank 0's, rank 1's
+    [ -n "$RDMA_IFNAME" ] && SERVE_ENV+=(TF_RDMA_IFNAME="$RDMA_IFNAME")
+  fi
   [ -n "${COLL_GPU_WAIT_S:-}" ] && SERVE_ENV+=(TF_COLL_GPU_WAIT_S="$COLL_GPU_WAIT_S")  # (a conf without them: the engine's)
   [ -n "${MEMORY_RESERVE_GIB:-}" ] && SERVE_ENV+=(TENSORFOLD_MEMORY_RESERVE_GIB="$MEMORY_RESERVE_GIB")
   [ -n "${COLL_GPU_WARN_S:-}" ] && SERVE_ENV+=(TF_COLL_GPU_WARN_S="$COLL_GPU_WARN_S")
