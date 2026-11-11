@@ -39,6 +39,8 @@ pub const LaneHost = struct {
     lone: ?api.Lone = null, // the backend's driver for a lone greedy stream; null: every stream in the lane core
     lone_job: ?*Job = null, // the job that driver holds now
     cache: ?*pc.Store = null, // kept prompt states (engine thread only); the backend restores and saves them
+    ops: std.ArrayList(*api.CacheOp) = .empty, // prompt-cache transfers the server queued (run on the engine thread)
+    ops_done: std.Io.Condition = .init, // an op finished: its caller stops waiting
     memory: ?api.MemorySource = null, // the backend's memory counts; null: Engine.memory reports none
     explain: ?api.Explain = null, // the backend's words for a request it refuses; null: the error's name
     // the request at the queue's front waits for room in the backend's pool (its prompt pass refused ContextFull while
@@ -113,6 +115,7 @@ pub const LaneHost = struct {
         if (h.thread) |t| t.join();
         h.thread = null;
         h.queued.deinit(h.gpa);
+        h.ops.deinit(h.gpa);
         h.admitted.deinit(h.gpa);
         h.cancels.deinit(h.gpa);
         h.decoded.deinit(h.gpa);
@@ -120,7 +123,7 @@ pub const LaneHost = struct {
     }
 
     pub fn engine(h: *LaneHost) Engine {
-        return .{ .ctx = h, .vtable = &.{ .info = infoFn, .submit = submitFn, .cancel = cancelFn, .status = statusFn, .memory = memoryFn, .keepalive = keepaliveFn } };
+        return .{ .ctx = h, .vtable = &.{ .info = infoFn, .submit = submitFn, .cancel = cancelFn, .status = statusFn, .memory = memoryFn, .keepalive = keepaliveFn, .cache = cacheFn } };
     }
 
     /// The family's queue as a keepalive target, when it set one.
@@ -156,6 +159,75 @@ pub const LaneHost = struct {
             return error.Busy;
         };
         h.wake.signal(h.io);
+    }
+
+    /// A prompt-cache transfer: queued for the engine thread, which owns the store and the family, and waited for.
+    fn cacheFn(ctx: *anyopaque, op: *api.CacheOp) void {
+        const h = self(ctx);
+        h.mutex.lockUncancelable(h.io);
+        defer h.mutex.unlock(h.io);
+        if (h.cache == null or h.closing) {
+            op.err = if (h.closing) error.Closed else error.NoCache;
+            op.done = true;
+            return;
+        }
+        h.ops.append(h.gpa, op) catch {
+            op.err = error.OutOfMemory;
+            op.done = true;
+            return;
+        };
+        h.wake.signal(h.io);
+        while (!op.done) h.ops_done.waitUncancelable(h.io, &h.mutex);
+    }
+
+    /// The queued transfers, run here between rounds; each caller is woken when its own is done.
+    fn takeOps(h: *LaneHost) void {
+        h.lock();
+        if (h.ops.items.len == 0) return h.unlock();
+        const ops = h.gpa.dupe(*api.CacheOp, h.ops.items) catch return h.unlock();
+        h.ops.clearRetainingCapacity();
+        h.unlock();
+        defer h.gpa.free(ops);
+        for (ops) |op| {
+            h.runOp(op);
+            h.lock();
+            op.done = true;
+            h.ops_done.broadcast(h.io);
+            h.unlock();
+        }
+    }
+
+    fn runOp(h: *LaneHost, op: *api.CacheOp) void {
+        const store = h.cache orelse {
+            op.err = error.NoCache;
+            return;
+        };
+        switch (op.kind) {
+            .probe => op.tokens = store.probe(op.prompt, op.chunks),
+            .export_state => {
+                var out: std.ArrayList(u8) = .empty;
+                const at = store.exportState(op.gpa, op.prompt, op.chunks, &out) catch |e| {
+                    out.deinit(op.gpa);
+                    op.err = e;
+                    return;
+                };
+                const n = at orelse {
+                    out.deinit(op.gpa);
+                    op.err = error.NoState;
+                    return;
+                };
+                op.out = out.toOwnedSlice(op.gpa) catch |e| {
+                    out.deinit(op.gpa);
+                    op.err = e;
+                    return;
+                };
+                op.tokens = n;
+            },
+            .import_state => op.tokens = store.importState(op.bytes) catch |e| {
+                op.err = e;
+                return;
+            },
+        }
     }
 
     fn cancelFn(ctx: *anyopaque, id: Id) void {
@@ -513,6 +585,7 @@ pub const LaneHost = struct {
 
     fn run(h: *LaneHost) void {
         while (true) {
+            h.takeOps();
             h.takeCancels();
             while (h.admitOne()) {}
             h.noteLive();
@@ -525,7 +598,7 @@ pub const LaneHost = struct {
                 continue;
             }
             if (h.core.activeCount() == 0) {
-                if (h.cancels.items.len == 0 and (h.queued.items.len == 0 or h.admitted.items.len >= h.info_.lanes))
+                if (h.cancels.items.len == 0 and h.ops.items.len == 0 and (h.queued.items.len == 0 or h.admitted.items.len >= h.info_.lanes))
                     h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } }) catch {};
                 h.unlock();
                 continue;

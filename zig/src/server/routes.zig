@@ -10,6 +10,7 @@ const anthropic = @import("anthropic.zig");
 const tokens = @import("tokens.zig");
 const decisions = @import("decisions.zig");
 const status = @import("status_routes.zig");
+const cache = @import("cache_routes.zig");
 const Server = @import("server.zig").Server;
 const Conn = http_conn.Conn;
 const Allocator = std.mem.Allocator;
@@ -57,6 +58,7 @@ fn post(srv: *Server, conn: *Conn, a: Allocator) void {
     if (anthropic.route(conn.path)) return anthropic.post(srv, conn, a);
     if (responses.route(route)) |rid| if (rid.len == 0) return responses.post(srv, conn, a);
     for (tokens.paths) |r| if (std.mem.eql(u8, route, r)) return tokens.post(srv, conn, a, std.mem.endsWith(u8, route, "/detokenize"));
+    if (cache.route(route)) |which| return cache.post(srv, conn, a, which);
     const is_chat = std.mem.endsWith(u8, route, "/chat/completions");
     if (!is_chat and !std.mem.endsWith(u8, route, "/completions")) {
         discardBody(conn, a);

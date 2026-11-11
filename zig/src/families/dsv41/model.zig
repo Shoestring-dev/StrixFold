@@ -49,8 +49,8 @@ const HipKit = if (gpu.backend == .hip) *gpu.Kit else void;
 /// The served prompt chunk (TF_DS_PREFILL_CHUNK): a prompt runs in chunks that start at its multiples.
 pub const chunk_rows = 2048;
 
-/// The version of lanes.zig's frames (the handshake compares it): 2 the Engram read-ahead plan, 3 kept states to disk.
-pub const frame_protocol = 3;
+/// The version of lanes.zig's frames (the handshake compares it): 2 the read-ahead plan, 3 states to disk, 4 snap_put.
+pub const frame_protocol = 4;
 
 /// The prompt chunk buffers' rows: one of chunk_rows, or two halves when chunks split (TF_DS_PREFILL_SPLIT).
 pub fn chunkCaps(split_min: usize) [2]usize {
@@ -1339,6 +1339,6 @@ test "a launch identity is one plan token of at most 16 characters" {
 
 test "the handshake names what orders a prompt chunk's gathers: split, zip, chunk rows, phase timer, frames" {
     var b: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=3", try Model.gatherOrder(&b, 256, true, false));
-    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=3", try Model.gatherOrder(&b, 0, true, true));
+    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=4", try Model.gatherOrder(&b, 256, true, false));
+    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=4", try Model.gatherOrder(&b, 0, true, true));
 }

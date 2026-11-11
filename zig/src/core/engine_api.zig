@@ -198,6 +198,21 @@ pub const Status = struct {
 
 pub const SubmitError = error{ Closed, Busy };
 
+/// A prompt-cache transfer (POST /cache/probe, export, import), run on the engine's thread between rounds; callers wait
+pub const CacheOp = struct {
+    kind: Kind,
+    prompt: []const u32 = &.{}, // probe, export: the rendered prompt
+    chunks: []const u32 = &.{}, // its chunk starts (a planned family's)
+    bytes: []const u8 = &.{}, // import: what an export gave
+    gpa: std.mem.Allocator, // export: `out` is allocated here (the caller frees it)
+    out: []u8 = &.{}, // export: the state's bytes
+    tokens: u32 = 0, // probe: the prefix the engine holds; export, import: the positions the state covers
+    err: ?anyerror = null, // NoState: nothing kept covers the prompt; NoCache: this engine keeps no states
+    done: bool = false,
+
+    pub const Kind = enum { probe, export_state, import_state };
+};
+
 pub const Engine = struct {
     ctx: *anyopaque,
     vtable: *const VTable,
@@ -214,6 +229,8 @@ pub const Engine = struct {
         keepalive: ?*const fn (ctx: *anyopaque) ?keepalive.Target = null,
         /// One logit per label, and the vocabulary logsumexp. Null until a family scores decisions.
         score: ?*const fn (ctx: *anyopaque, prompt: []const u32, labels: []const u32, logits: []f64) error{Failed}!f64 = null,
+        /// A prompt-cache transfer, run on the engine's thread; returns when `op.done`. Null: no transfers.
+        cache: ?*const fn (ctx: *anyopaque, op: *CacheOp) void = null,
     };
 
     pub fn info(e: Engine) Info {
@@ -235,6 +252,12 @@ pub const Engine = struct {
     pub fn keepaliveTarget(e: Engine) ?keepalive.Target {
         const f = e.vtable.keepalive orelse return null;
         return f(e.ctx);
+    }
+
+    /// A prompt-cache transfer (`op` filled in on return), or Unsupported when this engine keeps none to move.
+    pub fn cacheOp(e: Engine, op: *CacheOp) error{Unsupported}!void {
+        const f = e.vtable.cache orelse return error.Unsupported;
+        f(e.ctx, op);
     }
 
     /// The decision hook, or Unsupported when this engine does not score.

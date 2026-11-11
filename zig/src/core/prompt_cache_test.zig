@@ -23,7 +23,7 @@ const Peer = struct {
 };
 
 /// A family over host memory for tests: its live state is a position and a running sum of the prompt's tokens.
-const Fake = struct {
+pub const Fake = struct {
     gpa: Allocator,
     at: u32 = 0,
     sum: u64 = 0,
@@ -67,6 +67,25 @@ const Fake = struct {
         const st = try f.gpa.create(State);
         errdefer f.gpa.destroy(st);
         if (!imprint.readAt(fd, std.mem.asBytes(st), 0) or st.at != at) return error.ReadFailed;
+        f.live += 1;
+        return st;
+    }
+    /// With transfers between engines (POST /cache/export, /cache/import): a state as its position and sum.
+    fn moving(f: *Fake) Snapshots {
+        return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn, .export_state = exportFn, .import_state = importFn } };
+    }
+    fn exportFn(_: *anyopaque, saved: Saved, gpa: Allocator, out: *std.ArrayList(u8)) anyerror!void {
+        try out.appendSlice(gpa, std.mem.asBytes(@as(*State, @ptrCast(@alignCast(saved)))));
+    }
+    fn importFn(ptr: *anyopaque, at: u32, bytes: []const u8) anyerror!Saved {
+        const f = of(ptr);
+        if (bytes.len != @sizeOf(State)) return error.BadState;
+        const st = try f.gpa.create(State);
+        @memcpy(std.mem.asBytes(st), bytes);
+        if (st.at != at) {
+            f.gpa.destroy(st);
+            return error.BadState;
+        }
         f.live += 1;
         return st;
     }
@@ -154,7 +173,7 @@ const Fake = struct {
     }
 };
 
-fn fresh(prompt: []const u32) u64 {
+pub fn fresh(prompt: []const u32) u64 {
     var sum: u64 = 0;
     for (prompt) |t| sum = sum *% 31 +% t;
     return sum;

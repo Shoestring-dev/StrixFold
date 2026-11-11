@@ -102,6 +102,9 @@ pub const Snaps = struct {
     write: ?*const fn (*anyopaque, *anyopaque, [:0]const u8, u64) anyerror!void = null,
     read: ?*const fn (*anyopaque, [:0]const u8, u64, u32) anyerror!*anyopaque = null,
     forget: ?*const fn (*anyopaque, [:0]const u8, u64) void = null,
+    /// POST /cache/export and /cache/import: a kept state as bytes and back (lanes.zig snap_put).
+    export_state: ?*const fn (*anyopaque, *anyopaque, std.mem.Allocator, *std.ArrayList(u8)) anyerror!void = null,
+    import_state: ?*const fn (*anyopaque, u32, []const u8) anyerror!*anyopaque = null,
     /// States are kept only at chunk ends (prompt_cache Rules.keep_step).
     keep_step: u32 = 0,
     /// What a learned state's bits depend on, hashed (its directory under --learn-dir).
@@ -222,7 +225,7 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
     st.lanes.vision = st.vision;
     // the pool is the model's (preallocated): a stream takes no device memory of its own
     const L = lanes_mod.Lanes;
-    const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn, .write = L.snapWriteFn, .read = L.snapReadFn, .forget = L.snapForgetFn, .keep_step = model.chunk_rows, .identity = learnIdentity(dir, st.m) };
+    const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn, .write = L.snapWriteFn, .read = L.snapReadFn, .forget = L.snapForgetFn, .export_state = L.snapExportFn, .import_state = L.snapImportFn, .keep_step = model.chunk_rows, .identity = learnIdentity(dir, st.m) };
     return .{ .backend = st.lanes.backend(), .facts = st.lanes.facts(), .rows = @intCast(st.m.eng.round_rows), .stream_bytes = 0, .ctx = st, .deinit = deinitFn, .snaps = snaps, .vision = if (gpu.features.vision) (if (st.vision) |v| v.hook() else null) else null, .structures = st.vocab != null, .context_window = lanes_mod.usableContext(st.m.pool_cap, st.m.eng.round_rows) };
 }
 

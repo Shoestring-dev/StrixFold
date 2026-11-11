@@ -76,8 +76,11 @@ fn topTwo(row: []const f32) [2]struct { u32, f32 } {
 /// DIR/<name>.f32 and a JSON beside it (DIR/<name>.json: rows, columns, vocab_size, sha256, the top two ids and logits).
 pub var logits_dump: ?[]const u8 = null;
 
-/// The primitives rank 0 sends rank 1 (kind u8, step u64, fields little-endian); persist and load get one byte back.
-pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9, snap_persist = 10, snap_load = 11, snap_forget = 12 };
+/// The primitives rank 0 sends rank 1 (kind u8, step u64, fields little-endian); persist, load and put get a byte back.
+pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9, snap_persist = 10, snap_load = 11, snap_forget = 12, snap_put = 13 };
+
+/// An imported state's bytes a snap_put frame carries at most (rank 1's frame buffer holds a pool's ids and 64 KiB).
+pub const state_piece = 256 << 10;
 
 /// A frame being written.
 pub const Wire = struct {
@@ -1209,6 +1212,74 @@ pub const Lanes = struct {
         state_file.remove(state_file.path(&pb, dir, key, 0) catch return);
     }
 
+    /// POST /cache/export: a kept state as bytes behind a state file head, rank 0's part (the ranks' states are equal).
+    pub fn snapExportFn(ptr: *anyopaque, saved: *anyopaque, gpa: std.mem.Allocator, out: *std.ArrayList(u8)) anyerror!void {
+        const self = of(ptr);
+        const sn: *Snap = @ptrCast(@alignCast(saved));
+        if (sn.stale) return error.StaleState;
+        const sb = self.m.snapBytes();
+        const rb = self.m.rowsBytes(sn.at);
+        const start = out.items.len;
+        try out.resize(gpa, start + state_file.head_bytes + sb + rb);
+        const payload = out.items[start + state_file.head_bytes ..];
+        try self.m.slotCopy(sn.buf.ptr, payload[0..sb], false);
+        try self.m.rowsCopy(sn.base, sn.at, payload[sb..], false);
+        const h: state_file.Head = .{ .rank = 0, .at = sn.at, .layout = self.m.rowsLayout(), .slot = sb, .rows = rb };
+        @memcpy(out.items[start..][0..state_file.head_bytes], &state_file.encode(h, payload));
+    }
+
+    /// POST /cache/import: an exported state as a kept one here and on rank 1 (snap_put pieces): both ranks or neither.
+    pub fn snapImportFn(ptr: *anyopaque, at: u32, bytes: []const u8) anyerror!*anyopaque {
+        return snapImport(of(ptr), at, bytes) catch |err| {
+            ended(err);
+            return err;
+        };
+    }
+
+    fn snapImport(self: *Lanes, at32: u32, bytes: []const u8) !*anyopaque {
+        const at: usize = at32;
+        if (at == 0 or at % model.chunk_rows != 0 or at > self.m.pool_cap) return error.NotAChunkEnd;
+        const sb = self.m.snapBytes();
+        const payload = try state_file.decode(bytes, .{ .rank = 0, .at = at, .layout = self.m.rowsLayout(), .slot = sb, .rows = self.m.rowsBytes(at) });
+        var taken: [max_streams][2]usize = undefined;
+        var nt: usize = 0;
+        var it = self.streams.valueIterator();
+        while (it.next()) |l| {
+            taken[nt] = .{ l.base, l.end };
+            nt += 1;
+        }
+        const base = try self.placeKept(taken[0..nt], at, null);
+        self.staleOver(base, base + at, null);
+        const sn = try self.gpa.create(Snap);
+        errdefer self.gpa.destroy(sn);
+        sn.* = .{ .id = self.next_snap, .at = at, .base = base, .end = base + at, .buf = try gpu.DeviceBuffer.alloc(self.m.ctx.d, sb) };
+        errdefer sn.buf.free();
+        self.next_snap += 1;
+        try self.m.slotCopy(sn.buf.ptr, @constCast(payload[0..sb]), true);
+        try self.m.rowsCopy(base, at, @constCast(payload[sb..]), true);
+        if (self.peer != null) {
+            var off: usize = 0;
+            while (off < payload.len) {
+                const n = @min(state_piece, payload.len - off);
+                _ = try self.begin(.snap_put);
+                try self.wire.int(self.gpa, u64, sn.id);
+                try self.wire.int(self.gpa, u64, base);
+                try self.wire.int(self.gpa, u64, at);
+                try self.wire.int(self.gpa, u64, payload.len);
+                try self.wire.int(self.gpa, u64, off);
+                try self.wire.buf.appendSlice(self.gpa, payload[off..][0..n]);
+                try self.flush();
+                off += n;
+            }
+            if (!try self.reply()) return error.PeerImportFailed;
+        }
+        self.snaps.append(self.gpa, sn) catch |err| {
+            try self.sendDrop(sn.id);
+            return err;
+        };
+        return sn;
+    }
+
     /// A state frame to rank 1: the state's id, key, extent base and positions, and the directory (same path there).
     fn sendState(self: *Lanes, kind: Kind, id: u64, key: u64, base: usize, at: usize, dir: []const u8) !void {
         if (!try self.begin(kind)) return;
@@ -1302,7 +1373,7 @@ fn oftenEnough(n: u64) bool {
 fn inPass(kind: Kind) bool {
     return switch (kind) {
         // a keep between chunks may learn (persist) or make room (forget); a learned state is read before its pass
-        .fill_chunk, .fill_images, .snap_save, .snap_restore, .snap_drop, .snap_persist, .snap_load, .snap_forget => true,
+        .fill_chunk, .fill_images, .snap_save, .snap_restore, .snap_drop, .snap_persist, .snap_load, .snap_forget, .snap_put => true,
         .fill_begin, .verify, .pass, .done => false,
     };
 }
@@ -1380,6 +1451,8 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
     var plan_diffs: u64 = 0; // chunks whose read-ahead plan here differed from rank 0's (the warning: oftenEnough)
     var img_rows: std.ArrayList(u8) = .empty; // a prompt's image rows as their pieces come
     defer img_rows.deinit(gpa);
+    var put: std.ArrayList(u8) = .empty; // an imported state's bytes as their snap_put pieces come
+    defer put.deinit(gpa);
     var kept: std.AutoHashMapUnmanaged(u64, gpu.DeviceBuffer) = .empty; // rank 0's kept states, this rank's part
     defer {
         var ki = kept.valueIterator();
@@ -1403,6 +1476,7 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
             10 => .snap_persist,
             11 => .snap_load,
             12 => .snap_forget,
+            13 => .snap_put,
             else => return error.BadFrame,
         };
         if (try r.int(u64) != step) return error.OutOfStep;
@@ -1526,6 +1600,39 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
                     var b = kv.value;
                     b.free();
                 }
+            },
+            .snap_put => { // an imported state's bytes piece by piece; after the last, this rank's part and one byte back
+                const id = try r.int(u64);
+                const base: usize = @intCast(try r.int(u64));
+                const at: usize = @intCast(try r.int(u64));
+                const total: usize = @intCast(try r.int(u64));
+                const off: usize = @intCast(try r.int(u64));
+                const piece = r.rest();
+                try r.end();
+                if (off != put.items.len or piece.len == 0 or off + piece.len > total) return error.BadFrame;
+                try put.appendSlice(gpa, piece);
+                if (put.items.len < total) continue;
+                const sb = m.snapBytes();
+                const ok = blk: {
+                    if (total != sb + m.rowsBytes(at)) break :blk false;
+                    var b = gpu.DeviceBuffer.alloc(m.ctx.d, sb) catch break :blk false;
+                    m.slotCopy(b.ptr, put.items[0..sb], true) catch {
+                        b.free();
+                        break :blk false;
+                    };
+                    m.rowsCopy(base, at, put.items[sb..], true) catch {
+                        b.free();
+                        break :blk false;
+                    };
+                    kept.put(gpa, id, b) catch {
+                        b.free();
+                        break :blk false;
+                    };
+                    break :blk true;
+                };
+                if (!ok) std.log.warn("lanes: step {d} rank 1 could not take imported state {d}", .{ step - 1, id });
+                put.clearRetainingCapacity();
+                try peer.send(&[_]u8{@intFromBool(ok)});
             },
             .snap_persist, .snap_load, .snap_forget => {
                 const id = try r.int(u64);

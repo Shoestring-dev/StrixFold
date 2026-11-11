@@ -384,8 +384,13 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
                 h.snap_vt.read = sn.read;
                 h.snap_vt.forget = sn.forget;
             }
+            if (@hasField(S, "export_state")) {
+                h.snap_vt.export_state = sn.export_state;
+                h.snap_vt.import_state = sn.import_state;
+            }
             const rules: api.prompt_cache.Rules = if (@hasField(S, "keep_step")) .{ .keep_step = sn.keep_step } else .{};
             h.cache = api.prompt_cache.Store.init(gpa, .{ .ptr = sn.ptr, .vtable = &h.snap_vt }, rules, want);
+            if (@hasField(S, "identity")) h.cache.?.identity = sn.identity; // an exported state imports only into this identity
             // --learn: the family's shared states on disk under its identity and device name, kept across restarts
             if (o.learn) |root| if (h.snap_vt.write != null and h.snap_vt.read != null) {
                 var ih = std.hash.Wyhash.init(0x1ea5);
