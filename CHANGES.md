@@ -4,6 +4,17 @@ This fork starts from Bertholomus AI's DeepSeek-V4.1 fork of TensorFold at commi
 below is ours, made between 18 October and 6 November 2026 and released under Apache-2.0 as upstream. Upstream's LICENSE,
 LICENSES/ and THIRD_PARTY_NOTICES.md are unchanged; NOTICE gains one section at its end.
 
+## Unreleased
+
+### Optional DeepSeek V4.1 image input on HIP
+
+- Add authenticated extraction of the checkpoint's vision encoder and image routing biases.
+- Add an on-demand CPU encoder with optional hash-pinned HIP attention and configurable resource limits.
+- Support image chat parts, image tool results and expanded image tokenization through the existing lane path.
+- Retain bounded image rows and content-keyed image prefixes when enabled.
+- Add synthetic extraction, admission and image API tests. Setup and output-check requirements are in
+  `tools/dsv41-hip/VISION.md`.
+
 ## Added
 
 | Path | What it is |

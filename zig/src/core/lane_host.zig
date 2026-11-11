@@ -3,6 +3,7 @@ const std = @import("std");
 const lanes = @import("lanes");
 const api = @import("engine_api.zig");
 const pc = @import("prompt_cache.zig");
+const image_key = @import("lanes/image_key.zig");
 const Allocator = std.mem.Allocator;
 const Id = api.Id;
 const Request = api.Request;
@@ -74,13 +75,18 @@ pub const LaneHost = struct {
         entry: ?*pc.Entry = null, // the kept state the backend restores, until its prompt pass reports
         marks: []const u32 = &.{}, // where the pass keeps states (gpa-owned)
         kept0: u64 = 0, // the store's kept count when the job looked it up
+        image_prompt: ?[]u32 = null,
+
+        fn cachePrompt(job: *const Job) []const u32 {
+            return job.image_prompt orelse job.request.prompt;
+        }
 
         /// The backend's prompt pass stands at a mark: the cache keeps the stream's state there.
         fn kept(ptr: *anyopaque, s: *lanes.Stream, at: u32) void {
             const job: *Job = @ptrCast(@alignCast(ptr));
             job.reported(); // before a keep can evict the entry the pass restored
-            if (job.request.images.len > 0) return; // a kept state is keyed by tokens: an image's are its placeholder's
-            if (job.host.cache) |store| _ = store.keep(job.request.prompt, at, s, job.request.chunks);
+            if (!image_key.validCut(job.request.images, at)) return;
+            if (job.host.cache) |store| _ = store.keep(job.cachePrompt(), at, s, job.request.chunks);
         }
 
         /// Report a restored prefix or its failed copy; an untouched prefix remains kept.
@@ -90,7 +96,7 @@ pub const LaneHost = struct {
             const store = job.host.cache orelse return;
             if (!job.started) return;
             job.stream.reuse.saved = null; // the backend restores before its first chunk; a later keep may free it
-            if (job.stream.reuse_failed) store.resumed(e, job.request.prompt, false) else if (job.stream.cached == e.at) store.resumed(e, job.request.prompt, true);
+            if (job.stream.reuse_failed) store.resumed(e, job.cachePrompt(), false) else if (job.stream.cached == e.at) store.resumed(e, job.cachePrompt(), true);
         }
     };
 
@@ -232,6 +238,7 @@ pub const LaneHost = struct {
     fn finish(h: *LaneHost, job: *Job, reason: Reason, message: []const u8) void {
         job.reported();
         h.gpa.free(job.marks);
+        if (job.image_prompt) |key| h.gpa.free(key);
         const s = &job.stream;
         const stats: Stats = if (job.started) .{ .rounds = s.rounds, .drafted = s.drafted, .accepted = s.accepted, .min_rows = s.min_rows, .loop_period = s.loop_period, .prefill_seconds = if (job.prefilled) |done| @as(f64, @floatFromInt(@as(i64, @intCast(@max(0, done - job.began))))) / 1e9 else null, .telemetry_json = s.telemetry_buf[0..s.telemetry_len] } else .{};
         emit(job, .{ .finished = .{ .reason = reason, .stats = stats, .message = message } });
@@ -323,8 +330,12 @@ pub const LaneHost = struct {
         h.unlock();
         const r = job.request;
         var reuse: lanes.stream.Reuse = .{};
-        // the entry stays alive until the backend restores it: nothing keeps between here and this stream's own pass
-        if (r.images.len == 0) if (h.cache) |store| if (store.lookup(h.gpa, r.prompt, r.history_len, r.shared_prefixes, r.chunks)) |l| {
+        if (job.image_prompt == null and h.cache != null and r.images.len > 0) if (h.info_.vision) |vision| {
+            if (vision.cache_images) job.image_prompt = image_key.make(h.gpa, r.prompt, r.images) catch null;
+        };
+        const shared = if (job.image_prompt == null) r.shared_prefixes else &.{};
+        // The entry stays alive until the backend restores it, before this stream's first keep.
+        if (r.images.len == 0 or job.image_prompt != null) if (h.cache) |store| if (store.lookup(h.gpa, job.cachePrompt(), r.history_len, shared, r.chunks)) |l| {
             job.entry = l.entry;
             job.kept0 = store.counts.kept;
             job.marks = l.marks;

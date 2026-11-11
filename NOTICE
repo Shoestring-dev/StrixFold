@@ -62,3 +62,7 @@ and modified files.
 tools/dsv41-hip/assets/chat_template.jinja is the chat template of Tech2wild's DeepSeek-V4.1-Flash TensorFold recipe
 (github.com/tonyd2wild), MIT License, Copyright (c) 2026 Tech2wild; the license text is in
 tools/dsv41-hip/assets/CREATOR_LICENSE.
+
+The optional CPU vision implementation follows DeepSeek V4.1 Flash 1017 inference/vision.py,
+revision 1bae0e1088993b9b82de08f59de5be5a34e42170. Copyright (c) 2023 DeepSeek, MIT.
+The license is reproduced in tools/dsv41-hip/assets/DEEPSEEK_VISION_LICENSE.

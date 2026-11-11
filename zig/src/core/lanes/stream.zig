@@ -113,6 +113,7 @@ pub const Vision = struct {
     ctx: *anyopaque,
     placeholder: []const u8,
     token: u32,
+    cache_images: bool = false,
     prepare: *const fn (ctx: *anyopaque, a: Allocator, bytes: []const u8, problem: *[]const u8) PrepareError!Prepared,
 
     pub const Prepared = struct { tokens: u32, payload: []const u8 };

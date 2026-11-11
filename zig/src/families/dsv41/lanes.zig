@@ -21,8 +21,8 @@ const draft = @import("draft.zig");
 const sampling = @import("sampling.zig");
 const link = @import("link.zig");
 const gpu = @import("gpu");
-/// The vision tower's type: CUDA builds only (gpu.features.vision); an empty type a HIP build never fills.
-pub const VisionTower = if (gpu.features.vision) @import("vision.zig").Vision else opaque {};
+/// The backend's tower: CUDA GPU, or the optional on-demand HIP CPU implementation.
+pub const VisionTower = if (gpu.features.vision) (if (gpu.backend == .hip) @import("vision_cpu.zig") else @import("vision.zig")).Vision else opaque {};
 
 const be = lanes.backend;
 const grammar = lanes.grammar;
@@ -448,7 +448,7 @@ pub const Lanes = struct {
     gpa: std.mem.Allocator,
     m: *Model,
     peer: ?link.Link, // rank 1 (null: one rank); every follower gets each frame (Model.followers)
-    vision: ?*VisionTower = null, // rank 0's tower (a vision checkpoint served with its kit's vision/; CUDA builds only)
+    vision: ?*VisionTower = null, // optional image encoder opened from the model kit
     step: u64 = 0,
     wire: Wire = .{},
     streams: std.AutoHashMapUnmanaged(*const lanes.Stream, Lane) = .empty,
@@ -620,8 +620,7 @@ pub const Lanes = struct {
         var why: []const u8 = "no kept state"; // (the pass line's reason for running from 0)
         if (s.reuse.saved) |p| {
             const sn: *Snap = @ptrCast(@alignCast(p));
-            // (a kept state knows no images: a prompt with them runs whole and keeps nothing)
-            if (s.images.len == 0 and self.usable(sn, len)) {
+            if (self.usable(sn, len)) {
                 kept = sn;
                 // in place unless the extent runs past the pool, a live stream holds it, or another kept state has
                 // rows past the kept ones (resuming there would stale it: the rows go to a free extent instead, as
@@ -675,6 +674,8 @@ pub const Lanes = struct {
         if (s.images.len > 0) {
             const image_id = m.cfg.image_token orelse return error.NoVision;
             const row_bytes = m.cfg.hidden * 2;
+            const resume_at = if (kept) |sn| sn.at else 0;
+            var skipped: usize = 0;
             var at_row: usize = 0;
             for (s.images) |img| {
                 if (img.tokens == 0 or @as(usize, img.at) + img.tokens > len) return error.BadImageSpan;
@@ -682,17 +683,26 @@ pub const Lanes = struct {
                     if (q.* != @as(i64, image_id)) return error.BadImageSpan;
                     q.* = -1;
                 }
+                if (@as(usize, img.at) + img.tokens <= resume_at) {
+                    skipped += 1;
+                    continue;
+                }
+                if (img.at < resume_at) return error.BadImageSpan;
+                try spans.append(gpa, .{ .at = img.at, .len = img.tokens, .row = at_row });
+                at_row += img.tokens;
+            }
+            const remaining = s.images[skipped..];
+            if (gpu.features.vision and gpu.backend == .hip and self.vision != null) {
+                try self.vision.?.rowsBatch(remaining, gpa, &rows, s);
+            } else for (remaining) |img| {
                 if (img.rows) {
                     if (img.bytes.len != img.tokens * row_bytes) return error.BadImageRows;
                     try rows.appendSlice(gpa, img.bytes);
                 } else {
-                    // a prepared picture (vision.zig): the tower's span rows, here on rank 0
-                    if (!gpu.features.vision) return error.NoVisionTower;
+                    if (!gpu.features.vision or gpu.backend == .hip) return error.NoVisionTower;
                     const v = self.vision orelse return error.NoVisionTower;
                     if (try v.rows(img.bytes, gpa, &rows) != img.tokens) return error.BadImageSpan;
                 }
-                try spans.append(gpa, .{ .at = img.at, .len = img.tokens, .row = at_row });
-                at_row += img.tokens;
             }
         }
         if (try self.begin(.fill_begin)) {
@@ -757,7 +767,7 @@ pub const Lanes = struct {
             }
             head = try m.fillChunk(seq.items[0 .. start + n], start, n, replay, f.pre_read);
             start += n;
-            if (s.images.len == 0) if (s.reuse.hook) |k| if (start < len and start <= replay and (start == last_end or markEnds(s.reuse.marks, start))) k.at(k.ptr, s, @intCast(start));
+            if (s.reuse.hook) |k| if (start < len and start <= replay and (start == last_end or markEnds(s.reuse.marks, start))) k.at(k.ptr, s, @intCast(start));
         }
         if (!head) return error.NoPromptLogits;
         const logits = try m.promptLogitsHost();

@@ -379,7 +379,7 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
             h.cache = api.prompt_cache.Store.init(gpa, .{ .ptr = sn.ptr, .vtable = &h.snap_vt }, .{}, want);
         }
     };
-    // text only on HIP (D13): the family hands no vision hook, so the server refuses image parts
+    // A family may expose its explicitly configured vision hook; otherwise image parts are refused.
     const vision: ?api.Vision = if (@hasField(@TypeOf(loaded), "vision")) loaded.vision else null;
     // structured output and required calls when the family read its tokenizer's vocabulary (its draws enforce them)
     const structures = if (@hasField(@TypeOf(loaded), "structures")) loaded.structures else false;

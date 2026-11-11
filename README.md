@@ -46,7 +46,7 @@ machines it runs DeepSeek-V4.1-Flash at about 72% of the speed of two NVIDIA DGX
 | Toolchain | Zig 0.17.0, Python 3.13 |
 | Model | DeepSeek-V4.1-Flash-1017 as an EXL3 2.9 bpw pack (197 GB), plus its Engram shards (203 GB). Not included: download them yourself. |
 
-No NVIDIA driver, CUDA or NCCL is used. Text only: image input is not supported on this backend.
+No NVIDIA driver, CUDA or NCCL is used. Optional image input is described in [the vision guide](tools/dsv41-hip/VISION.md).
 
 ## What this fork adds
 
@@ -76,7 +76,7 @@ power settings) is in [docs/TUNING.md](docs/TUNING.md). Most of it applies to an
 ## Known limits
 
 - Tested on this exact setup only. Other Strix Halo machines, ROCm versions and cables may behave differently.
-- Text only.
+- Image input is opt-in and requires the additional inputs and dependencies in the vision guide.
 - Provided as-is. Issues are welcome; support is best effort.
 
 ## Community

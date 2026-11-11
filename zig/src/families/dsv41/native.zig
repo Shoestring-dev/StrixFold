@@ -38,8 +38,8 @@ const draft_mod = @import("draft.zig");
 const link = @import("link.zig");
 const rank_cache = @import("rank_cache.zig");
 const sampling = @import("sampling.zig");
-/// The vision tower exists in CUDA builds only (gpu.features.vision); a HIP build compiles none of it.
-const vision_mod = if (gpu.features.vision) @import("vision.zig") else struct {
+/// CUDA uses its GPU tower; HIP uses the opt-in CPU tower only for image requests.
+const vision_mod = if (gpu.features.vision) (if (gpu.backend == .hip) @import("vision_cpu.zig") else @import("vision.zig")) else struct {
     pub const Vision = lanes_mod.VisionTower;
 };
 

@@ -6,6 +6,7 @@ Start with [BUILD_AND_RUN.md](BUILD_AND_RUN.md): it is the one guide to building
 |---|---|
 | Build, deploy, serve | `zig_build.sh`, `run_gpu_tests.sh`, `deploy_rank0.sh`, `serve.conf`, `first_light.sh`, `serve-rank0.sh`, `serve-rank1.sh`, `serve_lib.sh` |
 | Inputs | `prepare_inputs.sh`, `verify_inputs.sh` / `.py`, `requirements-inputs.lock.txt`, `rope_reference.py` |
+| Optional image input | [VISION.md](VISION.md), `prepare_vision.py`, `verify_vision.py` |
 | Checks and benchmarks | `qual/` (served suite, faults, benchmarks, soak, numerics traces), `qualify.sh` / `qualify.py`, `gates.json` / `gates.py` |
 | Kernels | `tri/` (the Triton kernels and how the AOT kit is built), `exl3/` (the EXL3 GEMM work), `kernels.json`, `kernel_registry.py` |
 | The two-box link | `link/`, `coll_fault_matrix.sh`, `COLLECTIVES-DESIGN.md` |
