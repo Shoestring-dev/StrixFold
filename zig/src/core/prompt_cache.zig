@@ -6,6 +6,35 @@ const imprint = @import("prompt_imprint.zig");
 /// A family's copy of one state.
 pub const Saved = *anyopaque;
 
+/// A picture's identity for the prompt caches: BLAKE3 of its prepared payload, 64 bits, never 0 (0: not taken).
+pub fn imageDigest(bytes: []const u8) u64 {
+    var out: [8]u8 = undefined;
+    std.crypto.hash.Blake3.hash(bytes, &out, .{});
+    const d = std.mem.readInt(u64, &out, .little);
+    return if (d == 0) 1 else d;
+}
+
+/// An image span of a prompt as the prompt caches see it: positions [at, at + len) made of the picture `digest`.
+pub const KeySpan = struct { at: u32, len: u32, digest: u64 };
+
+/// The key id at offset `j` of a picture's span: bit 31 set (no vocabulary id), the rest a hash of picture and offset.
+pub fn imageKeyId(digest: u64, j: u32) u32 {
+    var b: [4]u8 = undefined;
+    std.mem.writeInt(u32, &b, j, .little);
+    return 0x8000_0000 | @as(u32, @truncate(std.hash.Wyhash.hash(digest, &b)));
+}
+
+/// The ids kept states are found by (a new slice in `a`): `prompt`'s, each span's positions its picture's key ids.
+pub fn keyIds(a: Allocator, prompt: []const u32, spans: []const KeySpan) ![]u32 {
+    const out = try a.dupe(u32, prompt);
+    errdefer a.free(out);
+    for (spans) |sp| {
+        if (@as(usize, sp.at) + sp.len > out.len) return error.BadImageSpan;
+        for (out[sp.at..][0..sp.len], 0..) |*q, j| q.* = imageKeyId(sp.digest, @intCast(j));
+    }
+    return out;
+}
+
 /// What a family gives the cache: copies of its state while the prompt pass stands at a chunk end.
 pub const Snapshots = struct {
     ptr: *anyopaque,
