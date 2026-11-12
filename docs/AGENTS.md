@@ -72,9 +72,11 @@ It runs until the harness's step or call limit, then ends on one more "Let me…
 
 ## Long thinking
 
-Thinking is off in the shipped configuration (`THINKING=0` in serve.conf). With it on, a separate loop can show up in
-very long reasoning (over about 25K tokens of thinking): the model repeats the same stretch of tokens inside its
-thinking. On main the server's `--loop-guard` only catches cycles of up to 8 tokens, and serve.conf has no setting
-that turns it on. Two open pull requests change that:
-[#16](https://github.com/Shoestring-dev/StrixFold/pull/16) looks for cycles of up to 64 tokens, and
-[#17](https://github.com/Shoestring-dev/StrixFold/pull/17) adds `LOOP_GUARD=1` to serve.conf.
+Thinking is off in the shipped configuration (`THINKING=0` in
+[`tools/dsv41-hip/serve.conf`](../tools/dsv41-hip/serve.conf)). With it on, a separate loop can show up in very long
+reasoning (over about 25K tokens of thinking): the model repeats the same stretch of tokens inside its thinking.
+
+`LOOP_GUARD=1` in serve.conf turns on the server's `--loop-guard` (it is off by default). It watches the thinking for
+one exact cycle of up to 64 tokens repeated for 256 tokens, then closes the thinking, and the reply goes on. The same
+check catches thinking that repeats one short line exactly for that long, such as identical table rows. The details
+are in [api.md](api.md#reasoning).

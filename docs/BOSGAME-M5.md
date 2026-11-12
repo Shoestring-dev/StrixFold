@@ -56,7 +56,10 @@ gpg --show-keys /usr/share/keyrings/ryai-archive-keyring.gpg
 ```
 
 `gpg` must show "Nimbus archive key" with the fingerprint `B83B6BF3716E12EE71BEA0EEDD4539D281C3A637`. If it doesn't,
-stop. Otherwise add the repository:
+stop. The keyring package also links the key into `/etc/apt/trusted.gpg.d`, so apt trusts it for every source, not
+only the two ryai entries below.
+
+Add the repository:
 
 ```bash
 sudo tee /etc/apt/sources.list.d/ryai.sources >/dev/null <<'EOF'
