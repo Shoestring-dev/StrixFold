@@ -199,7 +199,7 @@ test "a turn's mark evicting the state it resumed from: the hit is reported firs
 }
 
 /// Turn 1 with picture `first`, then turn 2 (turn 1, its reply, a tool result) with `second`: turn 2's cache counts.
-fn imageTurns(cache_images: bool, first: []const u8, second: []const u8) !struct { cached: ?u32, entries: usize, hits: u64 } {
+fn imageTurns(cache_images: bool, first: []const u8, second: []const u8, second_digest: ?pc.Digest) !struct { cached: ?u32, entries: usize, hits: u64 } {
     const gpa = std.testing.allocator;
     var cfg = try lanes.Config.init(gpa, .{ .exact_width = 8, .gpu_tokens = true, .hidden_rows = true }, 8, 7);
     defer cfg.deinit(gpa);
@@ -271,7 +271,7 @@ fn imageTurns(cache_images: bool, first: []const u8, second: []const u8) !struct
     try t2.appendSlice(gpa, &t1);
     try t2.appendSlice(gpa, b1.tokens.items[0..4]);
     try t2.appendSlice(gpa, &.{ 7, 7, 5, 3 });
-    const im2 = [_]api.Image{.{ .at = 2, .tokens = 3, .bytes = second, .digest = pc.imageDigest(second) }}; // as the server sets it
+    const im2 = [_]api.Image{.{ .at = 2, .tokens = 3, .bytes = second, .digest = second_digest orelse pc.imageDigest(second) }}; // as the server sets it
     var b2: Box = .{};
     defer b2.tokens.deinit(gpa);
     const r2: Request = .{ .prompt = t2.items, .images = &im2, .max_tokens = 12, .history_len = @intCast(t2.items.len - 2) };
@@ -281,13 +281,18 @@ fn imageTurns(cache_images: bool, first: []const u8, second: []const u8) !struct
 }
 
 test "a conversation with a picture resumes past it when the next turn carries the same picture, and only then" {
-    const same = try imageTurns(true, "picture A", "picture A"); // turn 1's digest taken by the host, turn 2's by the server
+    const same = try imageTurns(true, "picture A", "picture A", null); // turn 1's digest taken by the host, turn 2's by the server
     try std.testing.expectEqual(@as(?u32, 8), same.cached);
     try std.testing.expectEqual(@as(u64, 1), same.hits);
-    const other = try imageTurns(true, "picture A", "picture B"); // the same tokens, another picture
+    const other = try imageTurns(true, "picture A", "picture B", null); // the same tokens, another picture
     try std.testing.expectEqual(@as(?u32, 0), other.cached);
     try std.testing.expectEqual(@as(u64, 0), other.hits);
-    const off = try imageTurns(false, "picture A", "picture A"); // a backend that keys no pictures: nothing kept
+    var near = pc.imageDigest("picture A");
+    near[31] ^= 1; // a digest alike in its first 8 bytes (and all but its last bit)
+    const close = try imageTurns(true, "picture A", "picture A", near);
+    try std.testing.expectEqual(@as(?u32, 0), close.cached);
+    try std.testing.expectEqual(@as(u64, 0), close.hits);
+    const off = try imageTurns(false, "picture A", "picture A", null); // a backend that keys no pictures: nothing kept
     try std.testing.expectEqual(@as(?u32, 0), off.cached);
     try std.testing.expectEqual(@as(usize, 0), off.entries);
 }

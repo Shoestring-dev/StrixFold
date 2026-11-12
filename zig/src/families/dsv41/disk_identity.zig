@@ -10,6 +10,9 @@ const block_tokens = disk.block_tokens;
 const Plane = disk.Plane;
 const envVar = disk.envVar;
 
+/// How prompts are keyed: 2, image spans by their pictures' whole digests (each block's key hashes them too).
+pub const key_scheme = 2;
+
 /// A rank's namespace text (pd.namespaceOf names its directory): what its states' bytes depend on, less conf=/disk=.
 pub fn identityText(a: std.mem.Allocator, parts: Parts) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -21,6 +24,7 @@ pub fn identityText(a: std.mem.Allocator, parts: Parts) ![]u8 {
         }
     }.f;
     try w(&out, a, "format={d}", .{pd.version});
+    try w(&out, a, "keys={d}", .{key_scheme});
     try w(&out, a, "rank={d}", .{parts.rank});
     try w(&out, a, "world={d}", .{parts.world});
     try w(&out, a, "deploy={s}", .{parts.deploy});
@@ -55,6 +59,7 @@ pub fn seedText(a: std.mem.Allocator, parts: Parts) ![]u8 {
         }
     }.f;
     try w(&out, a, "chain format={d}", .{pd.version});
+    try w(&out, a, "keys={d}", .{key_scheme});
     try w(&out, a, "world={d}", .{parts.world});
     try w(&out, a, "deploy={s}", .{parts.deploy});
     try w(&out, a, "bundle={s}", .{parts.bundle});

@@ -2,6 +2,7 @@
 const std = @import("std");
 const shape = @import("shape.zig");
 const plan_lanes = @import("plan_lanes.zig");
+const image_key = @import("image_key.zig");
 const Allocator = std.mem.Allocator;
 const Proposer = @import("proposer.zig").Proposer;
 const Sampling = @import("sampling.zig").Sampling;
@@ -104,7 +105,7 @@ pub const Image = struct {
     tokens: u32,
     bytes: []const u8,
     rows: bool = false,
-    digest: u64 = 0, // the picture's identity for the prompt caches (prompt_cache.imageDigest; 0: not taken yet)
+    digest: ?image_key.Digest = null, // the picture's identity for the prompt caches (null: not taken yet)
 };
 
 /// A vision family's image input as a server renders it (engine_api.Info.vision): each image part becomes
@@ -155,6 +156,7 @@ pub const Spec = struct {
     reuse: Reuse = .{},
     images: []const Image = &.{}, // in prompt order; the caller's until the stream is released
     cache_key: []const u32 = &.{}, // with images: the ids the prompt caches key it by (empty: none kept or resumed)
+    cache_spans: []const image_key.KeySpan = &.{}, // with images: each picture's span and whole digest
     structure: ?Structure = null, // the grammar every reply token keeps to (a backend's draws enforce it)
 };
 
@@ -178,6 +180,7 @@ pub const Stream = struct {
     reuse: Reuse = .{},
     images: []const Image = &.{},
     cache_key: []const u32 = &.{},
+    cache_spans: []const image_key.KeySpan = &.{},
     structure: ?Structure = null,
     cached: u32 = 0, // prompt tokens the backend restored from `reuse` (its prompt pass started there)
     reuse_failed: bool = false, // the backend's restore of `reuse` failed: it prefilled from 0
@@ -236,6 +239,7 @@ pub const Stream = struct {
             .reuse = spec.reuse,
             .images = spec.images,
             .cache_key = spec.cache_key,
+            .cache_spans = spec.cache_spans,
             .structure = spec.structure,
         };
         try s.context.appendSlice(gpa, spec.prompt);

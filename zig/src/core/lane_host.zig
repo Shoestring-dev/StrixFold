@@ -76,6 +76,7 @@ pub const LaneHost = struct {
         marks: []const u32 = &.{}, // where the pass keeps states (gpa-owned)
         kept0: u64 = 0, // the store's kept count when the job looked it up
         key: ?[]u32 = null, // a prompt with images: the ids the cache keys it by (pc.keyIds; gpa-owned)
+        spans: []pc.KeySpan = &.{}, // with its key: each picture's span and whole digest (gpa-owned)
 
         /// The ids the cache finds and keeps this request's states by: the prompt's, or with images its key.
         fn ids(job: *const Job) []const u32 {
@@ -89,10 +90,12 @@ pub const LaneHost = struct {
             if (!job.host.cache_images) return false;
             if (job.key != null) return true;
             const gpa = job.host.gpa;
-            const spans = gpa.alloc(pc.KeySpan, r.images.len) catch return false;
-            defer gpa.free(spans);
-            for (r.images, spans) |img, *sp| sp.* = .{ .at = img.at, .len = img.tokens, .digest = if (img.digest != 0) img.digest else pc.imageDigest(img.bytes) };
-            job.key = pc.keyIds(gpa, r.prompt, spans) catch return false;
+            const spans = pc.image_key.spansOf(gpa, r.images) catch return false;
+            job.key = pc.keyIds(gpa, r.prompt, spans) catch {
+                gpa.free(spans);
+                return false;
+            };
+            job.spans = spans;
             return true;
         }
 
@@ -101,7 +104,7 @@ pub const LaneHost = struct {
             const job: *Job = @ptrCast(@alignCast(ptr));
             job.reported(); // before a keep can evict the entry the pass restored
             if (job.request.images.len > 0 and job.key == null) return; // keyed by tokens: an image's are its placeholder's
-            if (job.host.cache) |store| _ = store.keep(job.ids(), at, s, job.request.chunks);
+            if (job.host.cache) |store| _ = store.keepSealed(job.ids(), job.spans, at, s, job.request.chunks);
         }
 
         /// Report a restored prefix or its failed copy; an untouched prefix remains kept.
@@ -280,6 +283,7 @@ pub const LaneHost = struct {
         if (h.encoder(job.request)) |x| x.forget(x.ctx, job.request.images);
         h.gpa.free(job.marks);
         if (job.key) |k| h.gpa.free(k);
+        h.gpa.free(job.spans);
         const s = &job.stream;
         const stats: Stats = if (job.started) .{ .rounds = s.rounds, .drafted = s.drafted, .accepted = s.accepted, .min_rows = s.min_rows, .loop_period = s.loop_period, .prefill_seconds = if (job.prefilled) |done| @as(f64, @floatFromInt(@as(i64, @intCast(@max(0, done - job.began))))) / 1e9 else null, .telemetry_json = s.telemetry_buf[0..s.telemetry_len] } else .{};
         emit(job, .{ .finished = .{ .reason = reason, .stats = stats, .message = message } });
@@ -375,7 +379,7 @@ pub const LaneHost = struct {
         const r = job.request;
         var reuse: lanes.stream.Reuse = .{};
         // the entry stays alive until the backend restores it: nothing keeps between here and this stream's own pass
-        if (h.cache) |store| if (job.cacheable()) if (store.lookup(h.gpa, job.ids(), r.history_len, r.shared_prefixes, r.chunks)) |l| {
+        if (h.cache) |store| if (job.cacheable()) if (store.lookup(h.gpa, job.ids(), job.spans, r.history_len, r.shared_prefixes, r.chunks)) |l| {
             job.entry = l.entry;
             job.kept0 = store.counts.kept;
             job.marks = l.marks;
@@ -400,6 +404,7 @@ pub const LaneHost = struct {
             .reuse = reuse,
             .images = r.images,
             .cache_key = job.key orelse &.{},
+            .cache_spans = job.spans,
             .structure = r.structure,
         }) catch {
             job.proposer.deinit();

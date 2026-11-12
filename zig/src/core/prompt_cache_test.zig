@@ -476,36 +476,76 @@ test "past the learned-state cap the least recently used state is forgotten, and
     try std.testing.expect(im.has(imprint.Imprint.keyOf(&two))); // learned again by that pass
 }
 
-test "image key ids: a picture's span keys by its digest, so another picture of the same size does not resume past it" {
+/// Two pictures whose digests agree in their first 8 bytes (a key of 64 bits would hold them alike).
+fn twoPictures() [2]pc.Digest {
+    const da = pc.imageDigest("picture A");
+    var db = da;
+    db[20] ^= 0x40;
+    return .{ da, db };
+}
+
+/// The fake family at `at` of `prompt`, as a pass from 0 would leave it (so a keep there saves).
+fn standAt(f: *Fake, prompt: []const u32, at: u32) void {
+    f.at = at;
+    f.sum = fresh(prompt[0..at]);
+}
+
+test "image key ids: a picture's span keys by its whole digest, so another picture of the same size does not resume past it" {
     const gpa = std.testing.allocator;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
     const img: u32 = 99; // the image token: every position of a span holds it
     const ids = [_]u32{ 1, 2, img, img, img, 3, 4, 5, 9 };
-    const da = pc.imageDigest("picture A");
-    const db = pc.imageDigest("picture B");
-    try std.testing.expect(da != db and da != 0 and db != 0);
-    const ka = try pc.keyIds(a, &ids, &.{.{ .at = 2, .len = 3, .digest = da }});
-    const kb = try pc.keyIds(a, &ids, &.{.{ .at = 2, .len = 3, .digest = db }});
+    const da, const db = twoPictures();
+    try std.testing.expectEqualSlices(u8, da[0..8], db[0..8]);
+    const sa = [_]pc.KeySpan{.{ .at = 2, .len = 3, .digest = da }};
+    const sb = [_]pc.KeySpan{.{ .at = 2, .len = 3, .digest = db }};
+    const ka = try pc.keyIds(a, &ids, &sa);
+    const kb = try pc.keyIds(a, &ids, &sb);
     try std.testing.expectEqualSlices(u32, ids[0..2], ka[0..2]); // text keeps its ids
     try std.testing.expectEqualSlices(u32, ids[5..], ka[5..]);
     for (ka[2..5], kb[2..5], 0..) |x, y, j| {
         try std.testing.expect(x >= 0x8000_0000 and y >= 0x8000_0000 and x != y);
-        try std.testing.expectEqual(pc.imageKeyId(da, @intCast(j)), x);
+        try std.testing.expectEqual(pc.imageKeyId(&da, @intCast(j)), x);
     }
     try std.testing.expect(ka[2] != ka[3]); // each offset its own id
     try std.testing.expectError(error.BadImageSpan, pc.keyIds(a, &ids, &.{.{ .at = 7, .len = 3, .digest = da }}));
     var f: Fake = .{ .gpa = gpa };
-    var s = Store.init(gpa, f.snapshots(), .{ .lookahead = 1, .min_prompt = 0, .min_gap = 1 }, 1 << 20);
+    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 0, .min_gap = 1 }, 1 << 20);
     defer s.deinit();
-    var p = try s.begin(a, ka, 7, &.{}, &.{}, null); // keeps at 7, past the picture
-    try std.testing.expectEqual(fresh(ka), f.pass(&s, ka, p));
-    const next_a = try pc.keyIds(a, &(ids ++ [_]u32{ 6, 6 }), &.{.{ .at = 2, .len = 3, .digest = da }});
-    try std.testing.expectEqual(@as(u32, 7), s.find(next_a, &.{}).?.at); // the same picture: resumes past it
-    const next_b = try pc.keyIds(a, &(ids ++ [_]u32{ 6, 6 }), &.{.{ .at = 2, .len = 3, .digest = db }});
-    try std.testing.expect(s.find(next_b, &.{}) == null); // another picture: nothing past it
-    p = try s.begin(a, next_b, 9, &.{}, &.{}, null);
-    try std.testing.expectEqual(@as(u32, 0), p.from);
-    try std.testing.expectEqual(fresh(next_b), f.pass(&s, next_b, p));
+    standAt(&f, ka, 7);
+    try std.testing.expect(s.keepSealed(ka, &sa, 7, null, &.{})); // past the picture
+    const next = ids ++ [_]u32{ 6, 6 };
+    const next_a = try pc.keyIds(a, &next, &sa);
+    try std.testing.expectEqual(@as(u32, 7), s.findSealed(next_a, &sa, &.{}).?.at); // the same picture: resumes past it
+    const next_b = try pc.keyIds(a, &next, &sb);
+    try std.testing.expect(s.findSealed(next_b, &sb, &.{}) == null); // another picture: nothing past it
+    const l = try s.lookup(a, next_b, &sb, 9, &.{}, &.{});
+    try std.testing.expect(l.entry == null);
+}
+
+test "a state with a picture resumes only on that picture's whole digest, even where every span key id agrees" {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const da, const db = twoPictures();
+    const sa = [_]pc.KeySpan{.{ .at = 2, .len = 3, .digest = da }};
+    const sb = [_]pc.KeySpan{.{ .at = 2, .len = 3, .digest = db }};
+    const key = try pc.keyIds(a, &.{ 1, 2, 0, 0, 0, 3, 4, 5, 9, 6 }, &sa); // the key ids of A, as if B's collided with them
+    var f: Fake = .{ .gpa = gpa };
+    var s = Store.init(gpa, f.snapshots(), .{ .min_prompt = 0, .min_gap = 1 }, 1 << 20);
+    defer s.deinit();
+    standAt(&f, key, 2);
+    try std.testing.expect(s.keepSealed(key, &sa, 2, null, &.{})); // before the picture: no seal
+    standAt(&f, key, 7);
+    try std.testing.expect(s.keepSealed(key, &sa, 7, null, &.{}));
+    try std.testing.expect(s.keepSealed(key, &sb, 7, null, &.{})); // the same ids, another picture: its own state
+    try std.testing.expectEqual(@as(usize, 3), s.entries.items.len);
+    try std.testing.expectEqual(s.entries.items[1], s.findSealed(key, &sa, &.{}).?);
+    try std.testing.expectEqual(s.entries.items[2], s.findSealed(key, &sb, &.{}).?);
+    try std.testing.expectEqual(@as(u32, 2), s.find(key, &.{}).?.at); // no pictures given: only the unsealed prefix
+    const c = [_]pc.KeySpan{.{ .at = 2, .len = 3, .digest = pc.imageDigest("picture C") }};
+    try std.testing.expectEqual(@as(u32, 2), s.findSealed(key, &c, &.{}).?.at);
 }

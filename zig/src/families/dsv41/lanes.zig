@@ -22,6 +22,7 @@ const sampling = @import("sampling.zig");
 const link = @import("link.zig");
 const disk_mod = @import("disk.zig");
 const pd = @import("core").prompt_disk;
+const image_key = lanes.image_key;
 const gpu = @import("gpu");
 /// The vision tower's type (vision.zig: CUDA's vit.zig, HIP's vit_hip.zig); an empty type in a build without one.
 pub const VisionTower = if (gpu.features.vision) @import("vision.zig").Vision else opaque {};
@@ -658,7 +659,7 @@ pub const Lanes = struct {
         // with the kept rows copied there when a live stream holds that extent (a burst's second request on a prompt)
         s.cached = 0;
         // kept states are keyed by the prompt's ids, or with images the host's key (none: nothing kept or resumed)
-        const keyed = s.images.len == 0 or s.cache_key.len == len;
+        const keyed = s.images.len == 0 or (s.cache_key.len == len and s.cache_spans.len == s.images.len);
         const key: []const u32 = if (s.images.len == 0) ids else s.cache_key;
         var kept: ?*Snap = null;
         var moved = false;
@@ -679,7 +680,7 @@ pub const Lanes = struct {
         // sf-disk: a state on disk past the kept one in memory (after a restart, or when the kept rows went stale)
         var disk_k: u32 = 0;
         if (self.disk) |d| if (!d.off and keyed) {
-            d.beginPass(std.mem.sliceAsBytes(key));
+            d.beginPass(std.mem.sliceAsBytes(key), s.cache_spans);
             const k_max: u32 = @intCast(@min(len - 1, len -| m.cfg.window) / model.chunk_rows);
             const k_min: u32 = if (kept) |sn| @intCast(sn.at / model.chunk_rows) else 0;
             if (d.tier.longest(d.chain.items, k_min, k_max)) |k| {
@@ -740,13 +741,13 @@ pub const Lanes = struct {
             try self.wire.int(gpa, u32, @intCast(slot));
             try self.wire.int(gpa, u64, base);
             try self.wire.ids(gpa, seq.items);
-            // the spans' key ids, so rank 1 keys its disk states as rank 0 does (its sequence holds -1 there)
-            const n_keyed: u32 = if (keyed) @intCast(s.images.len) else 0;
+            // the pictures (spans, digests): rank 1 keys its disk states as rank 0 does (its sequence holds -1 there)
+            const n_keyed: u32 = if (keyed) @intCast(s.cache_spans.len) else 0;
             try self.wire.int(gpa, u32, n_keyed);
-            if (keyed) for (s.images) |img| {
-                try self.wire.int(gpa, u64, img.at);
-                try self.wire.int(gpa, u32, img.tokens);
-                for (key[img.at..][0..img.tokens]) |x| try self.wire.int(gpa, u32, x);
+            if (keyed) for (s.cache_spans) |sp| {
+                try self.wire.int(gpa, u64, sp.at);
+                try self.wire.int(gpa, u32, sp.len);
+                try self.wire.key(gpa, sp.digest);
             };
             try self.flush();
         }
@@ -1546,8 +1547,8 @@ pub var follow_prof: struct { rounds: u64 = 0, enqueue: u64 = 0, forward: u64 = 
 /// Rank 1 (each of ranks 1-3 on the four-node split): the primitives rank 0 sends, run in order until it says done.
 pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
     const peer = m.peer();
-    // a frame: the ids of a full pool, a prompt's span key ids (at most as many), or 64 KiB of image rows
-    const buf = try gpa.alloc(u8, (m.pool_cap + 1) * 8 + (1 << 16));
+    // a frame: the ids of a full pool and 64 KiB (image rows, or a prompt's picture digests)
+    const buf = try gpa.alloc(u8, (m.pool_cap + 1) * 4 + (1 << 16));
     defer gpa.free(buf);
     var seqs: [max_streams]std.ArrayList(i32) = @splat(.empty);
     defer for (&seqs) |*q| q.deinit(gpa);
@@ -1559,8 +1560,10 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
     var plan_diffs: u64 = 0; // chunks whose read-ahead plan here differed from rank 0's (the warning: oftenEnough)
     var img_rows: std.ArrayList(u8) = .empty; // a prompt's image rows as their pieces come
     defer img_rows.deinit(gpa);
-    var key_ids: std.ArrayList(u32) = .empty; // a prompt with images: its cache key (rank 0's span key ids)
+    var key_ids: std.ArrayList(u32) = .empty; // a prompt with images: its cache key (made from rank 0's spans)
     defer key_ids.deinit(gpa);
+    var key_spans: std.ArrayList(image_key.KeySpan) = .empty;
+    defer key_spans.deinit(gpa);
     var kept: std.AutoHashMapUnmanaged(u64, gpu.DeviceBuffer) = .empty; // rank 0's kept states, this rank's part
     defer {
         var ki = kept.valueIterator();
@@ -1611,21 +1614,23 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
                 if (slot >= max_streams) return error.BadSlot;
                 img_rows.clearRetainingCapacity();
                 try r.ids(gpa, &seqs[slot]);
-                // rank 0's span key ids: this rank's disk states keyed alike (its sequence holds -1 there)
+                // rank 0's pictures: this rank's disk states keyed alike (its sequence holds -1 there)
                 const seq = seqs[slot].items;
                 const n_spans = try r.int(u32);
-                if (n_spans > 0) {
-                    try key_ids.resize(gpa, seq.len);
-                    for (key_ids.items, seq) |*k, x| k.* = @bitCast(x);
-                    for (0..n_spans) |_| {
-                        const at: usize = @intCast(try r.int(u64));
-                        const n: usize = try r.int(u32);
-                        if (n == 0 or at + n > seq.len) return error.BadFrame;
-                        for (key_ids.items[at..][0..n]) |*k| k.* = try r.int(u32);
-                    }
+                key_spans.clearRetainingCapacity();
+                for (0..n_spans) |_| {
+                    const at = try r.int(u64);
+                    const n = try r.int(u32);
+                    if (n == 0 or at + n > seq.len) return error.BadFrame;
+                    try key_spans.append(gpa, .{ .at = @intCast(at), .len = n, .digest = try r.key() });
                 }
                 try r.end();
-                if (disk) |d| d.beginPass(if (n_spans > 0) std.mem.sliceAsBytes(key_ids.items) else std.mem.sliceAsBytes(seq));
+                try key_ids.resize(gpa, seq.len);
+                for (key_ids.items, seq) |*k, x| k.* = @bitCast(x);
+                for (key_spans.items) |sp| for (key_ids.items[sp.at..][0..sp.len], 0..) |*k, j| {
+                    k.* = image_key.imageKeyId(&sp.digest, @intCast(j));
+                };
+                if (disk) |d| d.beginPass(std.mem.sliceAsBytes(key_ids.items), key_spans.items);
                 notePass(m, step - 1, 1, seqs[slot].items.len, slot, @intCast(base), "");
                 m.fillBegin(slot, @intCast(base)) catch |err| try refused(err);
                 m.fill_seq = seqs[slot].items;

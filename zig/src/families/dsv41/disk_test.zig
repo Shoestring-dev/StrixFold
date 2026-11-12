@@ -13,6 +13,7 @@ const rowsAt = disk.rowsAt;
 const identityText = disk.identityText;
 const seedText = disk.seedText;
 const submitRuns = disk.submitRuns;
+const image_key = @import("lanes").image_key;
 
 test "settings: off unless a positive GiB; defaults; a value that is not a number turns the tier off" {
     const a = std.testing.allocator;
@@ -78,6 +79,45 @@ test "the identity: every input on its own line; the plan's conf= and disk= toke
     const t3 = try identityText(a, same);
     defer a.free(t3);
     try std.testing.expectEqualStrings(text, t3);
+}
+
+test "the key scheme is in the namespace and the chain's seed: states keyed before it are never found" {
+    const a = std.testing.allocator;
+    const parts: Parts = .{ .rank = 0, .world = 2, .deploy = "70cfb8c", .bundle = "c178", .kit_sha256 = "abcd", .hip_runtime = 70051831, .arch = "gfx1151", .plan = "drafts=true pool=8192", .engram = "e", .token_map = "tm", .ds_kit = "dk", .window = 128, .snap_bytes = 6 << 20, .planes = "256:4" };
+    const text = try identityText(a, parts);
+    defer a.free(text);
+    const seed = try seedText(a, parts);
+    defer a.free(seed);
+    const line = std.fmt.comptimePrint("keys={d}\n", .{disk.key_scheme});
+    try std.testing.expectEqual(@as(u32, 2), disk.key_scheme);
+    const at = std.mem.indexOf(u8, text, line).?;
+    try std.testing.expect(std.mem.indexOf(u8, seed, line) != null);
+    const before = try std.mem.concat(a, u8, &.{ text[0..at], text[at + line.len ..] }); // the identity before the scheme
+    defer a.free(before);
+    try std.testing.expect(!std.mem.eql(u8, &pd.namespaceOf(text), &pd.namespaceOf(before)));
+}
+
+test "a block's key holds the whole digest of each picture that meets it, so key ids alike cannot resume it" {
+    var ids: [3 * block_tokens]u32 = undefined;
+    for (&ids, 0..) |*x, i| x.* = @intCast(i * 7 % 1000);
+    const da = image_key.imageDigest("picture A");
+    var db = da;
+    db[20] ^= 1; // alike in the first 8 bytes; the ids below are A's for both (as if B's had collided)
+    const h0 = pd.seed("id");
+    var text: [3]Key = undefined;
+    pd.chain(h0, std.mem.sliceAsBytes(&ids), block_tokens * 4, &text);
+    var none: [3]Key = undefined;
+    disk.chainKeys(h0, std.mem.sliceAsBytes(&ids), &.{}, &none);
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&text), std.mem.sliceAsBytes(&none)); // text: pd.chain's
+    var ka: [3]Key = undefined;
+    var kb: [3]Key = undefined;
+    disk.chainKeys(h0, std.mem.sliceAsBytes(&ids), &.{.{ .at = block_tokens - 2, .len = 4, .digest = da }}, &ka);
+    disk.chainKeys(h0, std.mem.sliceAsBytes(&ids), &.{.{ .at = block_tokens - 2, .len = 4, .digest = db }}, &kb);
+    for (ka, kb) |x, y| try std.testing.expect(!std.mem.eql(u8, &x, &y)); // the span meets blocks 1 and 2
+    var late: [3]Key = undefined;
+    disk.chainKeys(h0, std.mem.sliceAsBytes(&ids), &.{.{ .at = 2 * block_tokens + 5, .len = 4, .digest = da }}, &late);
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(text[0..2]), std.mem.sliceAsBytes(late[0..2])); // before it: text
+    try std.testing.expect(!std.mem.eql(u8, &text[2], &late[2]));
 }
 
 fn testRoot(buf: []u8, tag: []const u8) ![]const u8 {
