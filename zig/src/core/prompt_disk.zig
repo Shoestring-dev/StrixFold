@@ -186,6 +186,7 @@ pub const Tier = struct {
     thread: ?std.Thread = null,
     written: std.atomic.Value(u64) = .init(0), // the writer's totals (its own lines)
     clock: i128 = 0, // the last `used` handed out (wall ns, strictly increasing)
+    lock: c_int = -1, // IDENTITY, flock'ed shared while open: no other tier's sweep takes this namespace
 
     pub const readState = index.readState;
     pub const readRun = index.readRun;
@@ -208,9 +209,10 @@ pub const Tier = struct {
         t.dir = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ cfg.root, &t.ns_hex }, 0);
         errdefer gpa.free(t.dir);
         try fs.makePath(gpa, t.dir);
+        try namespace.claim(t, identity);
+        errdefer namespace.release(t);
         try t.sub("s");
         try t.sub("b");
-        try namespace.claim(t, identity);
         errdefer t.freeIndex();
         try index.scan(t);
         namespace.scanOthers(t, identity);
@@ -232,6 +234,7 @@ pub const Tier = struct {
         t.done.deinit(t.gpa);
         t.freeIndex();
         t.others.deinit(t.gpa);
+        namespace.release(t);
         t.gpa.free(t.dir);
         t.gpa.free(t.planes);
         t.gpa.free(t.cfg.root);
@@ -577,4 +580,5 @@ pub const Tier = struct {
 
 test {
     _ = @import("prompt_disk_test.zig");
+    _ = @import("prompt_disk_namespace_test.zig");
 }

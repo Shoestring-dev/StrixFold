@@ -44,28 +44,6 @@ pub fn statFd(fd: c_int) ?FileStat {
     return .{ .size = sx.size, .mtime = @as(i128, sx.mtime.sec) * std.time.ns_per_s + sx.mtime.nsec };
 }
 
-pub fn readSmall(gpa: Allocator, path: [:0]const u8) ?[]u8 {
-    const fd = c.open(path, .{ .ACCMODE = .RDONLY }, @as(c.mode_t, 0));
-    if (fd < 0) return null;
-    defer _ = c.close(fd);
-    const st = statFd(fd) orelse return null;
-    if (st.size > 1 << 20) return null;
-    const out = gpa.alloc(u8, @intCast(st.size)) catch return null;
-    if (!readAt(fd, out, 0)) {
-        gpa.free(out);
-        return null;
-    }
-    return out;
-}
-
-pub fn writeFile(path: [:0]const u8, parts: []const []const u8) !void {
-    const fd = c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o600));
-    if (fd < 0) return error.DiskWrite;
-    defer _ = c.close(fd);
-    for (parts) |p| try writeAll(fd, p);
-    if (c.fdatasync(fd) != 0) return error.DiskWrite;
-}
-
 pub fn touchPath(path: [:0]const u8) void {
     const fd = c.open(path, .{ .ACCMODE = .RDONLY }, @as(c.mode_t, 0));
     if (fd < 0) return;
