@@ -123,13 +123,11 @@ const MarkovGather = struct {
     }
 };
 
-/// A drafting stream's sampling key for a pass (tri_aux.MarkovKey): a pass given keys draws its Markov steps with
-/// aux.markov_race (Drafter.pass).
+/// A drafting stream's sampling key (tri_aux.MarkovKey); a pass given keys draws with aux.markov_race.
 pub const SampleKey = tri_aux.MarkovKey;
 
-/// The drafter pass's CUDA graphs (BatchDraftGraph), one a (streams, steps) and whether its Markov steps draw with
-/// the streams' keys: every pointer it reads is a fixed buffer and every per-pass value (ids, positions, slots, the
-/// pick lists, the keys) is uploaded ahead of the replay.
+/// The drafter pass's CUDA graphs (BatchDraftGraph), one a (streams, steps, race): every pointer it reads is fixed
+/// and every per-pass value (ids, positions, slots, the pick lists, the keys) is uploaded ahead of the replay.
 pub const PassGraphs = struct {
     gpa: std.mem.Allocator,
     map: std.AutoHashMapUnmanaged(Key, gpu.graph.Exec) = .empty,
@@ -453,17 +451,14 @@ pub const Drafter = struct {
         try prompt.grouped(e, ch, n, ls[0..S], xs[0..S], ldxs[0..S], dr.ak[0..S], ldos[0..S], types[0..S]);
     }
 
-    /// Whether a pass can draw its drafts with the streams' sampling keys: the kit's aux.markov_race over a Markov
-    /// loop whose bests go through the ranks' gather (tri_markov.Markov.races).
+    /// Whether a pass can draw with the streams' keys: the kit's aux.markov_race over a gathered Markov loop.
     pub fn races(dr: *const Drafter, e: *const Engine) bool {
         const ax = e.t.aux orelse return false;
         return ax.markov_race != null and dr.mk.races();
     }
 
     /// BatchDraftGraph.run for N streams (tokens at positions q0 in slots): each stream's `steps` drafts and their
-    /// confidences into drafts / confs. Each slot's rings hold its positions before q0 (absorbed). `keys` (one a
-    /// stream; races()): the Markov steps draw each stream's drafts with its key (a key of inv_t 0: its best token,
-    /// as without keys); without them, or where races() is false, every draft is the drafter's best token.
+    /// confidences into drafts / confs; rings hold positions before q0; `keys` (races()) draw each stream's drafts.
     pub fn pass(dr: *Drafter, e: *const Engine, ch: *const Chunk, pool: *const Pool, tokens: []const i64, q0: []const i64, slots: []const i64, steps: usize, keys: ?[]const SampleKey, probe: ?Probe) !void {
         const N = tokens.len;
         const n = dr.n;
@@ -514,8 +509,7 @@ pub const Drafter = struct {
     }
 
     /// The pass's device work for N streams of `steps` drafts, from the rows' embeddings to the confidence head (its
-    /// inputs uploaded: the index rows, the pick lists, the Markov loop's first column, a sampled pass's keys): what a
-    /// pass graph captures. `race`: the Markov steps draw with the keys (races()).
+    /// inputs uploaded, a sampled pass's keys too): what a pass graph captures; `race` draws the steps with the keys.
     fn body(dr: *Drafter, e: *const Engine, ch: *const Chunk, pool: *const Pool, N: usize, steps: usize, race: bool, probe: ?Probe) !void {
         const c = e.c;
         const t = e.t;

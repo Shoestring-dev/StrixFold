@@ -6,9 +6,6 @@
 //!   a NaN must stay a NaN (its payload rule is reported, ADAPTER.md 14);
 //! - the row movers byte for byte, including every byte they must leave alone and the gather's invalid flag;
 //! - argmax_rows against sampling.argmax, the host rule it implements (ties, NaN, ±inf, ±0, row lengths);
-//! - aux.markov_race (the drafter's Markov step of a sampled pass) against tri_markov.raceRow, the host statement of
-//!   its rule: greedy rows exactly, sampled rows' tokens wherever the two best scores are not within the fp32 draw's
-//!   error, cached and staged bias rows, both vocabulary halves; and its time a launch;
 //! - the profile clock: count, cap, reset, order, and its nanoseconds bracketed by the host's clock;
 //! - hipBLAS's fp32 GEMMs in the family's four call shapes against an FP64 reference: every element within
 //!   γ_k·Σ|x·w| (u = 2^-24), and a second run bit-identical.
@@ -509,6 +506,7 @@ fn argmaxRows(r: *Receipt, e: *const Env) !void {
 
 // ---- the drafter's sampled Markov step
 
+/// aux.markov_race against tri_markov.raceRow: greedy rows exactly, sampled rows outside the fp32 draw's error.
 fn markovRace(r: *Receipt, e: *const Env) !void {
     const tri_markov = dsv41.tri_markov;
     const tri_aux = dsv41.tri_aux;
@@ -533,8 +531,7 @@ fn markovRace(r: *Receipt, e: *const Env) !void {
     for (0..rows * block) |q| for (0..12) |j| {
         lg[q * nc + mix(q * 131 + j) % nc] = 13.0 + @as(f32, @floatFromInt(mix(q * 977 + j) % 2001)) / 1000.0;
     };
-    // _score's order for a NaN (above everything, the first of two): a greedy row's and a sampled row's, at steps 1
-    // and 3 (rows 2 and 3 of the six; row r's step i is logits row r * block + i)
+    // _score's NaN order for a greedy and a sampled row at steps 1 and 3 (row r's step i is logits row r * block + i)
     for ([_]usize{ 2 * block + 1, 3 * block + 3 }) |q| for ([_]usize{ 40_000, 123, 64_000 }) |c| {
         lg[q * nc + c] = std.math.nan(f32);
     };
@@ -591,7 +588,7 @@ fn markovRace(r: *Receipt, e: *const Env) !void {
             const row_lg = lg[(row * block + i) * nc ..][0..nc];
             const key = keys[row];
             const want = tri_markov.raceRow(row_lg, bias, key, key.position + i, id0);
-            // the runner-up on the host: a sampled row whose two best are within the device logs' error may go either way
+            // a sampled row whose two best are within the device logs' error may go either way
             var second = -std.math.inf(f32);
             for (row_lg, bias, 0..) |l, b, c| {
                 const id = id0 + @as(u32, @intCast(c));

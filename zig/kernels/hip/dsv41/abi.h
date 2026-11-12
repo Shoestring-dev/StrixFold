@@ -408,9 +408,7 @@ TF_DS_ASSERT(offsetof(tf_ds_prefetch, bytes) == 128, "bytes");
 TF_DS_ASSERT(offsetof(tf_ds_prefetch, n) == 256, "n");
 TF_DS_ASSERT(offsetof(tf_ds_prefetch, pad0) == 260, "pad0");
 
-/* The drafter's sampled Markov step (aux_markov.hip, tf_ds_aux_markov_race). A row's key: its stream's sampling seed,
- * the absolute position its first draft is drawn at (the kernel adds its step) and 1 / the draft temperature (0: a
- * greedy row, no draw). */
+// tf_ds_markov_key (aux_markov.hip): a row's sampling seed, its first draft's position and 1 / its draft temperature
 typedef struct {
     uint64_t seed, position;
     float inv_t;
@@ -422,11 +420,7 @@ TF_DS_ASSERT(offsetof(tf_ds_markov_key, position) == 8, "position");
 TF_DS_ASSERT(offsetof(tf_ds_markov_key, inv_t) == 16, "inv_t");
 TF_DS_ASSERT(offsetof(tf_ds_markov_key, pad0) == 20, "pad0");
 
-/* Device addresses: lg fp32 (row r's n_cols logits at lg + 4 r l_row: this rank's columns of the step's block row);
- * tok int64 (row r's previous token at tok[r t_stride]); slot int32 [vocabulary] (a token's cached bias row, -1
- * none); cache fp16 [cached rows, c_row]; stage fp16 [rows, s_row] (the bias rows of tokens without a slot); keys
- * tf_ds_markov_key [rows]; send fp32 [rows, 4] (value, token id, 0, 0). id0: the token id of column 0. Grid
- * (n_rows, 1, 1), block 1024. */
+// tf_ds_aux_markov_race_args: the buffers and strides of tri_aux.MarkovRaceArgs; grid (n_rows, 1, 1), block 1024
 typedef struct {
     uint64_t lg, tok, slot, cache, stage, keys, send;
     int64_t l_row, t_stride, c_row, s_row;

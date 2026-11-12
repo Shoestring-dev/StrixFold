@@ -53,10 +53,7 @@ pub fn race(t: Tri, f: gpu.Function, a: tri_aux.MarkovRaceArgs) !void {
 extern "c" fn logf(x: f32) f32;
 extern "c" fn log1pf(x: f32) f32;
 
-/// aux.markov_race's Gumbel draw of the key bits (sampling.keyBits), its fp32 arithmetic: -log(-log(u)) of the
-/// sampler's u, the double nearest ((bits >> 11) + 0.5) 2^-53. Below a half that is exact, and -log(u) is taken
-/// from it; from a half on the double is (a + (a & 1)) 2^-53 (a tie, to even), and -log(u) is taken from 1 - u (the
-/// sampler's u of the last a is 1 and its draw +inf: here too).
+/// aux.markov_race's fp32 Gumbel draw of the key bits (sampling.keyBits): -log(-log(u)) of the sampler's own u.
 pub fn raceGumbel(bits: u64) f32 {
     const a = bits >> 11;
     const e: f32 = if (a < (1 << 52))
@@ -66,17 +63,14 @@ pub fn raceGumbel(bits: u64) f32 {
     return -logf(e);
 }
 
-/// _score's order of two (value, token) (kernels.py _better, torch.argmax's): a NaN above everything, then the larger
-/// value, ties (and a NaN against a NaN) to the lower token.
+/// _score's order of two (value, token): a NaN above everything, then the larger value, ties to the lower token.
 fn raceBetter(v: f32, i: u32, bv: f32, bi: u32) bool {
     const n1 = v != v;
     const n2 = bv != bv;
     return (n1 and (!n2 or i < bi)) or (!n1 and !n2 and (v > bv or (v == bv and i < bi)));
 }
 
-/// aux.markov_race's pick of one row on the host (its GPU test's reference and the rule's statement): the best, in
-/// _score's order, of score[c] = lg[c] + bias[c] (one fp32 add), times the key's inv_t plus the draw of token
-/// id0 + c at `position` when inv_t > 0 (a greedy row: _score's and _finish's pick). (value, token).
+/// aux.markov_race's pick of one row on the host, the statement of its rule and its GPU test's reference.
 pub fn raceRow(lg: []const f32, bias: []const f16, key: tri_aux.MarkovKey, position: u64, id0: u32) struct { f32, u32 } {
     var bv = -std.math.inf(f32);
     var bi: u32 = std.math.maxInt(u32);
@@ -179,15 +173,12 @@ pub const Markov = struct {
         return if (m.split) sc.send else null;
     }
 
-    /// Whether a pass's steps can draw with aux.markov_race: this rank scores its own vocabulary columns, one segment
-    /// of the head's TP2 logits, and hands its bests to the ranks' gather.
+    /// Whether a pass's steps can use aux.markov_race: this rank scores its own columns and gathers its bests.
     pub fn races(m: Markov) bool {
         return m.split and m.segs == 1 and m.lg_w == 0;
     }
 
-    /// localBest for a pass with sampled streams: step i's (value, token) of each row on this rank's columns into
-    /// the returned send [N, 4], a sampled row's by its score over the draft temperature plus its key's draw at the
-    /// step's position, a greedy row's as localBest picks it.
+    /// localBest for a pass with sampled streams: a sampled row's best by score / its draft temperature plus its draw.
     pub fn raceBest(m: Markov, t: Tri, rc: Race, lg: u64, out: u64, ts: usize, n: usize, block: usize, i: usize, sc: Scratch) !u64 {
         if (n > np) return error.TooManyRows;
         if (!m.races()) return error.BadDraftPass;
@@ -208,8 +199,7 @@ pub const Markov = struct {
         try t.run("_pick", .{ u(n), 1, 1 }, &.{ p("G", "*fp32", g), int("n_rows", n), p("OUT", "*i64", out + 8 * (i + 1)), int("o_stride", ts) }, &.{ ci("WORLD", world), t.pdlConst() });
     }
 
-    /// Markov.steps: out [N, count + 1] int64 (out[:, 0] the last tokens) -> out[:, 1:] the drafts, each step's bests gathered over the ranks before its pick.
-    /// `rc` (a pass with sampled streams, races()): each step's bests are raceBest's.
+    /// Markov.steps: out [N, count + 1] int64 (out[:, 0] the last tokens) -> out[:, 1:] the drafts, each step's bests gathered over the ranks before its pick; `rc`: raceBest's.
     pub fn steps(m: Markov, t: Tri, lg: u64, out: u64, ts: usize, n: usize, block: usize, count: usize, sc: Scratch, gather: Gather, rc: ?Race) !void {
         for (0..count) |i| {
             const send = if (rc) |r| try m.raceBest(t, r, lg, out, ts, n, block, i, sc) else (try m.localBest(t, lg, out, ts, n, block, i, sc) orelse continue);
@@ -456,8 +446,7 @@ test "raceRow: the served sampler's token on the same scores, the greedy token w
         try std.testing.expectEqual(sum[g[1]], g[0]);
         for ([_]f64{ 1.0, 0.7, 0.25 }) |temp| {
             for ([_]u32{ 0, 64640 }) |id0| {
-                // the sampler's float64 scores of tokens id0 + c; a row whose two best are nearer than the fp32
-                // draw's error may go either way
+                // a row whose two best are nearer than the fp32 draw's error may go either way
                 var best = -std.math.inf(f64);
                 var second = best;
                 var at: u32 = 0;
@@ -480,8 +469,7 @@ test "raceRow: the served sampler's token on the same scores, the greedy token w
         }
     }
     try std.testing.expect(compared > 2800);
-    // _score's order (torch.argmax's), which a greedy row in a pass with sampled ones must keep: a NaN above every
-    // value, the first of two; then the larger value, the first of equals
+    // _score's order, which a greedy row beside sampled ones must keep: a NaN first, then the larger, then the first
     const nan = std.math.nan(f32);
     @memset(&bias, 0);
     for (&lg, 0..) |*l, c| l.* = @floatFromInt(c % 7);
