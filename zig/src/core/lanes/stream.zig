@@ -22,9 +22,7 @@ pub const Reason = enum {
 
 pub const Mode = enum { pipe, drain, verify, exit };
 
-// the longest exact cycle the thinking loop guard sees: 64 tokens (upstream 8). DeepSeek-V4.1, greedy, looped in its
-// thinking on a 29-token cycle ("Let me call the tool. / I'll do it. / OK. / ...", 855 times, 63,854 tokens) that a
-// guard of 8 never saw; 256 tokens of a cycle of 64 or less is no reasoning, and the guard only closes the thinking
+// the longest exact cycle the thinking loop guard looks for
 pub const loop_max_period: usize = 64;
 pub const loop_min_run: usize = 256;
 pub const loop_warm_in: usize = 64;
