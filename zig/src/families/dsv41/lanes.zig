@@ -100,8 +100,7 @@ fn topTwo(row: []const f32) [2]struct { u32, f32 } {
 /// DIR/<name>.f32 and a JSON beside it (DIR/<name>.json: rows, columns, vocab_size, sha256, the top two ids and logits).
 pub var logits_dump: ?[]const u8 = null;
 
-/// The primitives rank 0 sends rank 1 (each frame: kind u8, step u64, its fields little-endian).
-/// 10-15 are sf-disk's (disk.zig), sent only when both ranks run it (the handshake's " disk=1").
+/// Rank 0's primitives to rank 1 (kind u8, step u64, fields little-endian); 10-15 are sf-disk's, sent with " disk=1".
 pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9, disk_sync = 10, disk_save = 11, disk_drop = 12, disk_load = 13, disk_outcome = 14, disk_rows = 15 };
 
 /// A frame being written.
@@ -1191,7 +1190,7 @@ pub const Lanes = struct {
 
     // -- sf-disk (rank 0's decisions; disk.zig) -------------------------------------------------------------------
 
-    /// Blocks a stream writes in one piece (one run's host bytes at most: ~29 MiB a rank), and in all at one chunk end.
+    /// Blocks a stream writes in one piece (one run's host bytes at most), and in all at one chunk end.
     const piece_blocks = 16;
     const blocks_per_end = 128;
 
@@ -1209,8 +1208,7 @@ pub const Lanes = struct {
         self.disk = d;
     }
 
-    /// The startup reconcile: rank 0's states on disk to rank 1, which answers which it has (and drops the others);
-    /// each side keeps only the states both have.
+    /// The startup reconcile: rank 0's states on disk to rank 1, which answers which it has; both keep only those.
     fn diskSync(self: *Lanes, d: *disk_mod.Disk) !void {
         const keys = try d.tier.completeKeys();
         defer self.gpa.free(keys);
@@ -1258,9 +1256,9 @@ pub const Lanes = struct {
         if (keys.len > 0) if (self.disk) |d| d.line("event=evict states={d}", .{keys.len});
     }
 
-    /// Rank 0, at chunk end `end` of a pass that keeps states: its finished blocks (through last_end) to disk in pieces,
-    /// rank 1 told to write its own; a long first save so never holds its whole state in host memory at once.
+    /// Rank 0 at chunk end `end`: finished blocks (to last_end) to disk in pieces, rank 1 told to write its own.
     fn diskStream(self: *Lanes, d: *disk_mod.Disk, slot: usize, base: usize, end: usize, last_end: usize) !void {
+        // a long first save so never holds its whole state in host memory at once
         const upto: u32 = @intCast(@min(end / model.chunk_rows, d.chain.items.len));
         const last: u32 = @intCast(last_end / model.chunk_rows);
         if (upto <= d.streamed or (upto - d.streamed < piece_blocks and upto < last)) return;
@@ -1328,8 +1326,7 @@ pub const Lanes = struct {
         if (d.write(&p, keys, 1, sn.base, sn.buf.ptr)) d.line("event=save result=queued tokens={d} new_blocks={d} key={s}", .{ at, new, &pd.short(keys[k - 1]) });
     }
 
-    /// Rank 0: the pass resumes from state k on disk: both ranks read their parts into slot `slot` and the extent at
-    /// `base`; rank 1 answers how it went and rank 0 tells it the outcome. The position the pass starts at (0: a miss).
+    /// Rank 0: both ranks resume state k into slot `slot` and extent `base`; the pass's start position (0: a miss).
     fn diskResume(self: *Lanes, slot: usize, base: usize, k: u32) !usize {
         const d = self.disk.?;
         const key = d.chain.items[k - 1];
@@ -1343,6 +1340,7 @@ pub const Lanes = struct {
         }
         var bytes: u64 = 0;
         const mine = d.load(slot, base, key, k, &bytes);
+        // rank 1 answers how its read went; rank 0 tells it the pair's outcome
         var rb: [16]u8 = undefined;
         const got = try self.peer.?.recv(&rb);
         if (got.len != 1 or got[0] > 2) return error.BadFrame;
@@ -1551,8 +1549,7 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
         while (ki.next()) |b| b.free();
         kept.deinit(gpa);
     }
-    // sf-disk: this rank's tier, opened at rank 0's first disk_sync (rank 0 waits for the answer then, so the scan of
-    // the directory never holds this rank while rank 0 runs collectives); its writes finish before follow returns
+    // sf-disk: this rank's tier, opened at rank 0's first disk_sync (rank 0 waits then); writes finish before return
     var disk_settings: ?disk_mod.Settings = if (m.world == 2 and gpu.backend == .hip) disk_mod.Settings.fromEnv(gpa) else null;
     defer if (disk_settings) |s| gpa.free(s.dir);
     var disk: ?*disk_mod.Disk = null;
@@ -1800,8 +1797,7 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
     }
 }
 
-/// Rank 1's side of the startup reconcile: which of rank 0's states it has (a bitmap), its tier usable or not; the
-/// states it has that rank 0 does not list go.
+/// Rank 1's side of the startup reconcile: its tier usable or not, a bitmap of rank 0's states it has; the rest go.
 fn followSync(gpa: std.mem.Allocator, disk: ?*disk_mod.Disk, keys: []const pd.Key, peer: link.Link) !void {
     var reply: std.ArrayList(u8) = .empty;
     defer reply.deinit(gpa);

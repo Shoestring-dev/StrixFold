@@ -154,7 +154,7 @@ test "rank 0 and rank 1 name a prompt's states alike: a pair's save, reconcile a
     pd.chain(pd.seed(s0), std.mem.sliceAsBytes(&toks), block_tokens * 4, &k0);
     pd.chain(pd.seed(s1), std.mem.sliceAsBytes(&seq), block_tokens * 4, &k1);
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&k0), std.mem.sliceAsBytes(&k1));
-    // (the namespace's own text as the seed, as before this fix, names them differently: no hit was possible)
+    // (the namespace's own text as the seed would name them differently: no hit would be possible)
     var w0: [1]Key = undefined;
     var w1: [1]Key = undefined;
     pd.chain(pd.seed(id0), std.mem.sliceAsBytes(&toks), block_tokens * 4, &w0);
