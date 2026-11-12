@@ -14,6 +14,8 @@ const identityText = disk.identityText;
 const seedText = disk.seedText;
 const submitRuns = disk.submitRuns;
 const image_key = @import("lanes").image_key;
+const fill_spans = @import("fill_spans.zig");
+const lanes_mod = @import("lanes.zig");
 
 test "settings: off unless a positive GiB; defaults; a value that is not a number turns the tier off" {
     const a = std.testing.allocator;
@@ -290,4 +292,47 @@ test "a run whose submit fails queues nothing: its reservation comes back and it
     try std.testing.expectEqual(@as(u64, 1 << 20), t.queueRoom());
     try std.testing.expectEqual(@as(usize, 0), t.blocks.count());
     try std.testing.expectEqual(@as(u64, 0), t.bytes);
+}
+
+test "rank 1 keys an image prompt's blocks as rank 0 does, from fill_begin's spans, a span across a block end too" {
+    const gpa = std.testing.allocator;
+    const image: u32 = 128815; // the image token: rank 0's prompt holds it, its sequence -1 there
+    var prompt: [3 * block_tokens]u32 = undefined;
+    for (&prompt, 0..) |*x, i| x.* = @intCast(i * 31 % 129280 % image);
+    const spans = [_]image_key.KeySpan{ .{ .at = block_tokens - 3, .len = 10, .digest = image_key.imageDigest("picture A") }, .{ .at = 2 * block_tokens + 100, .len = 64, .digest = image_key.imageDigest("picture B") } };
+    var seq0: [prompt.len]i32 = undefined;
+    for (&seq0, prompt) |*q, x| q.* = @intCast(x);
+    for (spans) |sp| for (prompt[sp.at..][0..sp.len], seq0[sp.at..][0..sp.len]) |*x, *q| {
+        x.* = image;
+        q.* = -1;
+    };
+    // rank 0: its key from the prompt (the lane host's), its chain, and fill_begin's sequence and spans
+    const key0 = try image_key.keyIds(gpa, &prompt, &spans);
+    defer gpa.free(key0);
+    const h0 = pd.seed("seed");
+    var k0: [3]Key = undefined;
+    disk.chainKeys(h0, std.mem.sliceAsBytes(key0), &spans, &k0);
+    var w: lanes_mod.Wire = .{};
+    defer w.deinit(gpa);
+    try w.ids(gpa, &seq0);
+    try fill_spans.write(&w, gpa, &spans);
+    // rank 1: the frame read back, its key ids made from it, its chain
+    var r: lanes_mod.Reader = .{ .b = w.buf.items };
+    var seq1: std.ArrayList(i32) = .empty;
+    defer seq1.deinit(gpa);
+    try r.ids(gpa, &seq1);
+    var spans1: std.ArrayList(image_key.KeySpan) = .empty;
+    defer spans1.deinit(gpa);
+    try fill_spans.read(&r, gpa, seq1.items, &spans1);
+    try r.end();
+    var key1: std.ArrayList(u32) = .empty;
+    defer key1.deinit(gpa);
+    try fill_spans.keyIds(gpa, seq1.items, spans1.items, &key1);
+    try std.testing.expectEqualSlices(u32, key0, key1.items);
+    var k1: [3]Key = undefined;
+    disk.chainKeys(h0, std.mem.sliceAsBytes(key1.items), spans1.items, &k1);
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&k0), std.mem.sliceAsBytes(&k1));
+    var text: [3]Key = undefined; // every block's key holds its pictures: none is the text chain's
+    pd.chain(h0, std.mem.sliceAsBytes(&prompt), block_tokens * 4, &text);
+    for (k0, text) |a, b| try std.testing.expect(!std.mem.eql(u8, &a, &b));
 }
