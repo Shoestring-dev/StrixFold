@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """GPU-free HTTP regression of the image routes with the real DeepSeek-V4.1 tokenizer and template.
 
-fake_serve (zig/tests/server/build.sh -> zig-out/server/fake_serve) with TF_FAKE_VISION=1 takes any image as four rows,
-so this checks the server's request paths (chat, Messages, tool results, /tokenize, count_tokens), not pixels or the
+fake_serve (zig/tests/server/build.sh -> zig-out/server/fake_serve) with TF_FAKE_VISION=1 takes an image as four rows,
+or eight when its payload is "image-B" (so the order of two images shows in their spans), so this checks the server's request paths (chat, Messages, tool results, /tokenize, count_tokens), not pixels or the
 tower. Cases after upstream PR #6's test_vision_http.py, plus the Anthropic routes.
 
     TF_VISION_TEST_TOKENIZER=<dir with tokenizer.json + chat_template.jinja> python3 -m unittest tools/dsv41-hip/test_vision_http.py
 TF_VISION_TEST_SERVER selects another fake_serve binary.
 """
+import base64
+import itertools
 import json
 import os
 from pathlib import Path
@@ -22,6 +24,15 @@ import urllib.request
 SRC = Path(__file__).resolve().parents[2]
 IMAGE_TOKEN = 129264
 PNG = 'data:image/png;base64,aA=='
+TOOLS = [{'type': 'function', 'function': {'name': 'screenshot', 'parameters': {'type': 'object', 'properties': {}}}}]
+
+
+def image_url(payload):
+    return {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(payload.encode()).decode()}}
+
+
+def spans(tokens):
+    return [len(list(group)) for token, group in itertools.groupby(tokens) if token == IMAGE_TOKEN]
 
 
 @unittest.skipUnless(os.environ.get('TF_VISION_TEST_TOKENIZER'), 'set TF_VISION_TEST_TOKENIZER to the model tokenizer directory')
@@ -146,6 +157,39 @@ class ImageRoutes(unittest.TestCase):
         self.assertEqual(status, 200, tokens)
         self.assertEqual(tokens['tokens'].count(IMAGE_TOKEN), 4)
 
+
+    def test_user_image_and_tool_result_image_keep_their_order(self):
+        for user, tool, expected in (('image-A', 'image-B', [4, 8]), ('image-B', 'image-A', [8, 4])):
+            body = self.chat(0)
+            body['tools'] = TOOLS
+            body['messages'] = [
+                {'role': 'user', 'content': [{'type': 'text', 'text': 'Compare this with a screenshot.'}, image_url(user)]},
+                {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'c1', 'type': 'function',
+                                                                      'function': {'name': 'screenshot', 'arguments': '{}'}}]},
+                {'role': 'tool', 'tool_call_id': 'c1', 'content': [{'type': 'text', 'text': 'here'}, image_url(tool)]}]
+            status, tokens = self.post('/v1/tokenize', body)
+            self.assertEqual(status, 200, tokens)
+            self.assertEqual(spans(tokens['tokens']), expected)
+            status, answer = self.post('/v1/chat/completions', body)
+            self.assertEqual(status, 200, answer)
+
+    def test_reordered_tool_results_keep_each_image(self):
+        # after upstream PR #6's test_tool_result_reordering_preserves_image_identity
+        def result(identity, payload):
+            return {'role': 'tool', 'tool_call_id': identity, 'content': [{'type': 'text', 'text': 'Screenshot ' + identity},
+                                                                         image_url(payload)]}
+        calls = [{'id': i, 'type': 'function', 'function': {'name': 'screenshot', 'arguments': '{}'}} for i in 'ab']
+        head = [{'role': 'user', 'content': 'Inspect both screenshots.'}, {'role': 'assistant', 'content': '', 'tool_calls': calls}]
+        body = self.chat(0)
+        body['tools'] = TOOLS
+        seen = []
+        for order in ((result('a', 'image-A'), result('b', 'image-B')), (result('b', 'image-B'), result('a', 'image-A'))):
+            body['messages'] = head + list(order)
+            status, tokens = self.post('/v1/tokenize', body)
+            self.assertEqual(status, 200, tokens)
+            self.assertEqual(spans(tokens['tokens']), [4, 8])  # the template puts the results in the calls' order
+            seen.append(tokens['tokens'])
+        self.assertEqual(seen[0], seen[1])
 
 if __name__ == '__main__':
     unittest.main()
