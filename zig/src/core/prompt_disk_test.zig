@@ -1,5 +1,4 @@
-//! sf-disk's store on the host: keys, file formats, the index, the writer's files, the scan at open, eviction,
-//! the free-space floor and the queue bound, and the reconcile's bitmap.
+//! sf-disk's store on the host: keys, files, the index and its scan, eviction, the floor, the queue and the bitmap.
 const std = @import("std");
 const pd = @import("prompt_disk.zig");
 const Key = pd.Key;
@@ -58,7 +57,7 @@ fn countFiles(dir: []const u8, ext: []const u8) usize {
     return n;
 }
 
-/// A prompt of n blocks: tokens 4 a block, token i of block j = j * 100 + i (alter: one token changed in block `alter`).
+/// A prompt of n blocks of 4 tokens, token i of block j = j * 100 + i (alter: one token changed in block `alter`).
 fn prompt(out: []u32, alter: ?usize) []const u8 {
     for (out, 0..) |*t, i| t.* = @intCast((i / 4) * 100 + i % 4);
     if (alter) |j| out[j * 4] += 7;

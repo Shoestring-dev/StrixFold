@@ -132,7 +132,7 @@ pub fn identity(a: std.mem.Allocator, m: *const Model, planes: []const Plane) !P
     for (planes, 0..) |p, i| try pl.appendSlice(a, try std.fmt.allocPrint(a, "{s}{d}:{d}", .{ if (i == 0) "" else ",", p.row, p.ratio }));
     var ds_kit: std.ArrayList(u8) = .empty;
     try ds_kit.appendSlice(a, try std.fmt.allocPrint(a, "engram.json:{s}", .{try fileSha(a, m.io, try std.fs.path.join(a, &.{ m.kit_dir, "engram.json" }))}));
-    // the RoPE tables by size (the deploy's own files, under its commit; hashing them would read up to 512 MiB a start)
+    // the RoPE tables by size (the deploy's own files, under its commit; hashing them would read them all every start)
     for ([_][]const u8{ "rope-plain-cos.f32", "rope-plain-sin.f32", "rope-compressed-cos.f32", "rope-compressed-sin.f32" }) |n| {
         const st = std.Io.Dir.cwd().statFile(m.io, try std.fs.path.join(a, &.{ m.kit_dir, n }), .{}) catch {
             try ds_kit.appendSlice(a, try std.fmt.allocPrint(a, ",{s}:missing", .{n}));
