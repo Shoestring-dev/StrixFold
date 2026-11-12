@@ -44,8 +44,8 @@ dpkg -l linux-image-7.2.7+rex-amd64 amdrocm-core10.0-gfx1151 amdrocm-core-sdk10.
 cat /sys/class/drm/card*/device/mem_info_gtt_total   # 133143986176 (124 GiB)
 ```
 
-- **Packages:** each package's line in the `dpkg -l` output should start with `ii`. The ROCm packages should be at
-  10.0.0-4 and therock-gfx1151 at 10.0+rex1bvdebian13.1. Install any missing package with the command in
+- **Packages:** each package's line in the `dpkg -l` output should start with `ii` (installed) or `hi` (installed and
+  held). The ROCm packages should be at 10.0.0-4 and therock-gfx1151 at 10.0+rex1bvdebian13.1. Install any missing package with the command in
   [BOSGAME-M5.md step 7](BOSGAME-M5.md#7-rocm-100), which uses the same repository.
 - **GPU memory:** if the GTT total is lower than 133143986176, the kernel options are missing. Add them as in
   [BOSGAME-M5.md step 5](BOSGAME-M5.md#5-give-the-gpu-124-gib), then restart.
@@ -68,7 +68,7 @@ Log out and back in (or open a new SSH session) so the new groups apply, then ch
 ```bash
 /opt/rocm/core-10.0/bin/rocminfo | grep -m1 gfx1151
 /opt/rocm/core-10.0/bin/hipconfig --version   # 7.15...
-ldconfig -p | grep -c libamdhip64             # 2
+/sbin/ldconfig -p | grep libamdhip64.so.7     # => /opt/rocm/lib/libamdhip64.so.7
 ```
 
 Then go to step 3.
@@ -97,8 +97,8 @@ Connect each USB4 port to the matching port on the other box. Each cable shows u
 ip -br link | grep thunderbolt     # thunderbolt0 and thunderbolt1; if none, run: sudo modprobe thunderbolt_net
 ```
 
-Give the interfaces fixed addresses that survive a restart. On a box that uses ifupdown (Debian without a desktop,
-as after BOSGAME-M5.md), write this file on node0. On node1, write the same file with `.2` in place of `.1` in both
+Give the interfaces fixed addresses that survive a restart, with IPv6 off on the link. A Bosgame M5 set up with
+BOSGAME-M5.md uses ifupdown; write this file on node0, and on node1 the same file with `.2` in place of `.1` in both
 addresses:
 
 ```bash
@@ -107,21 +107,23 @@ allow-hotplug thunderbolt0
 iface thunderbolt0 inet static
     address 10.40.0.1/24
     mtu 1500
+    post-up sysctl -q -w net.ipv6.conf.thunderbolt0.disable_ipv6=1
 
 allow-hotplug thunderbolt1
 iface thunderbolt1 inet static
     address 10.40.1.1/24
     mtu 1500
+    post-up sysctl -q -w net.ipv6.conf.thunderbolt1.disable_ipv6=1
 EOF
 sudo ifup thunderbolt0 thunderbolt1
 ```
 
-On a box that uses NetworkManager instead (`nmcli general` answers), add one profile per cable. These are node0's;
-use `.2` on node1:
+The Ryzen AI Halo's OS uses NetworkManager instead. Add one profile per cable; these are node0's, use `.2` on node1
+(ours are set up exactly like this):
 
 ```bash
-sudo nmcli con add type ethernet ifname thunderbolt0 con-name usb4-0 ipv4.method manual ipv4.addresses 10.40.0.1/24 ethernet.mtu 1500
-sudo nmcli con add type ethernet ifname thunderbolt1 con-name usb4-1 ipv4.method manual ipv4.addresses 10.40.1.1/24 ethernet.mtu 1500
+sudo nmcli con add type ethernet ifname thunderbolt0 con-name usb4-a ipv4.method manual ipv4.addresses 10.40.0.1/24 ethernet.mtu 1500 ipv6.method disabled
+sudo nmcli con add type ethernet ifname thunderbolt1 con-name usb4-b ipv4.method manual ipv4.addresses 10.40.1.1/24 ethernet.mtu 1500 ipv6.method disabled
 ```
 
 Check from node1:
@@ -158,12 +160,15 @@ On both boxes:
 sudo apt install git rsync python3-venv
 ```
 
-On node1, install Zig 0.17.0. Download the x86_64 Linux build from [ziglang.org](https://ziglang.org/download/) and
-unpack it so that `~/opt/zig/zig` is the zig binary (`zig_build.sh` looks there; set `ZIG` to use another path):
+On node1, install Zig 0.17.0 so that `~/opt/zig/zig` is the zig binary (`zig_build.sh` looks there; set `ZIG` to
+use another path). The hash is the one [ziglang.org](https://ziglang.org/download/) publishes for this file:
 
 ```bash
-mkdir -p ~/opt && tar -xf zig-*0.17.0*.tar.xz -C ~/opt && mv ~/opt/zig-*0.17.0* ~/opt/zig
+cd /tmp && wget https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+echo "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026  zig-x86_64-linux-0.17.0.tar.xz" | sha256sum -c
+mkdir -p ~/opt && tar -xf zig-x86_64-linux-0.17.0.tar.xz -C ~/opt && ln -sfn zig-x86_64-linux-0.17.0 ~/opt/zig
 ~/opt/zig/zig version                 # 0.17.0
+cd ~
 ```
 
 Clone this repository on node1:
@@ -188,13 +193,16 @@ ssh node0 'python3 -m venv ~/venvs/tfp-inputs && ~/venvs/tfp-inputs/bin/pip inst
 
 On node1, make a second venv for the pinned AMD Triton build, which compiles the auxiliary kernels. The wheel is
 named in [tri/README.md](../tools/dsv41-hip/tri/README.md) under "Toolchain":
-`triton==3.8.0+git675c5987.rocm10.1.0a20260822` (cp313). Download it from
-`https://rocm.nightlies.amd.com/whl-multi-arch/`, check it and install it:
+`triton==3.8.0+git675c5987.rocm10.1.0a20260822` (cp313), from AMD's nightly index. Download it, check it and install
+it:
 
 ```bash
-python3 -m venv ~/venvs/triton
-sha256sum triton-3.8.0+git675c5987.rocm10.1.0a20260822-*.whl   # 1bab2eeb8f4beccad389a497a45b3018fa6291ab93c577f04b1376cf12422499
-~/venvs/triton/bin/pip install --no-deps triton-3.8.0+git675c5987.rocm10.1.0a20260822-*.whl
+mkdir -p ~/tfp/tri/wheels && cd ~/tfp/tri/wheels
+W=triton-3.8.0+git675c5987.rocm10.1.0a20260822-cp313-cp313-linux_x86_64.whl
+wget -O $W "https://rocm.nightlies.amd.com/whl-multi-arch/${W/+/%2B}"
+echo "1bab2eeb8f4beccad389a497a45b3018fa6291ab93c577f04b1376cf12422499  $W" | sha256sum -c
+python3 -m venv ~/venvs/triton && ~/venvs/triton/bin/pip install --no-deps ./$W
+cd ~/tfp/src/TensorFold
 ```
 
 ## 5. Build, prepare, deploy, serve

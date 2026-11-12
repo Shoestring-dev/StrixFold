@@ -172,7 +172,7 @@ denied and `rocminfo` fails. Then check:
 ```bash
 /opt/rocm/core-10.0/bin/rocminfo | grep -m1 gfx1151
 /opt/rocm/core-10.0/bin/hipconfig --version   # 7.15...
-ldconfig -p | grep -c libamdhip64             # 2
+/sbin/ldconfig -p | grep libamdhip64.so.7     # => /opt/rocm/lib/libamdhip64.so.7
 ```
 
 `therock-gfx1151` is small but needed: it registers ROCm's libraries with the system. Without it `rocminfo` still
