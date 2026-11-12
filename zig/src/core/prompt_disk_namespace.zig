@@ -13,29 +13,68 @@ const max_depth = 4;
 pub fn claim(t: *Tier, identity: []const u8) !void {
     var buf: [1100]u8 = undefined;
     const p = try std.fmt.bufPrintSentinel(&buf, "{s}/IDENTITY", .{t.dir}, 0);
-    const fd = c.open(p, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .NONBLOCK = true, .CLOEXEC = true }, @as(c.mode_t, 0));
-    if (fd >= 0) {
-        errdefer _ = c.close(fd);
-        try lockShared(fd);
-        if (readIdentity(t.gpa, fd)) |have| {
-            defer t.gpa.free(have);
-            if (!std.mem.eql(u8, have, identity)) return error.ForeignNamespace;
-            _ = c.futimens(fd, null); // its mtime orders the namespaces for a sweep
-            t.lock = fd;
+    for (0..8) |_| {
+        const fd = c.open(p, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .NONBLOCK = true, .CLOEXEC = true }, @as(c.mode_t, 0));
+        if (fd < 0) {
+            if (c.errno(fd) != .NOENT) return error.DiskOpen;
+            t.lock = try publish(t, p, identity) orelse continue; // another opener published first: take theirs
             return;
         }
-        _ = c.close(fd);
+        lockShared(fd) catch |err| {
+            _ = c.close(fd);
+            return err;
+        };
+        if (!sameFile(fd, linux.AT.FDCWD, p)) { // replaced between the open and the lock
+            _ = c.close(fd);
+            continue;
+        }
+        const have = readIdentity(t.gpa, fd) catch |err| {
+            _ = c.close(fd);
+            return err;
+        };
+        defer t.gpa.free(have);
+        if (!std.mem.eql(u8, have, identity)) {
+            _ = c.close(fd);
+            return error.ForeignNamespace;
+        }
+        _ = c.futimens(fd, null); // its mtime orders the namespaces for a sweep
+        t.lock = fd;
+        return;
     }
-    // a new IDENTITY is locked before its rename: it is never in place unlocked
+    return error.NamespaceBusy;
+}
+
+/// This process's IDENTITY publishes so far: each one's temporary name is its own.
+var publishes = std.atomic.Value(u64).init(0);
+
+/// A new IDENTITY, locked before it is linked in place and never over another one; null when one appeared first.
+fn publish(t: *Tier, p: [:0]const u8, identity: []const u8) !?c_int {
     var tb: [1100]u8 = undefined;
-    const tmp = try std.fmt.bufPrintSentinel(&tb, "{s}/IDENTITY.tmp", .{t.dir}, 0);
-    const nfd = c.open(tmp, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true, .CLOEXEC = true }, @as(c.mode_t, 0o600));
-    if (nfd < 0) return error.DiskWrite;
+    const n = publishes.fetchAdd(1, .monotonic);
+    const tmp = try std.fmt.bufPrintSentinel(&tb, "{s}/IDENTITY.{d}.{d}.{d}.tmp", .{ t.dir, c.getpid(), n, fs.now() }, 0);
+    const nfd = c.open(tmp, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true, .CLOEXEC = true }, @as(c.mode_t, 0o600));
+    if (nfd < 0) return if (c.errno(nfd) == .EXIST) null else error.DiskWrite; // another name next time
+    defer _ = c.unlink(tmp);
     errdefer _ = c.close(nfd);
     try lockShared(nfd);
     try fs.writeAll(nfd, identity);
-    if (c.fdatasync(nfd) != 0 or c.rename(tmp, p) != 0) return error.DiskWrite;
-    t.lock = nfd;
+    if (c.fdatasync(nfd) != 0) return error.DiskWrite;
+    if (c.link(tmp, p) != 0) {
+        if (c.errno(-1) != .EXIST) return error.DiskWrite;
+        _ = c.close(nfd);
+        return null;
+    }
+    return nfd;
+}
+
+/// Whether descriptor `fd` is the file `name` names under `dir` now (the same device and inode, links not followed).
+fn sameFile(fd: c_int, dir: c_int, name: [*:0]const u8) bool {
+    var a: linux.Statx = undefined;
+    var b: linux.Statx = undefined;
+    const at_empty_path: u32 = 0x1000;
+    if (linux.errno(linux.statx(fd, "", at_empty_path, .{ .INO = true }, &a)) != .SUCCESS) return false;
+    if (linux.errno(linux.statx(dir, name, linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &b)) != .SUCCESS) return false;
+    return a.ino == b.ino and a.dev_major == b.dev_major and a.dev_minor == b.dev_minor;
 }
 
 fn lockShared(fd: c_int) !void {
@@ -104,8 +143,7 @@ pub fn sweep(t: *Tier, name: [32]u8) bool {
     }
     if (c.unlinkat(h.dir, "IDENTITY", 0) != 0) return false;
     var nz: [33]u8 = undefined;
-    _ = c.unlinkat(root, zName(&nz, name), linux.AT.REMOVEDIR);
-    return true;
+    return c.unlinkat(root, zName(&nz, name), linux.AT.REMOVEDIR) == 0;
 }
 
 fn zName(buf: *[33]u8, name: [32]u8) [:0]const u8 {
@@ -146,10 +184,12 @@ const Held = struct {
         const id = c.openat(dir, "IDENTITY", .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .NONBLOCK = true, .CLOEXEC = true }, @as(c.mode_t, 0));
         if (id < 0) return error.NoIdentity;
         errdefer _ = c.close(id);
-        const text = readIdentity(gpa, id) orelse return error.NotSfDisk;
+        const text = readIdentity(gpa, id) catch return error.NotSfDisk;
         errdefer gpa.free(text);
         if (!std.mem.eql(u8, &std.fmt.bytesToHex(pd.namespaceOf(text), .lower), &name)) return error.NotSfDisk;
         if (c.flock(id, c.LOCK.EX | c.LOCK.NB) != 0) return error.InUse;
+        // the locked IDENTITY must still be the one this folder holds, and the folder the one the root names
+        if (!sameFile(id, dir, "IDENTITY") or !sameFile(dir, root, zName(&nz, name))) return error.InUse;
         return .{ .dir = dir, .id = id, .text = text };
     }
 
@@ -160,17 +200,15 @@ const Held = struct {
     }
 };
 
-/// An IDENTITY's text: a regular file of at most 1 MiB (its size checked before the allocation), or null.
-fn readIdentity(gpa: std.mem.Allocator, fd: c_int) ?[]u8 {
+/// An IDENTITY's text: a regular file of at most 1 MiB (its size checked before the allocation).
+fn readIdentity(gpa: std.mem.Allocator, fd: c_int) ![]u8 {
     var sx: linux.Statx = undefined;
     const at_empty_path: u32 = 0x1000;
-    if (linux.errno(linux.statx(fd, "", at_empty_path, .{ .TYPE = true, .SIZE = true }, &sx)) != .SUCCESS) return null;
-    if (!linux.S.ISREG(sx.mode) or sx.size > 1 << 20) return null;
-    const out = gpa.alloc(u8, @intCast(sx.size)) catch return null;
-    if (!fs.readAt(fd, out, 0)) {
-        gpa.free(out);
-        return null;
-    }
+    if (linux.errno(linux.statx(fd, "", at_empty_path, .{ .TYPE = true, .SIZE = true }, &sx)) != .SUCCESS) return error.DiskRead;
+    if (!linux.S.ISREG(sx.mode) or sx.size > 1 << 20) return error.BadIdentity;
+    const out = try gpa.alloc(u8, @intCast(sx.size));
+    errdefer gpa.free(out);
+    if (!fs.readAt(fd, out, 0)) return error.DiskRead;
     return out;
 }
 
@@ -204,7 +242,12 @@ fn walk(dir: c_int, remove: bool, depth: u32, skip: ?[]const u8) Walk {
     const d = openDirStream(dir) orelse return .{ .left = true };
     defer _ = c.closedir(d);
     var w: Walk = .{};
-    while (c.readdir(d)) |ent| {
+    while (true) {
+        std.c._errno().* = 0;
+        const ent = c.readdir(d) orelse {
+            if (std.c._errno().* != 0) w.left = true; // a failed read is not the end of the folder
+            break;
+        };
         const name = std.mem.sliceTo(&ent.name, 0);
         if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
         if (skip) |s| if (std.mem.eql(u8, name, s)) continue;

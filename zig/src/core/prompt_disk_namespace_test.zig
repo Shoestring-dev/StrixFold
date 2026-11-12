@@ -171,3 +171,65 @@ test "a namespace in use is never swept: a tier open on it, or its IDENTITY lock
         break :blk busy.longest(&keys, 0, 6);
     });
 }
+
+fn inode(p: [:0]const u8) !u64 {
+    var sx: std.os.linux.Statx = undefined;
+    if (std.os.linux.errno(std.os.linux.statx(std.os.linux.AT.FDCWD, p, 0, .{ .INO = true }, &sx)) != .SUCCESS) return error.TestStat;
+    return sx.ino;
+}
+
+fn openWith(gpa: std.mem.Allocator, root: []const u8, identity: []const u8) !*Tier {
+    return Tier.open(gpa, .{ .root = root, .budget = 1 << 20, .floor = 0, .queue = 1 << 20, .rate = 0, .free_override = 1 << 40 }, identity, 0, slot_bytes, &planes);
+}
+
+test "an IDENTITY that is not readable as one refuses the open and is never replaced" {
+    var rb: [128]u8 = undefined;
+    const root = path(&rb, "/tmp/tf-sfdisk-bad-{d}", .{c.getpid()});
+    rmTree(root);
+    defer rmTree(root);
+    var pb: [512]u8 = undefined;
+    try mkdir(root);
+    const ns = nsHex("big");
+    try mkdir(path(&pb, "{s}/{s}", .{ root, &ns }));
+    const big = try std.testing.allocator.alloc(u8, (1 << 20) + 1);
+    defer std.testing.allocator.free(big);
+    @memset(big, 'x');
+    const id = path(&pb, "{s}/{s}/IDENTITY", .{ root, &ns });
+    try writeFile(id, big);
+    const before = try inode(id);
+    if (openSmall(root, "big")) |opened| {
+        opened.close();
+        return error.TestUnexpectedOpen;
+    } else |err| try std.testing.expectEqual(error.BadIdentity, err);
+    try std.testing.expectEqual(before, try inode(id));
+}
+
+test "two tiers on one namespace hold one IDENTITY, and a failed open never replaces it" {
+    var rb: [128]u8 = undefined;
+    const root = path(&rb, "/tmp/tf-sfdisk-one-{d}", .{c.getpid()});
+    rmTree(root);
+    defer rmTree(root);
+    var pb: [512]u8 = undefined;
+    const a = try openSmall(root, "one");
+    defer a.close();
+    const id = path(&pb, "{s}/{s}/IDENTITY", .{ root, &a.ns_hex });
+    const ino = try inode(id);
+    const b = try openSmall(root, "one");
+    b.close();
+    try std.testing.expectEqual(ino, try inode(id));
+    // every allocation of an open failing in turn: the live tier's IDENTITY stays the same file
+    var i: usize = 0;
+    var opened = false;
+    while (i < 64) : (i += 1) {
+        var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = i });
+        const t = openWith(fa.allocator(), root, "one") catch {
+            try std.testing.expectEqual(ino, try inode(id));
+            continue;
+        };
+        t.close();
+        try std.testing.expectEqual(ino, try inode(id));
+        opened = true;
+        break;
+    }
+    try std.testing.expect(opened);
+}
