@@ -1248,15 +1248,13 @@ pub const Model = struct {
         return m.logits[0..m.vocab];
     }
 
-    /// Whether a pass may carry the streams' sampling keys (draft.Drafter.races): the same on both ranks, which run
-    /// one kit.
+    /// Whether a pass may carry the streams' sampling keys (draft.Drafter.races); both ranks run one kit.
     pub fn draftRaces(m: *const Model) bool {
         return if (m.dr) |*dr| dr.races(&m.eng) else false;
     }
 
     /// The drafter's batched pass for N streams: each one's pending token at position q0 in its slot (its rings hold
-    /// its positions below q0), `steps` drafts each (the drafter's drafts and confidences on the host). `keys`
-    /// (draftRaces()): each stream's drafts are drawn with its sampling key instead of taken as the best token.
+    /// its positions below q0), `steps` drafts each on the host; `keys` (draftRaces()) draw each stream's drafts.
     pub fn pass(m: *Model, tokens: []const i64, q0: []const i64, slots: []const i64, steps: usize, keys: ?[]const draft.SampleKey) !void {
         if (m.dr == null) return error.NoDrafter;
         const dr = &m.dr.?;

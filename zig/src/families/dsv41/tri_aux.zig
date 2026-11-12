@@ -10,8 +10,6 @@
 //!   aux.gate_logits  (idxw, its ne = 32 build) for the indexer's head weights past decode_rows rows: x . weights_proj^T
 //!                    from the fp16 weight, in place of toF32 + the hipBLAS sgemm on the fp32 copy
 //!   aux.rope_heads   (rope) for _rope_heads at every row count: _rope_heads' bits
-//! and one kernel that is not a Triton launch's replacement: aux.markov_race, the drafter's Markov step of a pass with
-//! sampled streams (tri_markov.raceBest; bound whenever the kit has it, used only when a pass carries keys).
 //! A shape a kernel does not take keeps its Triton launch or GEMM (tri_attn.sparseAttn, tri_index.indexScore,
 //! tri_hc.hcMixPf, tri_norm.gateLogits, tri_norm.ropeHeads ask first). The by-value arguments are abi.h's structs
 //! (hip_load.zig checks the layouts). CUDA builds never set Tri.aux.
@@ -58,12 +56,10 @@ pub const GateArgs = extern struct { x: u64, w: u64, out: u64, rows: i32, ne: i3
 /// tf_ds_aux_rope_heads_args: x bf16 [rows, h, hd] rotated in place on its last rd dims. flags: 1 inverse.
 pub const RopeHeadsArgs = extern struct { x: u64, cos: u64, sin: u64, pos: u64, rows: i32, h: i32, hd: i32, rd: i32, flags: i32, pad0: i32 = 0 };
 
-/// tf_ds_markov_key: a drafting row's key, its stream's sampling seed, the absolute position its first draft is drawn
-/// at and 1 / its draft temperature (0: a greedy row, drafted as _score drafts it).
+/// tf_ds_markov_key: a row's sampling seed, its first draft's position and 1 / its draft temperature (0: greedy).
 pub const MarkovKey = extern struct { seed: u64 = 0, position: u64 = 0, inv_t: f32 = 0, pad0: u32 = 0 };
 
-/// tf_ds_aux_markov_race_args: send fp32 [n_rows, 4] = each row's best (value, token id, 0, 0) of this rank's n_cols
-/// columns, score * inv_t + the key's Gumbel draw at position + step (a greedy row: the score).
+/// tf_ds_aux_markov_race_args: each row's best (value, token, 0, 0) of score * inv_t + its Gumbel draw into send.
 pub const MarkovRaceArgs = extern struct { lg: u64, tok: u64, slot: u64, cache: u64, stage: u64, keys: u64, send: u64, l_row: i64, t_stride: i64, c_row: i64, s_row: i64, n_rows: i32, n_cols: i32, id0: i32, step: i32 };
 
 /// aux.markov_race's block: a row a workgroup.
@@ -155,7 +151,7 @@ pub const Aux = struct {
     gate: ?gpu.Function = null, // aux.gate_logits, ne a multiple of 64 (the router)
     gate32: ?gpu.Function = null, // aux.gate_logits, ne = 32 (the indexer's head weights)
     rope: ?gpu.Function = null,
-    markov_race: ?gpu.Function = null, // not one of Which's: a sampled pass's Markov step (no Triton form)
+    markov_race: ?gpu.Function = null, // the drafter's Markov step of a sampled pass (tri_markov.raceBest; no Triton form)
 };
 
 /// aux.index_rows' grid: groups of 8 rows by key-tile ranges, about 240 workgroups in all.
