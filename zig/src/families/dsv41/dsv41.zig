@@ -110,4 +110,5 @@ test {
     refAll(fan);
     refAll(blas);
     _ = @import("png_test.zig");
+    _ = @import("picture_test.zig");
 }
