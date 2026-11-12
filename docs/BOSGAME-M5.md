@@ -5,8 +5,9 @@ Ryzen AI Max+ 395 with the Radeon 8060S (gfx1151) and 128 GB of memory. It ships
 Boot firmware doesn't trust the kernel the tested boxes run. These steps take a new M5 to the same Linux, kernel and
 GPU stack as the tested boxes (see [Tested on](../README.md#tested-on)), with Secure Boot left on.
 
-We set up our own M5s this way in November 2026. We haven't measured StrixFold's speed on a pair of M5s yet; if you do,
-please post your numbers (see [COMMUNITY-RESULTS.md](COMMUNITY-RESULTS.md)).
+We set up our own M5s this way in November 2026 and measured a pair of them: see
+[Speed on a pair of M5s](#speed-on-a-pair-of-m5s), and [The USB4 links](#the-usb4-links) for what the link speed does and
+doesn't change. If you measure yours, please post your numbers (see [COMMUNITY-RESULTS.md](COMMUNITY-RESULTS.md)).
 
 **You need:** a USB stick of 1 GB or more with the Debian 13 netinst image for amd64
 ([cdimage.debian.org](https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/)) written to it, a monitor and a USB
@@ -189,6 +190,78 @@ That's the stack in [Tested on](../README.md#tested-on). From here, link the two
 continue at [step 3 of GETTING-STARTED.md](GETTING-STARTED.md#3-link-the-two-boxes). Each M5 has two USB4 ports, so a
 pair uses both.
 
+## Speed on a pair of M5s
+
+Two M5s linked by two USB4 cables, DeepSeek V4.1 Flash (the 2.9-bit EXL3 pack), first light's prompts (`first_light.sh`:
+a code and a prose reply, then a 1,818-token prompt), drafting on, at the M5's stock power. The Ryzen AI Halo row is the
+same test on the boxes StrixFold was measured on.
+
+| Pair | Code | Prose | Prompt reading |
+|---|---:|---:|---:|
+| Bosgame M5, links at Gen 3 (below) | 70.7 tok/s | 41.1 tok/s | 1,284 tok/s |
+| Ryzen AI Halo | 74.5 tok/s | 42.4 tok/s | 1,381 tok/s |
+
+Longer prompts read faster: 1,302 tok/s at 2,952 tokens and 1,476 at 11,594. One chat across the prompt set: 58.2 tok/s.
+
+**Power is the limit, not the link.** The M5's BIOS ships in its Balance power mode (Power Mode Select): 85 W sustained,
+with bursts to about 117 W for the first few seconds of each load. Through a long prompt read the GPU sits at the 85 W
+limit with its clock pulled down to about 2,170 MHz (about 2,590 MHz while decoding). We raised the limit at runtime to
+see what it costs:
+
+| Sustained limit | Decode, sustained | Prompt reading at 11,594 tokens | GPU temperature |
+|---|---:|---:|---|
+| 85 W (stock) | 74–79 tok/s | 1,446 tok/s | up to about 85 °C |
+| 105 W | 80 tok/s | 1,519 tok/s | 100–104 °C after about 2 minutes of load |
+| 120 W | 85 tok/s | 1,600 tok/s | 101 °C after a minute, then it throttles |
+
+We went back to stock: the gain is 5–10% and the GPU runs hot without more cooling. We haven't measured the BIOS's own
+Performance mode.
+
+## The USB4 links
+
+StrixFold talks between the two boxes over TCP on Linux's USB4 networking (`thunderbolt_net`, an IP link per cable), not
+RDMA. Two users who ran StrixFold over ConnectX RDMA cards instead saw about +2% (ConnectX-4 Lx) and one chat going from
+60 to 63 tok/s (ConnectX-6), with prompt reading unchanged ([issue #2](https://github.com/Shoestring-dev/StrixFold/issues/2)).
+
+**The M5's links come up at Gen 2.** With the BIOS ours have (AMI 3.11), every USB4 cable between two M5s trains at
+10 Gb/s per lane (Gen 2), where the same cables between two Ryzen AI Halos run at 20 (Gen 3). One end of each link
+never offers Gen 3. Unplugging *both* ends of a cable for about ten seconds and plugging them back in brings it up at
+Gen 3 (it took two tries on one of ours); a restart puts it back to Gen 2. `cat /sys/bus/thunderbolt/devices/*/rx_speed`
+shows the speed of each link.
+
+**Gen 3 alone doesn't move more data.** A single TCP stream stayed at about 9 Gb/s per cable (19 Gb/s on both) at either
+speed. AMD's firmware has a host-to-host setting that lifts this ("USB4 H2H Enhancement"); it is off in our M5s' BIOS
+and not shown in its menus. We turned it on from Linux as an experiment, which needs a kernel module signed with your
+own Secure Boot key, so we don't give steps for it here. With it, one cable carried 30 Gb/s and both 51 Gb/s.
+
+**What 2.7 times the bandwidth did to StrixFold** (same build and settings, stock power, Gen 2 links before, Gen 3 with
+the host-to-host setting after):
+
+| | Gen 2, 19 Gb/s | Gen 3 + host-to-host, 51 Gb/s | Change |
+|---|---:|---:|---:|
+| Code | 70.0 tok/s | 70.7 tok/s | +1% |
+| Prose | 40.2 tok/s | 41.1 tok/s | +2% |
+| One chat, prompt set | 56.3 tok/s | 58.2 tok/s | +3% |
+| Prompt reading, 2,952 tokens | 1,230 tok/s | 1,302 tok/s | +6% |
+| Prompt reading, 11,594 tokens | 1,393 tok/s | 1,476 tok/s | +6% |
+
+Decode exchanges small messages (about 100 KB) between the boxes at each step, so the link costs latency, not bandwidth:
+a few percent of each token's time. Don't chase link speed; do keep both cables (next).
+
+**Keep both cables.** On one cable (`TP_STRIPE` empty, `COLL_PROXY_STRIPE_KIB=0`) the same pair lost 6–7% decode and
+14–16% prompt reading, run before and after a two-cable run that matched within 0.5%:
+
+| | Two cables | One cable |
+|---|---:|---:|
+| Code, median of 5 | 82.1 tok/s | 76.4 tok/s |
+| Prose | 41.2 tok/s | 39.3 tok/s |
+| Prompt reading, 1,818 tokens | 1,298 tok/s | 1,085 tok/s |
+| Prompt reading, 11,594 and 23,406 tokens | about 1,440 tok/s | about 1,245 tok/s |
+
+That isn't the cable's bandwidth: one cable still carries about 30 Gb/s. Each cable gets its own proxy thread on the CPU,
+and one thread moves about 1.6 GB/s; with two cables the 16 KiB stripe also splits the drafting's gathers between them. (These two
+columns are a later build than the tables above, which is why the decode numbers are higher.)
+
 ## If something goes wrong
 
 - **The box doesn't see the USB stick:** Fast Boot is still on, or the stick is in a front port; try a rear USB-A port.
@@ -196,5 +269,7 @@ pair uses both.
 - **`DriverUnavailable` from StrixFold's programs:** `therock-gfx1151` is missing, or run `sudo ldconfig` (step 7).
 - **The GPU shows about 62 GiB instead of 124:** the options from step 5 aren't in the boot menu. Run
   `sudo update-grub` again and restart.
+- **The USB4 links show 10 Gb/s (Gen 2):** unplug both ends of each cable, wait about ten seconds, plug them back in
+  ([The USB4 links](#the-usb4-links)). It is slower but works.
 - **"bad shim signature" or the kernel won't start:** the certificate isn't enrolled. In the GRUB menu choose
   **Advanced options** and the Debian kernel, then repeat step 6.

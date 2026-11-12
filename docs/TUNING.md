@@ -23,6 +23,12 @@ settings named here are in `tools/dsv41-hip/serve.conf`.
   one chat +6.6% and four chats +8.9%, with identical output.
 - **Both directions share the bandwidth.** Expect about 44.5 Gb/s in total, both directions together, not twice the
   one-way number.
+- **One cable costs more than its bandwidth.** On a pair of Bosgame M5s, one cable (`TP_STRIPE` empty,
+  `COLL_PROXY_STRIPE_KIB=0`) lost 6–7% decode and 14–16% prompt reading against two. Each cable gets its own proxy thread,
+  and one thread moves about 1.6 GB/s.
+- **Link speed barely matters.** Raising the M5 pair's links from 19 to 51 Gb/s (Gen 2 to Gen 3 plus AMD's host-to-host
+  setting) gave +1–2% decode and +6% prompt reading. Decode is limited by latency on small exchanges, not bandwidth.
+  Details: [BOSGAME-M5.md](BOSGAME-M5.md#the-usb4-links).
 
 ## TCP retransmits
 
