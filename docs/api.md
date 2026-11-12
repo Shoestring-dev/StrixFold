@@ -236,10 +236,11 @@ earlier is left alone. The MLX engine forces the close inside its rounds; CUDA s
 decodes on from the reply, as for a required tool call.
 
 The native `--loop-guard` flag is off by default and watches only an open think block. It closes a repeated exact
-cycle of at most eight tokens after 256 predecessor matches, when the detected region starts at least 64 reply tokens
+cycle of at most 64 tokens after 256 predecessor matches, when the detected region starts at least 64 reply tokens
 in; the reply continues after the forced close, and reports `runtime.loop: {"period": N}` plus `loop=period:N` in the
-server log. The native engine refuses the flag on backends that do not enforce it, and prints that refusal as
-a startup error.
+server log. Thinking that repeats one short line exactly for that long, such as identical table rows, trips it too;
+the reply still goes on. The native engine refuses the flag on backends that do not enforce it, and prints that
+refusal as a startup error.
 
 ## Context and errors
 
