@@ -255,10 +255,7 @@ pub fn place(used: []const [2]usize, size: usize, cap: usize) ?usize {
     return null;
 }
 
-/// A drafting stream's key for the drafter pass whose first draft lands at `position`: a sampled stream that asks
-/// for it (draft_temperature above 0) has its drafts drawn with the noise its verify rows will use (the verify row
-/// of the token at position p draws with (seed, p, token): `draw`), on the drafter's scores over the draft
-/// temperature, the request's temperature times draft_temperature. Any other stream: the drafter's best token.
+/// A stream's draft key at `position`: its verify draw's noise over temperature * draft_temperature, else greedy.
 pub fn draftKey(s: ?lanes.Sampling, position: u64) draft.SampleKey {
     const sm = s orelse return .{};
     const t = sm.temperature * sm.draft_temperature;
@@ -976,22 +973,10 @@ pub const Lanes = struct {
             n += 1;
         }
         if (n == 0) return;
-        // a pass with a sampled stream that asks for it draws its drafts with the streams' keys (a kit without the
-        // kernel, or a lane whose Markov loop has no gather: every draft the best token, as upstream)
+        // sampled streams that ask for it race their drafts with their keys, when the kit and the Markov loop can
         const race = sampled and m.draftRaces();
         if (try self.begin(.pass)) {
-            try self.wire.int(gpa, u32, @intCast(n));
-            try self.wire.int(gpa, u32, @intCast(steps));
-            for (0..n) |i| {
-                try self.wire.int(gpa, i64, tokens[i]);
-                try self.wire.int(gpa, i64, q0[i]);
-                try self.wire.int(gpa, i64, slots[i]);
-            }
-            try self.wire.int(gpa, u8, @intFromBool(race));
-            if (race) for (keys[0..n]) |k| {
-                try self.wire.int(gpa, u64, k.seed);
-                try self.wire.int(gpa, u32, @bitCast(k.inv_t));
-            };
+            try PassFrame.write(&self.wire, gpa, tokens[0..n], q0[0..n], slots[0..n], steps, if (race) keys[0..n] else null);
             try self.flush();
         }
         const t0 = m.now();
@@ -1202,6 +1187,57 @@ const ChunkFrame = struct {
     }
 };
 
+/// A pass frame's fields: each stream's token, first position and slot, the Markov steps, and the draft keys if any.
+const PassFrame = struct {
+    n: usize = 0,
+    steps: usize = 0,
+    tokens: [max_streams]i64 = undefined,
+    q0: [max_streams]i64 = undefined,
+    slots: [max_streams]i64 = undefined,
+    race: bool = false,
+    keys: [max_streams]draft.SampleKey = undefined,
+
+    fn write(w: *Wire, gpa: std.mem.Allocator, tokens: []const i64, q0: []const i64, slots: []const i64, steps: usize, keys: ?[]const draft.SampleKey) !void {
+        try w.int(gpa, u32, @intCast(tokens.len));
+        try w.int(gpa, u32, @intCast(steps));
+        for (tokens, q0, slots) |t, q, s| {
+            try w.int(gpa, i64, t);
+            try w.int(gpa, i64, q);
+            try w.int(gpa, i64, s);
+        }
+        try w.int(gpa, u8, @intFromBool(keys != null));
+        if (keys) |ks| for (ks) |k| {
+            try w.int(gpa, u64, k.seed);
+            try w.int(gpa, u32, @bitCast(k.inv_t));
+        };
+    }
+
+    fn read(r: *Reader) !PassFrame {
+        var f: PassFrame = .{ .n = try r.int(u32), .steps = try r.int(u32) };
+        if (f.n == 0 or f.n > max_streams) return error.BadFrame;
+        for (0..f.n) |i| {
+            f.tokens[i] = try r.int(i64);
+            f.q0[i] = try r.int(i64);
+            f.slots[i] = try r.int(i64);
+        }
+        f.race = switch (try r.int(u8)) {
+            0 => false,
+            1 => true,
+            else => return error.BadFrame,
+        };
+        // a stream's first draft lands after q0, so its key's position is q0 + 1 on both ranks
+        if (f.race) for (0..f.n) |i| {
+            const seed = try r.int(u64);
+            f.keys[i] = .{ .seed = seed, .position = @intCast(f.q0[i] + 1), .inv_t = @bitCast(try r.int(u32)) };
+        };
+        return f;
+    }
+
+    fn draftKeys(f: *const PassFrame) ?[]const draft.SampleKey {
+        return if (f.race) f.keys[0..f.n] else null;
+    }
+};
+
 /// A repeated warning's occurrences that are logged: the first, then every 100th.
 fn oftenEnough(n: u64) bool {
     return n == 1 or (n != 0 and n % 100 == 0);
@@ -1365,30 +1401,9 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
                 }
             },
             .pass => {
-                const n = try r.int(u32);
-                const steps = try r.int(u32);
-                if (n == 0 or n > max_streams) return error.BadFrame;
-                var tokens: [max_streams]i64 = undefined;
-                var q0: [max_streams]i64 = undefined;
-                var slots: [max_streams]i64 = undefined;
-                for (0..n) |i| {
-                    tokens[i] = try r.int(i64);
-                    q0[i] = try r.int(i64);
-                    slots[i] = try r.int(i64);
-                }
-                var keys: [max_streams]draft.SampleKey = undefined;
-                const race = switch (try r.int(u8)) {
-                    0 => false,
-                    1 => true,
-                    else => return error.BadFrame,
-                };
-                // each stream's key: its seed and 1 / its draft temperature; its first draft lands after q0
-                if (race) for (0..n) |i| {
-                    const seed = try r.int(u64);
-                    keys[i] = .{ .seed = seed, .position = @intCast(q0[i] + 1), .inv_t = @bitCast(try r.int(u32)) };
-                };
+                const f = try PassFrame.read(&r);
                 try r.end();
-                m.pass(tokens[0..n], q0[0..n], slots[0..n], steps, if (race) keys[0..n] else null) catch |err| try refused(err);
+                m.pass(f.tokens[0..f.n], f.q0[0..f.n], f.slots[0..f.n], f.steps, f.draftKeys()) catch |err| try refused(err);
             },
             .fill_images => {
                 const count = try r.int(u32);
@@ -1637,6 +1652,43 @@ test "a chunk's frame carries rank 0's read-ahead plan to rank 1" {
     bad[20] = 2;
     var rb: Reader = .{ .b = &bad };
     try std.testing.expectError(error.BadFrame, ChunkFrame.read(&rb));
+}
+
+test "a pass frame carries the race byte and the streams' draft keys to rank 1" {
+    const gpa = std.testing.allocator;
+    var w: Wire = .{};
+    defer w.deinit(gpa);
+    const tokens = [_]i64{ 101, 202, 303 };
+    const q0 = [_]i64{ 40, 7, 9000 };
+    const slots = [_]i64{ 0, 2, 1 };
+    var keys: [3]draft.SampleKey = undefined;
+    for (&keys, q0, 0..) |*k, q, i| k.* = draftKey(.{ .temperature = 0.6 + 0.2 * @as(f32, @floatFromInt(i)), .top_k = 40, .seed = 918273645 + i, .draft_temperature = 1.0 }, @intCast(q + 1));
+    for ([_]bool{ true, false }) |race| {
+        try w.begin(gpa, .pass, 3);
+        try PassFrame.write(&w, gpa, &tokens, &q0, &slots, 5, if (race) &keys else null);
+        var r: Reader = .{ .b = w.buf.items };
+        _ = try r.int(u8);
+        _ = try r.int(u64);
+        const f = try PassFrame.read(&r);
+        try std.testing.expectEqual(r.b.len, r.at);
+        try std.testing.expectEqual(@as(usize, 3), f.n);
+        try std.testing.expectEqual(@as(usize, 5), f.steps);
+        try std.testing.expectEqualSlices(i64, &tokens, f.tokens[0..f.n]);
+        try std.testing.expectEqualSlices(i64, &q0, f.q0[0..f.n]);
+        try std.testing.expectEqualSlices(i64, &slots, f.slots[0..f.n]);
+        try std.testing.expectEqual(race, f.race);
+        if (race) try std.testing.expectEqualSlices(draft.SampleKey, &keys, f.draftKeys().?) else try std.testing.expect(f.draftKeys() == null);
+        if (race) {
+            // a race byte other than 0 or 1 is refused, and keys cut short are a short frame
+            const at = w.buf.items.len - 3 * 12 - 1;
+            w.buf.items[at] = 2;
+            var rb: Reader = .{ .b = w.buf.items[9..] };
+            try std.testing.expectError(error.BadFrame, PassFrame.read(&rb));
+            w.buf.items[at] = 1;
+            var rs: Reader = .{ .b = w.buf.items[9 .. w.buf.items.len - 4] };
+            try std.testing.expectError(error.ShortFrame, PassFrame.read(&rs));
+        }
+    }
 }
 
 test "a request's telemetry: accepted prefixes, first rejections, full acceptance, EOS drafts, the budget" {
