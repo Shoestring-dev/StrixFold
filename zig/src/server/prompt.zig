@@ -68,8 +68,36 @@ pub fn prepare(srv: *Server, cx: *Cx, input: chat.Input, thinking: bool, effort:
 
 /// Render authenticated image messages after normalizeImages has escaped literal placeholders.
 pub fn renderImages(srv: *Server, cx: *Cx, messages: Value, tools: []const Value, thinking: bool, effort: ?[]const u8, generation: bool, images: []const []const u8) errors.Refused!Rendered {
-    const ids = try renderNormalizedIds(srv, cx, messages, tools, thinking, effort, generation);
+    const vision = srv.info.vision orelse return cx.refuse("image input: this engine has no vision hook");
+    const tagged = try imageIdentities(cx, messages, vision.placeholder, images.len);
+    const ids = try renderNormalizedIds(srv, cx, tagged, tools, thinking, effort, generation);
     return spans(srv, cx, ids, images);
+}
+
+/// Identity travels inside paired image delimiters until rendering has established the final order.
+fn imageIdentities(cx: *Cx, messages: Value, placeholder: []const u8, count: usize) errors.Refused!Value {
+    if (placeholder.len == 0) return cx.refuse("image input: empty image placeholder");
+    const tagged = try cx.a.dupe(Value, messages.array);
+    var index: usize = 0;
+    for (tagged) |*message| {
+        const content = message.get("content") orelse continue;
+        if (content != .string) continue;
+        var text: std.ArrayList(u8) = .empty;
+        var from: usize = 0;
+        while (std.mem.indexOfPos(u8, content.string, from, placeholder)) |at| {
+            try text.appendSlice(cx.a, content.string[from..at]);
+            try text.appendSlice(cx.a, try std.fmt.allocPrint(cx.a, "{s}{d}{s}", .{ placeholder, index, placeholder }));
+            index += 1;
+            from = at + placeholder.len;
+        }
+        if (from == 0) continue;
+        try text.appendSlice(cx.a, content.string[from..]);
+        const copy = try json.copyObject(cx.a, message.object);
+        try copy.put(cx.a, "content", .{ .string = text.items });
+        message.* = .{ .object = copy };
+    }
+    if (index != count) return cx.refuse("image input: normalized placeholders do not match the image inputs");
+    return .{ .array = tagged };
 }
 
 /// Each image placeholder of the rendered prompt as its image's span (the vision family's prepare: the span's length and
@@ -78,13 +106,24 @@ fn spans(srv: *Server, cx: *Cx, ids: []const u32, images: []const []const u8) er
     const vision = srv.info.vision orelse return cx.refuse("this server accepts text only; image, audio and video inputs are unsupported");
     var out: std.ArrayList(u32) = .empty;
     var placed: std.ArrayList(api.Image) = .empty;
-    for (ids) |id| {
+    const used = try cx.a.alloc(bool, images.len);
+    @memset(used, false);
+    var cursor: usize = 0;
+    while (cursor < ids.len) {
+        const id = ids[cursor];
         if (id != vision.token) {
             try out.append(cx.a, id);
+            cursor += 1;
             continue;
         }
-        const k = placed.items.len;
-        if (k >= images.len) return cx.refuse("image input: the prompt holds more image placeholders than images");
+        const end = std.mem.indexOfScalarPos(u32, ids, cursor + 1, vision.token) orelse
+            return cx.refuse("image input: the template removed an image identity delimiter");
+        const identity = try srv.text.decode(cx.a, ids[cursor + 1 .. end]);
+        const k = std.fmt.parseInt(usize, identity, 10) catch
+            return cx.refuse("image input: the template changed an image identity");
+        if (k >= images.len or used[k]) return cx.refuse("image input: unknown or repeated image identity");
+        used[k] = true;
+        cursor = end + 1;
         var problem: []const u8 = "";
         const prep = vision.prepare(vision.ctx, cx.a, images[k], &problem) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
