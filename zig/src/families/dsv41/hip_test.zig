@@ -66,6 +66,7 @@ test {
     _ = @import("hip_load.zig");
     _ = @import("vision.zig");
     _ = @import("vit_hip.zig");
+    _ = @import("encoder.zig");
     _ = @import("picture.zig");
     _ = @import("pil.zig");
 }
