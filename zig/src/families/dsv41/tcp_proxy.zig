@@ -63,8 +63,7 @@ pub const params = struct {
     pub const Collect = extern struct { s: u64, rx: u64, peer: u64, bytes: u64, slot_bytes: u64, nslot: u32, deadline: u64 };
 };
 
-/// A proxy thread with no work spins for `idle_spin_ns`, then sleeps `idle_sleep_ns` per check, and past
-/// `idle_deep_ns` sleeps `idle_deep_sleep_ns`: long enough for its core to reach its deepest idle state between checks.
+/// An idle proxy thread spins for `idle_spin_ns`, then sleeps `idle_sleep_ns` per check, past `idle_deep_ns` longer.
 pub const idle_spin_ns: u64 = 20 * std.time.ns_per_ms;
 pub const idle_sleep_ns: u64 = 50 * std.time.ns_per_us;
 pub const idle_deep_ns: u64 = std.time.ns_per_s;
@@ -843,7 +842,7 @@ test "a proxy idle past idle_deep_ns wakes rarely: both threads of both ranks sl
     sleepNs(500 * std.time.ns_per_ms);
     const after = std.posix.getrusage(0);
 
-    // four threads at one wake per idle_deep_sleep_ns make ~1,000 voluntary switches in 500 ms; at 50 us, ~40,000
+    // past idle_deep_ns each idle thread wakes once per idle_deep_sleep_ns
     const wakes: u64 = @intCast(after.nvcsw - before.nvcsw);
     const bound = 2 * 4 * (500 * std.time.ns_per_ms / idle_deep_sleep_ns);
     if (wakes >= bound) std.debug.print("idle proxy threads woke {d} times in 500 ms (bound {d})\n", .{ wakes, bound });
