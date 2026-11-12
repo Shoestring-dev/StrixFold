@@ -23,6 +23,7 @@ const link = @import("link.zig");
 const disk_mod = @import("disk.zig");
 const pd = @import("core").prompt_disk;
 const image_key = lanes.image_key;
+const fill_spans = @import("fill_spans.zig");
 const gpu = @import("gpu");
 /// The vision tower's type (vision.zig: CUDA's vit.zig, HIP's vit_hip.zig); an empty type in a build without one.
 pub const VisionTower = if (gpu.features.vision) @import("vision.zig").Vision else opaque {};
@@ -729,8 +730,11 @@ pub const Lanes = struct {
         // images: each span's positions dead in the sequence (negative: no Engram n-gram reaches into or across one)
         if (s.images.len > 0) {
             const image_id = m.cfg.image_token orelse return error.NoVision;
-            for (s.images) |img| {
-                if (img.tokens == 0 or @as(usize, img.at) + img.tokens > len) return error.BadImageSpan;
+            var end: usize = 0; // spans in prompt order and apart (rank 1 refuses others in fill_begin)
+            for (s.images, 0..) |img, k| {
+                if (img.tokens == 0 or img.at < end or @as(usize, img.at) + img.tokens > len) return error.BadImageSpan;
+                if (keyed and (s.cache_spans[k].at != img.at or s.cache_spans[k].len != img.tokens)) return error.BadImageSpan;
+                end = @as(usize, img.at) + img.tokens;
                 for (seq.items[img.at..][0..img.tokens]) |*q| {
                     if (q.* != @as(i64, image_id)) return error.BadImageSpan;
                     q.* = -1;
@@ -742,13 +746,7 @@ pub const Lanes = struct {
             try self.wire.int(gpa, u64, base);
             try self.wire.ids(gpa, seq.items);
             // the pictures (spans, digests): rank 1 keys its disk states as rank 0 does (its sequence holds -1 there)
-            const n_keyed: u32 = if (keyed) @intCast(s.cache_spans.len) else 0;
-            try self.wire.int(gpa, u32, n_keyed);
-            if (keyed) for (s.cache_spans) |sp| {
-                try self.wire.int(gpa, u64, sp.at);
-                try self.wire.int(gpa, u32, sp.len);
-                try self.wire.key(gpa, sp.digest);
-            };
+            try fill_spans.write(&self.wire, gpa, if (keyed) s.cache_spans else &.{});
             try self.flush();
         }
         try m.fillBegin(slot, base);
@@ -1616,21 +1614,12 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
                 try r.ids(gpa, &seqs[slot]);
                 // rank 0's pictures: this rank's disk states keyed alike (its sequence holds -1 there)
                 const seq = seqs[slot].items;
-                const n_spans = try r.int(u32);
-                key_spans.clearRetainingCapacity();
-                for (0..n_spans) |_| {
-                    const at = try r.int(u64);
-                    const n = try r.int(u32);
-                    if (n == 0 or at + n > seq.len) return error.BadFrame;
-                    try key_spans.append(gpa, .{ .at = @intCast(at), .len = n, .digest = try r.key() });
-                }
+                try fill_spans.read(&r, gpa, seq, &key_spans);
                 try r.end();
-                try key_ids.resize(gpa, seq.len);
-                for (key_ids.items, seq) |*k, x| k.* = @bitCast(x);
-                for (key_spans.items) |sp| for (key_ids.items[sp.at..][0..sp.len], 0..) |*k, j| {
-                    k.* = image_key.imageKeyId(&sp.digest, @intCast(j));
-                };
-                if (disk) |d| d.beginPass(std.mem.sliceAsBytes(key_ids.items), key_spans.items);
+                if (disk) |d| {
+                    try fill_spans.keyIds(gpa, seq, key_spans.items, &key_ids);
+                    d.beginPass(std.mem.sliceAsBytes(key_ids.items), key_spans.items);
+                }
                 notePass(m, step - 1, 1, seqs[slot].items.len, slot, @intCast(base), "");
                 m.fillBegin(slot, @intCast(base)) catch |err| try refused(err);
                 m.fill_seq = seqs[slot].items;
