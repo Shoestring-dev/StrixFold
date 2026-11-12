@@ -36,7 +36,8 @@ serve_load() {
   case $SPAWN_UNIT in 0|1) ;; *) die "SPAWN_UNIT must be 0 or 1, not $SPAWN_UNIT";; esac
   REPLAY_FLOOR=${REPLAY_FLOOR:-0} HC_SIDE=${HC_SIDE:-0} ENGRAM_AIO=${ENGRAM_AIO:-0} TOP_K_MAX=${TOP_K_MAX:-0} SEED_RANDOM=${SEED_RANDOM:-0}
   L2_PREFETCH=${L2_PREFETCH:-0} LOOP_GUARD=${LOOP_GUARD:-0} DRAFT_TEMPERATURE=${DRAFT_TEMPERATURE:-0}
-  [[ $DRAFT_TEMPERATURE =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "DRAFT_TEMPERATURE must be a number from 0 (off), not $DRAFT_TEMPERATURE"
+  [[ $DRAFT_TEMPERATURE =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v t="$DRAFT_TEMPERATURE" 'BEGIN { exit !(t <= 100) }' \
+    || die "DRAFT_TEMPERATURE must be a number from 0 (off) to 100, not $DRAFT_TEMPERATURE"
   DRAFT_BYPASS_AT=${DRAFT_BYPASS_AT:-0}
   [[ $DRAFT_BYPASS_AT =~ ^(0|[2-8])$ ]] || die "DRAFT_BYPASS_AT must be 0 or 2..8"
   # the switch acts only on drafted TP2 shared rounds that can hold that many streams; elsewhere it is off

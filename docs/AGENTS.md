@@ -58,7 +58,9 @@ It runs until the harness's step or call limit, then ends on one more "Let me…
    The code prompt was "Write a Python function that parses an ISO 8601 duration like P3DT4H5M into seconds, with
    docstring and three tests." and the prose prompt "Explain to a new homeowner how a heat pump works and when it is
    cheaper than a gas furnace." Sampling lowers how often drafted tokens are accepted, so the cost grows with the
-   temperature.
+   temperature. `DRAFT_TEMPERATURE` in serve.conf (or a request's `draft_temperature`) draws the drafts with the same
+   noise as the reply, which wins part of that back without changing the reply: on a code prompt at temperature 1.0,
+   its author measured acceptance going from 60% to 66% (see [api.md](api.md#request-fields)).
 
 2. **Catch repeats in the harness.** Compare each call with the earlier ones in the same answer: the tool and its
    arguments (case and spacing aside), and its result. A call whose arguments and result both match an earlier one

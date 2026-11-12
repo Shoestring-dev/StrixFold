@@ -87,6 +87,7 @@ For decisions, `chat_template_kwargs` may be omitted, null, or an object contain
 | `stream_options.include_usage` | Usage in its own final event with `"choices": []`, not on the finish event | Both |
 | `chat_template_kwargs.enable_thinking` | Template thinking toggle; `chat_template_kwargs.thinking` (`true`/`false` or `{"type": "enabled"}`/`{"type": "disabled"}`, as DeepSeek-V4 clients send it) is read the same way when `enable_thinking` is absent; other values are ignored | Both |
 | `draft` | False selects the serial reference; CUDA rejects it if the engine has no serial switch | Both |
+| `draft_temperature` | 0 to 100; absent or null takes the server's `--draft-temperature` (default 0, off). A sampled request's drafts are drawn with the noise its verify rows use, at `temperature` × this, so more of them are accepted; the reply's tokens don't change. Used by the AMD two-box engine; other backends accept it and ignore it | Both |
 | `response_format`, `guided_json`, `guided_regex`, `guided_choice`, `guided_grammar`, `structured_outputs` | A JSON schema, any JSON object, a regex, a choice or an EBNF grammar the reply must match | Both |
 | `ignore_eos` | Disable model end-of-sequence stopping; the reply limit still applies | Both |
 | `stop` | Stop at a string or any string in a list; omit the matched text from the response | Both |
@@ -349,8 +350,8 @@ same handler and engine path. A response has that chat completion's prompt and t
   carried to a later turn.
 - `tools` takes function tools; `tool_choice` takes `none`, `auto`, `required`, a function or `allowed_tools`;
   `parallel_tool_calls` works as in chat.
-- `max_output_tokens` counts reasoning tokens too. `temperature`, `top_p`, `top_k`, `min_p` and `seed` sample as in
-  chat.
+- `max_output_tokens` counts reasoning tokens too. `temperature`, `top_p`, `top_k`, `min_p`, `draft_temperature` and
+  `seed` sample as in chat.
 - `reasoning.effort` follows the chat effort rule: unset is the template's default and `none` turns thinking off.
   `reasoning.summary` is accepted, but no summary is written.
 - `text.format` takes `json_schema` or `json_object` through the structured-output path, with drafts.
