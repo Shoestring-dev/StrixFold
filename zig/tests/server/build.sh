@@ -16,5 +16,6 @@ core=(--dep lanes "-Mengine_api=$root/zig/src/core/engine_api.zig" "-Mlanes=$roo
   --dep engine_api --dep tokenizer --dep template "-Mserver=$root/zig/src/server/root.zig" "${core[@]}" \
   --name fake_serve -femit-bin="$out/fake_serve"
 "$zig" build-exe -lc -O "${OPT:-ReleaseSafe}" --dep engine_api --dep tokenizer --dep template --dep native_engines --dep build_options \
-  "-Mroot=$root/zig/src/server/main.zig" --dep engine_api "-Mnative_engines=$root/zig/src/native/none.zig" "${core[@]}" \
+  --dep checkpoint_cli "-Mroot=$root/zig/src/server/main.zig" --dep engine_api "-Mnative_engines=$root/zig/src/native/none.zig" \
+  --dep native_engines "-Mcheckpoint_cli=$root/zig/src/cli/cli.zig" "${core[@]}" \
   "-Mbuild_options=$options" --name tensorfold-native -femit-bin="$out/tensorfold-native"
