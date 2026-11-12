@@ -47,16 +47,19 @@ lock file `/var/tmp/halo-gpu.lock` (`flock`), so two jobs never share a GPU.
 
 ```
 tools/dsv41-hip/prepare_inputs.sh ~/models/tf-port/libertai-2.9bpw ~/models/tf-port/ds1017-1bae0e10 ~/models/tf-port/inputs-tp2-c178a012
+H=$(sha256sum ~/models/tf-port/inputs-tp2-c178a012/inputs_manifest.json | cut -d' ' -f1)   # your bundle's hash
 tools/dsv41-hip/verify_inputs.sh  ~/models/tf-port/inputs-tp2-c178a012 1 ~/models/tf-port/libertai-2.9bpw ~/models/tf-port/ds1017-1bae0e10 \
-    243b984d1069b190e762b3f9eaf12c90b2a23dd1e8f33880019f60d61264e8e9            # rank 1 on node1; rank 0 on node0 from its deployment
+    $H                                                                            # rank 1 on node1; rank 0 on node0 from its deployment
 ```
 `prepare_inputs.sh` authenticates every checkpoint and Engram file against the pinned Hugging Face metadata, writes the
-token map, the Engram constants (`kit/engram.json`), the RoPE tables (`kit/rope-*.f32`, 65,536 rows by default: they
-set the longest context the engine can serve), both rank caches and the chat template (c282975e), byte-checks each
-cache in full (`tf-dsv41-check --bytes 1`) and hashes everything into `inputs_manifest.json` (SHA-256 243b984d... for
-this revision; `serve.conf` pins it). About 1 TB is read and 212 GB written. Copy the bundle to node0 (rank 0 needs
-its own rank cache and the tables). `verify_inputs.sh` re-checks a box's copy before that rank loads it (about 15
-minutes).
+token map, the Engram constants (`kit/engram.json`), the RoPE tables (`kit/rope-*.f32`, 65,536 rows by default: they set
+the longest context the engine can serve), both rank caches and the chat template (c282975e), byte-checks each cache in
+full (`tf-dsv41-check --bytes 1`) and hashes everything into `inputs_manifest.json`. The manifest records local paths
+and the Python version, so its SHA-256 differs from one setup to another: ours is the 243b984d... that the shipped
+`serve.conf` pins, and yours goes into your configuration's `BUNDLE_SHA256` (see
+[GETTING-STARTED.md](../../docs/GETTING-STARTED.md#inputs)). About 1 TB is read and 212 GB written. Copy the bundle to
+node0 (rank 0 needs its own rank cache and the tables). `verify_inputs.sh` re-checks a box's copy before that rank loads
+it (about 15 minutes).
 
 ## 4. Deploy (both boxes run one commit's bytes)
 
