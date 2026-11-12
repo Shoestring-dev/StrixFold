@@ -58,8 +58,7 @@ pub fn chunkCaps(split_min: usize) [2]usize {
     return if (split_min > 0) .{ chunk_rows / 2, chunk_rows / 2 } else .{ chunk_rows, 0 };
 }
 
-/// The most positions one stream reaches in a pool of `pool` (Options.context; 0: the pool). A pool larger than the
-/// context holds several streams of that length; one larger than the pool could never be placed.
+/// The most positions one stream reaches in a pool of `pool` (Options.context; 0: the pool), at most the pool.
 pub fn contextCap(pool: usize, context: usize) error{BadPool}!usize {
     if (pool == 0) return error.BadPool;
     if (context == 0) return pool;
@@ -93,9 +92,7 @@ pub const Options = struct {
     engram_dir: ?[]const u8 = null, // the Engram tables (none: a checkpoint without Engram layers)
     token_map: ?[]const u8 = null, // the compressed token map (the lane's JSON cache)
     pool: usize = 1 << 18, // positions of the streams' shared plane (their extents together)
-    // the most positions one stream reaches (its extent: prompt, max_tokens and a round's rows; rank 0's --context):
-    // the RoPE tables' rows, a prompt chunk's compressed keys and a round's context buckets. 0: the pool (one stream
-    // may take the whole pool, the stock layout); below the pool, several streams of that length share it
+    // one stream's most positions (--context; 0: the pool): the RoPE rows, chunk keys and context buckets
     context: usize = 0,
     drafts: bool = true, // load the DSpark drafter
     rdma_devices: ?[]const u8 = null, // the decode gathers over RDMA on these devices (comma separated), else NCCL: TP2's
@@ -403,8 +400,7 @@ pub const Model = struct {
             return error.MissingKernel;
         };
 
-        // the RoPE tables (the served build's bits: torch CPU pow and polar), every position a stream reaches (positions
-        // count from each stream's own start, whatever its extent's base in the pool)
+        // the RoPE tables (the served build's bits: torch CPU pow and polar) for every position a stream reaches
         const half = c.rope_dim / 2;
         const rope_rows = m.context_cap + round.max_rows + 1;
         m.rope_buf = try gpu.DeviceBuffer.alloc(d, 4 * rope_rows * half * 4);
@@ -415,7 +411,7 @@ pub const Model = struct {
             for ([_][]const u8{ "rope-plain-cos.f32", "rope-plain-sin.f32", "rope-compressed-cos.f32", "rope-compressed-sin.f32" }, 0..) |name, j| {
                 var f = try std.Io.Dir.cwd().openFile(io, try std.fs.path.join(a, &.{ o.kit_dir, name }), .{});
                 defer f.close(io);
-                if (try f.readPositionalAll(io, part, 0) != part.len) return error.ShortRopeTable; // a table of fewer rows than the context
+                if (try f.readPositionalAll(io, part, 0) != part.len) return error.ShortRopeTable; // fewer rows than the context
                 try m.rope_buf.upload(j * part.len, part);
             }
         }
@@ -464,7 +460,7 @@ pub const Model = struct {
             r.* = try m.arena.take(m.streams * m.eng.ringBytes());
             try gpu.fill8Async(d, m.stream.handle, r.*, 0, m.streams * m.eng.ringBytes());
         }
-        m.rd = try round.Round.init(&m.eng, &m.arena, a, m.context_cap); // its buckets to the context (the kit's variants)
+        m.rd = try round.Round.init(&m.eng, &m.arena, a, m.context_cap); // buckets to the context
         m.amax = try m.arena.take(round.max_rows * 4);
         if (o.graphs) {
             m.graphs = round.Graphs.init(gpa);
@@ -622,7 +618,7 @@ pub const Model = struct {
         engram: bool,
         graphs: bool,
         pool: usize,
-        context: usize = 0, // a stream's most positions: " context=N" after pool= only when below the pool (0: the pool)
+        context: usize = 0, // " context=N" after pool= only when below the pool (0: the pool)
         streams: usize,
         round_rows: usize,
         replay_floor: bool,
@@ -1381,7 +1377,7 @@ test "the handshake's plan text is the stock one with sf-disk off, and says disk
     try std.testing.expectEqualStrings(stock, try Model.planText(&buf, p));
     p.disk = true;
     try std.testing.expectEqualStrings(stock ++ " disk=1", try Model.planText(&buf, p));
-    // a context at the pool is the stock layout (the same text, the same disk namespace); below it, the ranks compare it
+    // a context at the pool is the stock layout; below it, the ranks compare it
     p.disk = false;
     p.context = 8192;
     try std.testing.expectEqualStrings(stock, try Model.planText(&buf, p));
