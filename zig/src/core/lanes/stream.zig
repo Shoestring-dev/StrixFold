@@ -129,7 +129,8 @@ pub const Vision = struct {
 /// Off-thread encodes: `start` at submit, `ready` before admission (false: it waits), `forget` once the rows are taken.
 pub const Encode = struct {
     ctx: *anyopaque,
-    start: *const fn (ctx: *anyopaque, images: []const Image, wake: Wake) void,
+    // spans that end by `from` (where the prompt cache would resume) are encoded only if the prompt pass asks for them
+    start: *const fn (ctx: *anyopaque, images: []const Image, from: u32, wake: Wake) void,
     ready: *const fn (ctx: *anyopaque, images: []const Image) bool,
     forget: *const fn (ctx: *anyopaque, images: []const Image) void,
 };

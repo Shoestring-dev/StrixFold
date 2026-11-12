@@ -198,8 +198,34 @@ test "a turn's mark evicting the state it resumed from: the hit is reported firs
     }
 }
 
+/// An off-thread tower with every request's rows at once: it notes where each request's encode was told to start.
+const Hint = struct {
+    froms: [2]u32 = @splat(99),
+    n: usize = 0,
+
+    fn start(ctx: *anyopaque, _: []const api.Image, from: u32, _: lanes.stream.Wake) void {
+        const t: *Hint = @ptrCast(@alignCast(ctx));
+        t.froms[t.n] = from;
+        t.n += 1;
+    }
+
+    fn ready(_: *anyopaque, _: []const api.Image) bool {
+        return true;
+    }
+
+    fn forget(_: *anyopaque, _: []const api.Image) void {}
+
+    fn prepare(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: *[]const u8) lanes.stream.Vision.PrepareError!lanes.stream.Vision.Prepared {
+        return error.BadImage;
+    }
+
+    fn vision(t: *Hint) lanes.stream.Vision {
+        return .{ .ctx = t, .placeholder = "<image>", .token = 11, .prepare = prepare, .encode = .{ .ctx = t, .start = start, .ready = ready, .forget = forget } };
+    }
+};
+
 /// Turn 1 with picture `first`, then turn 2 (turn 1, its reply, a tool result) with `second`: turn 2's cache counts.
-fn imageTurns(cache_images: bool, first: []const u8, second: []const u8, second_digest: ?pc.Digest) !struct { cached: ?u32, entries: usize, hits: u64 } {
+fn imageTurns(cache_images: bool, first: []const u8, second: []const u8, second_digest: ?pc.Digest) !struct { cached: ?u32, entries: usize, hits: u64, from: u32 } {
     const gpa = std.testing.allocator;
     var cfg = try lanes.Config.init(gpa, .{ .exact_width = 8, .gpu_tokens = true, .hidden_rows = true }, 8, 7);
     defer cfg.deinit(gpa);
@@ -226,7 +252,8 @@ fn imageTurns(cache_images: bool, first: []const u8, second: []const u8, second_
     };
     var store = pc.Store.init(gpa, .{ .ptr = &target, .vtable = &.{ .bytes = Snaps.bytes, .save = Snaps.save, .restore = Snaps.restore, .drop = Snaps.drop } }, .{ .min_gap = 4, .min_prompt = 0 }, 1 << 20);
     defer store.deinit();
-    var host = LaneHost.init(gpa, std.testing.io, &core, .{ .lanes = 2 });
+    var hint: Hint = .{};
+    var host = LaneHost.init(gpa, std.testing.io, &core, .{ .lanes = 2, .vision = hint.vision() });
     host.cache = &store;
     host.cache_images = cache_images;
     try host.start();
@@ -277,21 +304,25 @@ fn imageTurns(cache_images: bool, first: []const u8, second: []const u8, second_
     const r2: Request = .{ .prompt = t2.items, .images = &im2, .max_tokens = 12, .history_len = @intCast(t2.items.len - 2) };
     try e.submit(2, &r2, .{ .ctx = &b2, .event = Box.event });
     try std.testing.expectEqual(Reason.length, b2.wait());
-    return .{ .cached = b2.cached, .entries = store.entries.items.len, .hits = store.counts.hits };
+    try std.testing.expectEqual(@as(u32, 0), hint.froms[0]);
+    return .{ .cached = b2.cached, .entries = store.entries.items.len, .hits = store.counts.hits, .from = hint.froms[1] };
 }
 
 test "a conversation with a picture resumes past it when the next turn carries the same picture, and only then" {
     const same = try imageTurns(true, "picture A", "picture A", null); // turn 1's digest taken by the host, turn 2's by the server
     try std.testing.expectEqual(@as(?u32, 8), same.cached);
     try std.testing.expectEqual(@as(u64, 1), same.hits);
+    try std.testing.expectEqual(@as(u32, 8), same.from); // its encode skips the picture the resume covers
     const other = try imageTurns(true, "picture A", "picture B", null); // the same tokens, another picture
     try std.testing.expectEqual(@as(?u32, 0), other.cached);
     try std.testing.expectEqual(@as(u64, 0), other.hits);
+    try std.testing.expectEqual(@as(u32, 0), other.from);
     var near = pc.imageDigest("picture A");
     near[31] ^= 1; // a digest alike in its first 8 bytes (and all but its last bit)
     const close = try imageTurns(true, "picture A", "picture A", near);
     try std.testing.expectEqual(@as(?u32, 0), close.cached);
     try std.testing.expectEqual(@as(u64, 0), close.hits);
+    try std.testing.expectEqual(@as(u32, 0), close.from);
     const off = try imageTurns(false, "picture A", "picture A", null); // a backend that keys no pictures: nothing kept
     try std.testing.expectEqual(@as(?u32, 0), off.cached);
     try std.testing.expectEqual(@as(usize, 0), off.entries);

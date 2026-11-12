@@ -414,8 +414,11 @@ tower on rank 0. Everything above about `text` still holds: a text rank opens, l
   its rows are ready; queued requests without images go first meanwhile, in their order, and other streams keep
   decoding. The prompt pass then takes the ready rows (it never runs the tower). A cancelled request's job is dropped
   (one being encoded is freed when its picture is done); a failed encode is that request's error at its prompt pass.
-- **Behaviour:** an image prompt skips the RAM prompt cache and the reuse hook (its tokens are
-  placeholders); a 1920x1080 picture encodes in about 2.9 s on gfx1151 (measured with the tower on the engine thread).
+  Pictures whose spans end before the RAM prompt cache's resume point at submit are not encoded; if the pass resumes
+  earlier (the state was evicted, went stale, or a disk resume failed), it asks the thread for them and waits.
+- **Behaviour:** an image prompt is kept and resumed by the RAM and disk prompt caches, keyed by each picture's
+  BLAKE3-256 digest (span key ids, and the whole digests in a kept state's seal and in each disk block's chain key);
+  a 1920x1080 picture encodes in about 2.9 s on gfx1151 (measured with the tower on the engine thread).
   PNG decodes in Zig; other formats need Python 3 with Pillow (the runtime image's `rocm10.0-vision` tag).
 
 ## 9. Build
