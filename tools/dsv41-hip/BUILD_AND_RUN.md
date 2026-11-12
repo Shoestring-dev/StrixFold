@@ -80,10 +80,10 @@ probe. Put your copy at the same path under each box's `$HOME`, then from the de
 
 ```
 cd ~/tfp/deploy/current/tools/dsv41-hip
-TF_SERVE_CONF='$HOME/tfp/run/conf/my.conf' ./first_light.sh up       # locks (node0, then node1), rank 1, rank 0, /health, probe
-TF_SERVE_CONF='$HOME/tfp/run/conf/my.conf' ./first_light.sh status
-TF_SERVE_CONF='$HOME/tfp/run/conf/my.conf' ./first_light.sh down     # rank 0 SIGTERM (rank 1 leaves with it), locks released
-TF_SERVE_CONF='$HOME/tfp/run/conf/my.conf' ./first_light.sh restart
+TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh up       # locks (node0, then node1), rank 1, rank 0, /health, probe
+TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh status
+TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh down     # rank 0 SIGTERM (rank 1 leaves with it), locks released
+TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh restart
 ```
 `up` refuses to start unless both ranks resolve to the same deploy commit, kit manifest and configuration, and the
 bundle's manifest hash equals `BUNDLE_SHA256`; it is ready only when the probe's reply contains `PROBE_EXPECT`. The

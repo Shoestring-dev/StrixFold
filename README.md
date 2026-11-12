@@ -36,6 +36,9 @@ machines it runs DeepSeek-V4.1-Flash at about 72% of the speed of two NVIDIA DGX
 - How each number was measured, with the raw tables: [docs/RESULTS.md](docs/RESULTS.md).
 - Numbers from other people's boxes: [docs/COMMUNITY-RESULTS.md](docs/COMMUNITY-RESULTS.md). Add yours.
 
+New boxes? [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) goes step by step from two AMD Ryzen AI Halo boxes
+or two Bosgame M5s to a first answer and a benchmark.
+
 ## Tested on
 
 | | |
@@ -67,7 +70,8 @@ The full list, file by file, is in [CHANGES.md](CHANGES.md).
 ## Build and run
 
 The commands this port runs, in order (build, prepare the inputs, serve, check, benchmark), are in
-[tools/dsv41-hip/BUILD_AND_RUN.md](tools/dsv41-hip/BUILD_AND_RUN.md).
+[tools/dsv41-hip/BUILD_AND_RUN.md](tools/dsv41-hip/BUILD_AND_RUN.md). From new boxes, start with
+[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md): it puts the setup guides and these commands in order.
 
 On a Bosgame M5 (same chip, ships with Windows), first follow [docs/BOSGAME-M5.md](docs/BOSGAME-M5.md): BIOS, Debian
 13, the 7.2.7 kernel with Secure Boot on, and ROCm 10.0.

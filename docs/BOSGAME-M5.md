@@ -182,9 +182,9 @@ box: the GPU's timer runs at 100 MHz while ROCm reports 99.81 MHz (the Ryzen AI 
 the `clock` check sees about 0.2% more time than the host. The engine uses that rate only for timings and GPU wait
 deadlines, so on an M5 they run about 0.2% short.
 
-That's the stack in [Tested on](../README.md#tested-on). From here, link the two boxes with two USB4 cables
-([TUNING.md](TUNING.md)) and follow [BUILD_AND_RUN.md](../tools/dsv41-hip/BUILD_AND_RUN.md). Each M5 has two USB4
-ports, so a pair uses both.
+That's the stack in [Tested on](../README.md#tested-on). From here, link the two boxes with two USB4 cables and
+continue at [step 3 of GETTING-STARTED.md](GETTING-STARTED.md#3-link-the-two-boxes). Each M5 has two USB4 ports, so a
+pair uses both.
 
 ## If something goes wrong
 
