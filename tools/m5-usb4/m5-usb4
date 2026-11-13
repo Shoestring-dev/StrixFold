@@ -1,0 +1,58 @@
+#!/bin/bash
+# m5-usb4: USB4 fixes for a Bosgame M5 pair. Run as root, installed root-owned at /usr/local/sbin/m5-usb4; it refuses
+# any board but the Sixunited AXB35-02 the M5 is built on. See README.md.
+#   m5-usb4 status   each cable's partner and trained speed; whether the controllers are kept awake
+#   m5-usb4 awake    keep the USB4 controllers and routers out of runtime sleep, so a partner coming back after a restart
+#                    is noticed (one of our boxes missed its partner's return until it was restarted too)
+#   m5-usb4 h2h      AMD's USB4 host-to-host setting (~9 -> ~30 Gb/s a cable at Gen 3; BIOS 1.10's
+#                    FchHNUsb4H2HEnhanceEnable), sent by your signed bos_usb4h2h.ko, whose SHA-256 you pin below. The
+#                    routers only read it while they start, so the driver is unloaded, both routers reset and the driver
+#                    loaded back: the cables drop for ~10-20 s. Stop the model on the pair first.
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+MOD=/usr/local/lib/m5-usb4/bos_usb4h2h.ko
+SHA=  # the sha256sum of YOUR signed bos_usb4h2h.ko (README.md); h2h refuses to run while this is empty
+die() { echo "m5-usb4: $*" >&2; exit 2; }
+[ "$(cat /sys/class/dmi/id/board_name 2>/dev/null)" = "AXB35-02" ] || die "not an AXB35-02 board"
+nhis() { ls -d /sys/bus/pci/drivers/thunderbolt/0000:* 2>/dev/null | xargs -rn1 basename; }
+
+awake() {
+  for p in $(nhis); do echo on > "/sys/bus/pci/devices/$p/power/control"; done
+  for r in /sys/bus/thunderbolt/devices/[0-9]-0; do [ -e "$r/power/control" ] && echo on > "$r/power/control"; done
+  return 0
+}
+
+speeds() {
+  for d in 0 1; do
+    p=/sys/bus/thunderbolt/devices/$d-2
+    if [ -e "$p/device_name" ]; then echo "cable $d: $(cat $p/device_name) $(cat $p/rx_speed) x$(cat $p/rx_lanes)"
+    else echo "cable $d: no partner"; fi
+  done
+}
+
+case "${1:-status}" in
+  status)
+    speeds
+    for p in $(nhis); do echo "controller $p: $(cat /sys/bus/pci/devices/$p/power/control) ($(cat /sys/bus/pci/devices/$p/power/runtime_status))"; done ;;
+  awake)
+    awake; echo "kept awake" ;;
+  h2h)
+    [ -n "$SHA" ] || die "pin your module's SHA-256 in $0 first (SHA=)"
+    [ "$(stat -c %U:%a "$MOD")" = "root:644" ] || die "$MOD is not root-owned 644"
+    [ "$(sha256sum "$MOD" | cut -d' ' -f1)" = "$SHA" ] || die "$MOD does not match the pinned SHA-256"
+    trap 'modprobe thunderbolt || true; modprobe thunderbolt_net || true; awake || true' EXIT  # the driver always comes back
+    modprobe -r thunderbolt_net thunderbolt
+    insmod "$MOD" enable=1
+    dmesg | grep bos_usb4h2h | tail -2 | cut -c16-150
+    rmmod bos_usb4h2h
+    for p in $(ls -d /sys/bus/pci/devices/0000:c5:00.[56] 2>/dev/null | xargs -rn1 basename); do
+      d=/sys/bus/pci/devices/$p; rm_was=$(cat $d/reset_method)
+      echo acpi > $d/reset_method; echo 1 > $d/reset; echo "$rm_was" > $d/reset_method; echo "$p reset"
+    done
+    modprobe thunderbolt; modprobe thunderbolt_net; awake
+    for _ in $(seq 1 30); do [ -e /sys/bus/thunderbolt/devices/0-2 ] && [ -e /sys/bus/thunderbolt/devices/1-2 ] && break; sleep 1; done
+    sleep 3
+    command -v ifup >/dev/null && { ifup thunderbolt0 2>/dev/null || true; ifup thunderbolt1 2>/dev/null || true; }
+    speeds ;;
+  *) die "unknown command (status, awake, h2h)" ;;
+esac

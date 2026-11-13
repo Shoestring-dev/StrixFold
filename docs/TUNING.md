@@ -42,6 +42,11 @@ stalled: the receiver ended 3–7 MB short and hit its deadline. The fix is a sh
 The boxes serve at the default balanced power setting. The CPU's performance setting is faster: DwarfStar went from
 13.3 to 14.7 tok/s. It costs more power, so it is off by default here.
 
+- **Cool a Bosgame M5 before you give it more power.** Its stock fan curve lets the GPU sit at 84–88 °C at 85 W. With
+  the fans driven harder (the EC's duty override), the same load gave 4% more output at 64–70 °C. Its performance mode
+  with the stock fans was 9% slower, at 95–100 °C; with the faster fans a GPU still held 95 °C for 30 s within 91 s.
+  Details: [BOSGAME-M5.md](BOSGAME-M5.md#cooling).
+
 ## Several chats
 
 With drafting on, identical prompts decode in lockstep, and leftover drafts break that. Turning drafting off from six

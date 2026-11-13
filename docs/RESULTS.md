@@ -95,4 +95,40 @@ drafted round takes about 100 ms, against about 63 ms at short context.
 All chats share one context window, and its length is capped by the RoPE tables' rows, so a 1M window holds one 1M
 conversation, or several shorter ones whose lengths add up to it.
 
+## Real agent work
+
+Two days of an agent harness at work, 12 and 13 November 2026, on three pairs serving the same model: the Ryzen AI Halo
+pair above and two Bosgame M5 pairs ([BOSGAME-M5.md](BOSGAME-M5.md)). Most requests had thinking on. The numbers come
+from each finished request's own counts and timings: requests with at least 64 reply tokens, health probes left out.
+
+The pairs weren't set up alike, so read the columns as what each pair did, not as a hardware comparison:
+
+- **Halo pair:** its performance power profile (about 120–130 W while busy), one request at a time.
+- **M5 pairs A and B:** the stock balanced mode (85 W), up to four requests at a time.
+
+**Requests alone on their pair** (no other counted request overlapped it in time), decode speed in tokens per second,
+median, with the number of requests in brackets:
+
+| Prompt | Halo pair | M5 pair A | M5 pair B |
+|---|---:|---:|---:|
+| under 20K tokens | 48.2 (118) | 54.5 (47) | 49.7 (37) |
+| 20K–40K | 53.1 (22) | 48.3 (175) | 52.1 (78) |
+| 40K–70K | 52.4 (119) | 50.0 (311) | 43.3 (27) |
+| 70K–100K | 53.9 (698) | 51.2 (64) | 39.7 (10) |
+| 100K–150K | 54.2 (347) | 51.6 (28) | |
+
+- On the Halo pair, decode speed barely changes from 20K to 150K tokens of prompt (52.4–54.2 tok/s).
+- Pair B's samples are small, and its USB4 links changed during these two days.
+
+**Requests sharing a pair.** On the M5 pairs, requests that ran alongside others decoded at a median of 21.2 tok/s each
+on pair A (1,379 requests) and 23.5 on pair B (1,539).
+
+**Prompt reading** (requests with more than 8K prompt tokens not in the cache), median: 1,250 tok/s on the Halo pair
+(23 requests), 1,128 on M5 pair A (223) and 1,118 on M5 pair B (87).
+
+**A cold read holds up the whole pair.** A prompt is read whole before the pair's next decode step, so while one request
+reads a long prompt that isn't cached, the other requests on the pair wait. In a busy five minutes on 13 November, these
+reads took 47% of an M5 pair's time. A 24K-token read took about 25 s, and an agent whose steps kept landing in such
+reads averaged about 3 tok/s. How a harness keeps its prompts cached: [api.md](api.md#keeping-the-prompt-cache).
+
 The older, more detailed engineering results (19 Oct, per-category tables) are in `tools/dsv41-hip/RESULTS.md`.

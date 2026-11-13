@@ -1,0 +1,13 @@
+[Unit]
+Description=Bosgame M5 USB4: keep the controllers awake, apply the host-to-host setting (m5-usb4)
+After=systemd-modules-load.service
+Before=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/m5-usb4 awake
+ExecStart=-/usr/local/sbin/m5-usb4 h2h
+
+[Install]
+WantedBy=multi-user.target

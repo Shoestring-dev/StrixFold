@@ -7,8 +7,8 @@ commands to run in order.
 The two boxes play different parts. **node0** is rank 0 and serves the API. **node1** is rank 1, and it is also where
 you build and run the scripts. Pick which box is which before you start.
 
-Our published numbers come from a pair of AMD Ryzen AI Halo boxes (see [Tested on](../README.md#tested-on)). On the
-Bosgame M5 we've set up the Linux and GPU stack and run the GPU tests on one box, but we haven't run a pair yet.
+Our published numbers come from a pair of AMD Ryzen AI Halo boxes (see [Tested on](../README.md#tested-on)). We've
+also run pairs of Bosgame M5s: their speed, cooling and USB4 links are in [BOSGAME-M5.md](BOSGAME-M5.md).
 
 ## 1. What you need
 

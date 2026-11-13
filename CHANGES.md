@@ -1,8 +1,9 @@
 # Changes in this fork
 
 This fork starts from Bertholomus AI's DeepSeek-V4.1 fork of TensorFold at commit 3ff3b2ac (18 Oct 2026). Every change
-below is ours, made between 18 October and 6 November 2026 and released under Apache-2.0 as upstream. Upstream's LICENSE,
-LICENSES/ and THIRD_PARTY_NOTICES.md are unchanged; NOTICE gains one section at its end.
+below is ours, made between 18 October and 13 November 2026 and released under Apache-2.0 as upstream, except one Linux
+kernel module in `tools/m5-usb4/`, which is GPL-2.0. Upstream's LICENSE, LICENSES/ and THIRD_PARTY_NOTICES.md are
+unchanged; NOTICE gains one section at its end.
 
 ## Added
 
@@ -22,6 +23,7 @@ LICENSES/ and THIRD_PARTY_NOTICES.md are unchanged; NOTICE gains one section at 
 | `docs/RESULTS.md`, `docs/TUNING.md`, `docs/img/` | Measured results with charts, and the two-box tuning notes |
 | `tools/dsv41-hip/ctx_sweep.py` | Writing speed against context length, drafts on and off (RESULTS, Speed at long context) |
 | `docs/COMMUNITY-RESULTS.md`, `.github/ISSUE_TEMPLATE/` | Results from other people's hardware, and the issue form that collects them |
+| `tools/m5-usb4/` | The Bosgame M5's optional USB4 host-to-host setting: a kernel module (GPL-2.0, its text in `COPYING`), a script and a service |
 | `README.md`, `CHANGES.md` | This fork's README and this file. Upstream's README moved to `docs/UPSTREAM-README.md`. |
 
 ## Modified upstream files

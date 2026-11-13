@@ -62,3 +62,6 @@ and modified files.
 tools/dsv41-hip/assets/chat_template.jinja is the chat template of Tech2wild's DeepSeek-V4.1-Flash TensorFold recipe
 (github.com/tonyd2wild), MIT License, Copyright (c) 2026 Tech2wild; the license text is in
 tools/dsv41-hip/assets/CREATOR_LICENSE.
+
+tools/m5-usb4/bos_usb4h2h.c is a Linux kernel module by the StrixFold contributors, Copyright 2026, licensed under
+the GNU General Public License version 2 (GPL-2.0), not Apache-2.0; the license text is in tools/m5-usb4/COPYING.

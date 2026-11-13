@@ -70,7 +70,9 @@ It runs until the harness's step or call limit, then ends on one more "Let me…
    like the tests after an edit, from counting.
 
 3. **Word the last request plainly.** When the limits are reached, say that nothing else will run and ask for what it
-   found and what it didn't find or finish, not for the next step.
+   found and what it didn't find or finish, not for the next step. Keep the tools offered in that request: taking them
+   away, or sending `tool_choice: "none"`, changes the prompt near its start, and the whole conversation is read again
+   ([api.md](api.md#keeping-the-prompt-cache)).
 
 ## Long thinking
 

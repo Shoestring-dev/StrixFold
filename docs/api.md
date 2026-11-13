@@ -314,6 +314,55 @@ repeats the same samples wherever the conversations agree (an agent benchmark's 
 first). To draw independent repeats, send a `seed` per run, or start each run's server with a different
 `TENSORFOLD_SEED_SALT` (an integer mixed into every prompt-derived seed; 0, the default, keeps today's seeds).
 
+## Keeping the prompt cache
+
+This part is for agent harnesses and chat apps that send a growing conversation to DeepSeek-V4.1-Flash on the AMD
+two-box engine (StrixFold).
+
+The engine keeps prompt states when `PROMPT_CACHE_GIB` in `tools/dsv41-hip/serve.conf` is above 0; the shipped file has
+0, for first light. A request resumes from the longest kept state whose tokens are an exact prefix of its prompt, and
+reads the rest. States are kept at 2,048-token boundaries, so a request resumes at the last boundary before the first
+token that changed. `usage.prompt_tokens_details.cached_tokens` shows how much it resumed, always a multiple of 2,048.
+A new conversation that starts with the same system text and tools resumes that shared start too, from its last
+2,048-token boundary. When the pair's context pool fills, the least recently used kept states give up their room first,
+and a conversation whose state went is read from the start.
+
+The chat template (`tools/dsv41-hip/assets/chat_template.jinja`) writes the prompt in this order:
+
+1. the start token and the system marker;
+2. `Reasoning Effort: N`, only when thinking is on;
+3. the system text;
+4. the tools block, when tools are offered;
+5. the messages, oldest first.
+
+So each of these re-reads the whole conversation:
+
+- turning thinking on or off, or changing `reasoning_effort` while thinking is on;
+- changing the system text, even only a date or a time in it;
+- adding, removing or reordering tools, or changing a tool's definition;
+- `tool_choice: "none"`: the server drops the tools before it renders the prompt, so the tools block goes. With thinking
+  on, the template then also drops the thinking of earlier turns, which it keeps only while tools are offered;
+- a `tool_choice` that names one function: the template then offers only that tool.
+
+`tool_choice: "required"` keeps every tool, so it doesn't change the prompt.
+
+To keep the cache:
+
+- Keep the start the same for the whole conversation: the same system text, the same tools in the same order, and the
+  same thinking and effort settings.
+- To stop tool calls for one turn (a final answer, say), keep the tools offered and say in a message that no more tools
+  will run.
+- Put what changes every turn (the time, a status line, a fresh file list) in the newest user message, not in the
+  system text, and send earlier messages back unchanged from one request to the next.
+- Trim history rarely and deeply. A trim changes the conversation from the cut on, so everything after the cut is read
+  again. Cutting a little every turn means a long re-read every turn; cutting to half when the history reaches its limit
+  means one re-read every many turns.
+
+What a miss costs, from real agent work ([RESULTS.md](RESULTS.md#real-agent-work)): an uncached prompt reads at about
+1,100–1,250 tokens a second. On the Ryzen AI Halo pair, a 131K-token conversation read from the start took 108 s. On a
+Bosgame M5 pair, a 24K-token re-read took about 25 s. A prompt is read whole before the pair's next decode step, so the
+other requests on the pair wait for it: an agent whose steps kept landing in such re-reads averaged about 3 tok/s.
+
 ## Metrics
 
 `GET /metrics` and `GET /v1/metrics` answer as Prometheus text on both servers. Each family is read on its own

@@ -74,7 +74,7 @@ The commands this port runs, in order (build, prepare the inputs, serve, check, 
 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md): it puts the setup guides and these commands in order.
 
 On a Bosgame M5 (same chip, ships with Windows), first follow [docs/BOSGAME-M5.md](docs/BOSGAME-M5.md): BIOS, Debian
-13, the 7.2.7 kernel with Secure Boot on, and ROCm 10.0.
+13, the 7.2.7 kernel with Secure Boot on, ROCm 10.0, and the fans for long loads.
 
 Driving it from an agent harness (tool calls, and keeping agents out of repeat loops):
 [docs/AGENTS.md](docs/AGENTS.md).

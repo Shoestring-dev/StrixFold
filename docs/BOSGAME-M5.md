@@ -6,8 +6,9 @@ Boot firmware doesn't trust the kernel the tested boxes run. These steps take a 
 GPU stack as the tested boxes (see [Tested on](../README.md#tested-on)), with Secure Boot left on.
 
 We set up our own M5s this way in November 2026 and measured a pair of them: see
-[Speed on a pair of M5s](#speed-on-a-pair-of-m5s), and [The USB4 links](#the-usb4-links) for what the link speed does and
-doesn't change. If you measure yours, please post your numbers (see [COMMUNITY-RESULTS.md](COMMUNITY-RESULTS.md)).
+[Speed on a pair of M5s](#speed-on-a-pair-of-m5s), [Cooling](#cooling) for the fans, and
+[The USB4 links](#the-usb4-links) for what the link speed does and doesn't change. If you measure yours, please post
+your numbers (see [COMMUNITY-RESULTS.md](COMMUNITY-RESULTS.md)).
 
 **You need:** a USB stick of 1 GB or more with the Debian 13 netinst image for amd64
 ([cdimage.debian.org](https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/)) written to it, a monitor and a USB
@@ -214,8 +215,107 @@ see what it costs:
 | 105 W | 80 tok/s | 1,519 tok/s | 100–104 °C after about 2 minutes of load |
 | 120 W | 85 tok/s | 1,600 tok/s | 101 °C after a minute, then it throttles |
 
-We went back to stock: the gain is 5–10% and the GPU runs hot without more cooling. We haven't measured the BIOS's own
-Performance mode.
+We went back to stock: the gain is 5–10% and the GPU runs hot without more cooling. The performance power mode, set
+through the fan driver, is in [Cooling](#cooling): with the stock fans it was slower than the default mode.
+
+## Cooling
+
+The M5's fans follow a curve in its embedded controller (EC) that is tuned to stay quiet. Under a long load the two CPU
+fans stay near 2,120 and 2,360 rpm, and the GPU sits at 84–88 °C at the 85 W limit with its clock at about 2,330 MHz.
+The same fans can run at 4,500 rpm and more.
+
+**What we measured.** One M5 pair, in the stock balanced mode and in performance mode, with the same load for 4 minutes
+per run (the last run was stopped early): four requests at a time, each a new 360-line log to summarise in 600 tokens,
+so every prompt was read cold. Output is the pair's total; the other columns are each box's median over the run's last
+2 minutes (sampled every 2 s), with the peak in brackets.
+
+| Fans | Power mode | Output | GPU temperature | GPU clock | Power | Fan 1 / fan 2 |
+|---|---|---:|---|---|---:|---|
+| Stock | Balanced | 45.7 tok/s | 84 °C (87–88) | 2,330 MHz | 85 W | 2,120 / 2,360 rpm |
+| A steeper curve, set through the driver | Balanced | 45.6 tok/s | 86 °C (88–92) | 2,360–2,390 MHz | 85 W | 2,120 / 2,370 rpm |
+| The same | Performance | 41.8 tok/s | 95 °C (100) | 2,320 and 2,690 MHz | 120–123 W | 2,850–3,020 / 3,050–3,210 rpm |
+| **Boost (below)** | **Balanced** | **47.4 tok/s** | **64–65 °C (69–70)** | **2,510 MHz** | **85 W** | **4,390–4,530 / 4,470–4,510 rpm** |
+| Boost | Performance | 52.8 tok/s for 91 s, then stopped | 87 and 94 °C (99 and 102) | 2,740 MHz | 138 W | 4,720 / 4,720 and 2,550 / 4,610 rpm |
+
+- **The EC ignores the fan curve.** On our M5s' BIOS (3.11), the community driver's fan mode, level and curve
+  settings don't move the fans: the steeper curve left them where they were. (They ran faster in performance mode
+  because the firmware's own curve does.)
+- **Boost:** 4% more output than stock, the GPU 20 °C cooler, and 180 MHz more clock, at the same 85 W.
+- **Performance mode needs more cooling than the stock fans give.** With them it was 9% slower than balanced: both
+  GPUs sat at 95 °C, and one box's clock fell to 2,320 MHz at 123 W. With boost, it gave 11% more than balanced with
+  boost (52.8 against 47.4 tok/s), but only for 91 s from the start of the load: our test stops a run when a GPU holds
+  95 °C for 30 s, and this one did. In this mode the EC also took fan 1 back on one box (2,550 rpm, against 4,610 for
+  its fan 2).
+- We run balanced with boost. Over two hours of use afterwards (13 November, a reading every 10 s), the four M5s'
+  GPUs peaked at 73–84 °C, with no reading at 90 °C or above, and their median clock while busy was 2,420–2,560 MHz.
+  For comparison, our Ryzen AI Halo pair on its performance profile (about 120–130 W while busy) ran at 2,730–2,760 MHz
+  but peaked at 97 and 100 °C, with 3% and 12% of its readings at 90 °C or above.
+
+**How boost works.** The M5 is built on Sixunited's AXB35-02 board, with an ITE IT5570 EC. Besides the curve, the EC
+has a duty override for each CPU fan: register `0x33` for fan 1 and `0x34` for fan 2. Writing `0x80` plus a percentage
+sets that fan's duty; writing `0x00` hands the fan back to the firmware. These registers were found in the board's ACPI
+tables by [nathanmarlor/strix-halo-fan-control](https://github.com/nathanmarlor/strix-halo-fan-control). We added
+them to the community EC driver [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux) (from its
+commit `f62c2c2`):
+
+- `/sys/class/ec_su_axb35/fan1/duty` and `fan2/duty`: `auto`, or 0 to 100.
+- `/sys/class/ec_su_axb35/apu/boost`: `1` sets both fans every second from the EC's temperature: below 45 °C 50%,
+  below 50 °C 60%, below 55 °C 70%, below 60 °C 85%, below 65 °C 95%, and 100% above that or when the temperature
+  can't be read. `0`, or unloading the driver, hands both fans back to the firmware. Fan 3, the system fan, is left
+  to the firmware.
+
+We've offered this change to the driver's author; look for it in
+[cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux). If you'd rather not build a module,
+nathanmarlor's script drives the same registers from user space, off the GPU and CPU temperatures. We haven't measured
+it.
+
+**Setting it up**, with a copy of the driver that has the change. With Secure Boot on, the kernel loads the module only
+if it is signed with a key it trusts, so first make your own key and enrol it the way step 6 enrolled the kernel's
+certificate:
+
+```bash
+cat /sys/class/dmi/id/board_name   # AXB35-02; on any other board, stop
+sudo apt install build-essential linux-headers-7.2.7+rex-amd64
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=my module key/" -keyout MOK.priv -outform DER -out MOK.der
+sudo mokutil --import MOK.der      # restart and enrol it at the blue MOK screen, as in step 6
+```
+
+Keep `MOK.priv` private: your kernel will load any module it signs. Then, in the driver's folder, build, sign and load
+it, and turn boost on:
+
+```bash
+make
+/usr/src/linux-headers-$(uname -r)/scripts/sign-file sha256 MOK.priv MOK.der ec_su_axb35.ko
+sudo install -D -m 644 ec_su_axb35.ko /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
+sudo insmod /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
+echo 1 | sudo tee /sys/class/ec_su_axb35/apu/boost
+cat /sys/class/ec_su_axb35/fan1/rpm /sys/class/ec_su_axb35/fan2/rpm   # about 4,500 under load
+```
+
+To have it at every start, a small service loads the driver and turns boost on (`ExecStop` unloads it, which hands
+the fans back):
+
+```bash
+sudo tee /etc/systemd/system/m5-fans.service >/dev/null <<'EOF'
+[Unit]
+Description=M5 fans: the EC driver with boost
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/insmod /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
+ExecStart=/bin/sh -c 'echo 1 > /sys/class/ec_su_axb35/apu/boost'
+ExecStop=/sbin/rmmod ec_su_axb35
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable m5-fans.service
+```
+
+The fans are louder: about 4,500 rpm under load, and 50% even when idle. The driver writes to the EC; a register that
+other EC firmware uses differently could do something else, so use it only on the AXB35-02 board.
 
 ## The USB4 links
 
@@ -231,8 +331,8 @@ shows the speed of each link.
 
 **Gen 3 alone doesn't move more data.** A single TCP stream stayed at about 9 Gb/s per cable (19 Gb/s on both) at either
 speed. AMD's firmware has a host-to-host setting that lifts this ("USB4 H2H Enhancement"); it is off in our M5s' BIOS
-and not shown in its menus. We turned it on from Linux as an experiment, which needs a kernel module signed with your
-own Secure Boot key, so we don't give steps for it here. With it, one cable carried 30 Gb/s and both 51 Gb/s.
+and not shown in its menus. We turn it on from Linux with a small kernel module (optional and advanced:
+[The host-to-host setting](#optional-the-host-to-host-setting)). With it, one cable carried 30 Gb/s and both 51 Gb/s.
 
 **What 2.7 times the bandwidth did to StrixFold** (same build and settings, stock power, Gen 2 links before, Gen 3 with
 the host-to-host setting after):
@@ -262,6 +362,46 @@ That isn't the cable's bandwidth: one cable still carries about 30 Gb/s. Each ca
 and one thread moves about 1.6 GB/s; with two cables the 16 KiB stripe also splits the drafting's gathers between them. (These two
 columns are a later build than the tables above, which is why the decode numbers are higher.)
 
+### Keep the USB4 controllers awake
+
+Linux lets idle USB4 controllers and routers sleep. On one of our M5s that meant it didn't notice its partner coming
+back after the partner restarted, and the link stayed down until this box was restarted too. We now keep them awake on
+both boxes, at every start (the service in the next section does this, or run these lines from a boot script of your
+own):
+
+```bash
+for f in /sys/bus/pci/drivers/thunderbolt/0000:*/power/control /sys/bus/thunderbolt/devices/[0-9]-0/power/control; do
+  echo on | sudo tee "$f" >/dev/null
+done
+```
+
+### Optional: the host-to-host setting
+
+This is advanced and optional. With the links at Gen 3, it lifted one TCP stream (iperf3) from 8.8 to 30.2 Gb/s per
+cable, and both cables together from 19 to 51.4 Gb/s. For StrixFold that was +1–2% decode and +6% prompt reading (the
+table above): decode is limited by latency, not bandwidth.
+
+Bosgame's BIOS 1.10 (4 November 2026) carries the setting (`FchHNUsb4H2HEnhanceEnable` in AMD's code); we haven't
+installed it. On our BIOS, a small kernel module sends the message BIOS 1.10 sends at start-up: SMU message `0x2C` (USB
+config update), once for each of the two USB4 routers. The routers read it only while they start, so applying it
+means:
+
+1. stop the model on the pair;
+2. unload `thunderbolt_net` and `thunderbolt`;
+3. load the module (it sends the message; unload it again straight away);
+4. reset both USB4 controllers through ACPI (`0000:c5:00.5` and `0000:c5:00.6` on the M5);
+5. load the drivers back. The cables drop for about 10–20 s.
+
+A restart loses it, so it has to be applied again at every start. The module's source, a script that does these steps
+(it runs only on an AXB35-02 board and only loads a module whose SHA-256 you've pinned) and a service that applies it at
+boot are in [tools/m5-usb4/](../tools/m5-usb4/README.md), with build, signing and install steps.
+
+**The risk.** The module talks to the chip's system management unit (SMU) through the mailbox the BIOS uses. It sends a
+test message first and stops if the answer isn't the expected one, but a wrong message to the SMU can hang the box
+until a power cycle. On another board, or another BIOS, the router numbers it uses may be wrong. Under full load the
+faster link also drops a few packets (the `thunderbolt` interfaces' RX missed counter rose by about 1.2% of packets in
+iperf3, with TCP retransmits). We use it on our own M5s; if you'd rather not, the links work without it.
+
 ## If something goes wrong
 
 - **The box doesn't see the USB stick:** Fast Boot is still on, or the stick is in a front port; try a rear USB-A port.
@@ -271,5 +411,8 @@ columns are a later build than the tables above, which is why the decode numbers
   `sudo update-grub` again and restart.
 - **The USB4 links show 10 Gb/s (Gen 2):** unplug both ends of each cable, wait about ten seconds, plug them back in
   ([The USB4 links](#the-usb4-links)). It is slower but works.
+- **The GPU sits at 85 °C or more under load:** the stock fan curve; see [Cooling](#cooling).
+- **A box doesn't see its partner after the partner restarts:** keep the USB4 controllers awake
+  ([Keep the USB4 controllers awake](#keep-the-usb4-controllers-awake)), or restart this box too.
 - **"bad shim signature" or the kernel won't start:** the certificate isn't enrolled. In the GRUB menu choose
   **Advanced options** and the Debian kernel, then repeat step 6.
