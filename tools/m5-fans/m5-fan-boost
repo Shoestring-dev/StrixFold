@@ -1,0 +1,28 @@
+#!/bin/bash
+# m5-fan-boost: the Bosgame M5's two CPU fans on a steeper curve, through the EC driver's duty override
+# (cmetz/ec-su_axb35-linux with fanX/duty). From the EC's temperature, once a second: below 45 °C 50%, below 50 °C 60%,
+# below 55 °C 70%, below 60 °C 85%, below 65 °C 95%, else (or unreadable) 100%. The duty is written again every 5 s,
+# since the firmware can take a fan back. On exit both fans go back to the firmware. Run as root (m5-fans.service).
+set -u
+S=${M5_EC_SYSFS:-/sys/class/ec_su_axb35}
+BOARD=${M5_BOARD_FILE:-/sys/class/dmi/id/board_name}
+[ "$(cat "$BOARD" 2>/dev/null)" = "AXB35-02" ] || { echo "m5-fan-boost: not an AXB35-02 board" >&2; exit 2; }
+[ -w "$S/fan1/duty" ] && [ -w "$S/fan2/duty" ] || { echo "m5-fan-boost: the EC driver with fanX/duty isn't loaded" >&2; exit 2; }
+back() { echo auto > "$S/fan1/duty"; echo auto > "$S/fan2/duty"; exit 0; }
+trap back INT TERM
+last=-1
+n=0
+while :; do
+  t=$(cat "$S/temp1/temp" 2>/dev/null)
+  if [[ "$t" =~ ^[0-9]+$ ]]; then
+    if [ "$t" -lt 45 ]; then d=50; elif [ "$t" -lt 50 ]; then d=60; elif [ "$t" -lt 55 ]; then d=70
+    elif [ "$t" -lt 60 ]; then d=85; elif [ "$t" -lt 65 ]; then d=95; else d=100; fi
+  else
+    d=100
+  fi
+  n=$((n + 1))
+  if [ "$d" != "$last" ] || [ "$n" -ge 5 ]; then
+    echo "$d" > "$S/fan1/duty"; echo "$d" > "$S/fan2/duty"; last=$d; n=0
+  fi
+  sleep 1
+done

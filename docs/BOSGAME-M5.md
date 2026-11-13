@@ -254,22 +254,23 @@ so every prompt was read cold. Output is the pair's total; the other columns are
 **How boost works.** The M5 is built on Sixunited's AXB35-02 board, with an ITE IT5570 EC. Besides the curve, the EC
 has a duty override for each CPU fan: register `0x33` for fan 1 and `0x34` for fan 2. Writing `0x80` plus a percentage
 sets that fan's duty; writing `0x00` hands the fan back to the firmware. These registers were found in the board's ACPI
-tables by [nathanmarlor/strix-halo-fan-control](https://github.com/nathanmarlor/strix-halo-fan-control). We added
-them to the community EC driver [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux) (from its
-commit `f62c2c2`):
+tables by [nathanmarlor/strix-halo-fan-control](https://github.com/nathanmarlor/strix-halo-fan-control).
 
-- `/sys/class/ec_su_axb35/fan1/duty` and `fan2/duty`: `auto`, or 0 to 100.
-- `/sys/class/ec_su_axb35/apu/boost`: `1` sets both fans every second from the EC's temperature: below 45 °C 50%,
-  below 50 °C 60%, below 55 °C 70%, below 60 °C 85%, below 65 °C 95%, and 100% above that or when the temperature
-  can't be read. `0`, or unloading the driver, hands both fans back to the firmware. Fan 3, the system fan, is left
-  to the firmware.
+- **The driver:** our change to the community EC driver
+  [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux) adds `/sys/class/ec_su_axb35/fan1/duty` and
+  `fan2/duty`: `auto`, or 0 to 100. It's offered upstream as
+  [cmetz/ec-su_axb35-linux#40](https://github.com/cmetz/ec-su_axb35-linux/pull/40); until it's merged, build the PR's
+  branch.
+- **The curve:** [tools/m5-fans/m5-fan-boost](../tools/m5-fans/m5-fan-boost) sets both fans once a second from the EC's
+  temperature: below 45 °C 50%, below 50 °C 60%, below 55 °C 70%, below 60 °C 85%, below 65 °C 95%, and 100% above
+  that or when the temperature can't be read. It writes the duty again every 5 s, since the firmware can take a fan
+  back, and hands both fans back to the firmware when it stops. Fan 3, the system fan, is left to the firmware. (Our
+  runs above used the same curve run inside the driver; the script does the same from user space.)
 
-We've offered this change to the driver's author; look for it in
-[cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux). If you'd rather not build a module,
-nathanmarlor's script drives the same registers from user space, off the GPU and CPU temperatures. We haven't measured
-it.
+If you'd rather not build a module at all, nathanmarlor's script drives the same registers from user space, off the GPU
+and CPU temperatures. We haven't measured it.
 
-**Setting it up**, with a copy of the driver that has the change. With Secure Boot on, the kernel loads the module only
+**Setting it up**, with the driver from #40. With Secure Boot on, the kernel loads the module only
 if it is signed with a key it trusts, so first make your own key and enrol it the way step 6 enrolled the kernel's
 certificate:
 
@@ -288,30 +289,16 @@ make
 /usr/src/linux-headers-$(uname -r)/scripts/sign-file sha256 MOK.priv MOK.der ec_su_axb35.ko
 sudo install -D -m 644 ec_su_axb35.ko /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
 sudo insmod /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
-echo 1 | sudo tee /sys/class/ec_su_axb35/apu/boost
-cat /sys/class/ec_su_axb35/fan1/rpm /sys/class/ec_su_axb35/fan2/rpm   # about 4,500 under load
+cat /sys/class/ec_su_axb35/fan1/duty   # "auto": the driver has the duty override
 ```
 
-To have it at every start, a small service loads the driver and turns boost on (`ExecStop` unloads it, which hands
-the fans back):
+Then the curve, from this repository, as a service that loads the driver and runs the script at every start:
 
 ```bash
-sudo tee /etc/systemd/system/m5-fans.service >/dev/null <<'EOF'
-[Unit]
-Description=M5 fans: the EC driver with boost
-After=multi-user.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/sbin/insmod /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
-ExecStart=/bin/sh -c 'echo 1 > /sys/class/ec_su_axb35/apu/boost'
-ExecStop=/sbin/rmmod ec_su_axb35
-
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo systemctl enable m5-fans.service
+sudo install -m 755 tools/m5-fans/m5-fan-boost /usr/local/sbin/m5-fan-boost
+sudo install -m 644 tools/m5-fans/m5-fans.service /etc/systemd/system/m5-fans.service
+sudo systemctl enable --now m5-fans.service
+cat /sys/class/ec_su_axb35/fan1/rpm /sys/class/ec_su_axb35/fan2/rpm   # about 4,500 under load
 ```
 
 The fans are louder: about 4,500 rpm under load, and 50% even when idle. The driver writes to the EC; a register that

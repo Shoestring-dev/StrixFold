@@ -128,7 +128,11 @@ on pair A (1,379 requests) and 23.5 on pair B (1,539).
 
 **A cold read holds up the whole pair.** A prompt is read whole before the pair's next decode step, so while one request
 reads a long prompt that isn't cached, the other requests on the pair wait. In a busy five minutes on 13 November, these
-reads took 47% of an M5 pair's time. A 24K-token read took about 25 s, and an agent whose steps kept landing in such
-reads averaged about 3 tok/s. How a harness keeps its prompts cached: [api.md](api.md#keeping-the-prompt-cache).
+reads took 47% of an M5 pair's time. A 24K-token read took about 25 s, and an agent's steps that landed in such
+reads decoded at about 3 tok/s. How a harness keeps its prompts cached: [api.md](api.md#keeping-the-prompt-cache).
+
+**After the harness kept its prompts cached** (a six-agent run on the afternoon of 13 November, following
+[api.md](api.md#keeping-the-prompt-cache)): cold reads took 6–7% of each M5 pair's time instead of 47%, and requests
+sharing an M5 pair decoded at a median of 27.3 and 27.6 tok/s each, against 21.2 and 23.5 before.
 
 The older, more detailed engineering results (19 Oct, per-category tables) are in `tools/dsv41-hip/RESULTS.md`.

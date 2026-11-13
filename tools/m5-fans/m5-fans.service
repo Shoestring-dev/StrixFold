@@ -1,0 +1,11 @@
+[Unit]
+Description=M5 fans: a steeper curve through the EC driver's duty override
+After=multi-user.target
+
+[Service]
+ExecStartPre=-/sbin/insmod /usr/local/lib/ec_su_axb35/ec_su_axb35.ko
+ExecStart=/usr/local/sbin/m5-fan-boost
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -361,7 +361,7 @@ To keep the cache:
 What a miss costs, from real agent work ([RESULTS.md](RESULTS.md#real-agent-work)): an uncached prompt reads at about
 1,100–1,250 tokens a second. On the Ryzen AI Halo pair, a 131K-token conversation read from the start took 108 s. On a
 Bosgame M5 pair, a 24K-token re-read took about 25 s. A prompt is read whole before the pair's next decode step, so the
-other requests on the pair wait for it: an agent whose steps kept landing in such re-reads averaged about 3 tok/s.
+other requests on the pair wait for it: an agent's steps that landed in such re-reads decoded at about 3 tok/s.
 
 ## Metrics
 
