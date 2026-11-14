@@ -265,6 +265,7 @@ pub const Chunk = struct {
     sh_g: u64 = 0,
     sh_u: u64 = 0,
     sh_h: u64 = 0,
+    sh_y: u64 = 0, // an edited shared down's rows before their edit (fp32 [cap, D]; zero when no block is edited)
     pm: u64, // fp32 [cap, D]: the MoE partial
     gm: u64, // fp32 [world, cap, D]: its gather (the pending post)
     xs: exl3_experts.Scratch,
@@ -372,6 +373,7 @@ pub const Chunk = struct {
         ch.sh_g = 0;
         ch.sh_u = 0;
         ch.sh_h = 0;
+        ch.sh_y = 0;
         for (e.w.layers) |lay| {
             const sh = lay.shared orelse continue;
             ch.pick_r = try a.take(cap * (sl - 1) * 4);
@@ -381,6 +383,10 @@ pub const Chunk = struct {
             ch.sh_h = try a.take(cap * sh.w1.n * 2);
             break;
         }
+        for (e.w.layers) |lay| if (lay.shared) |sh| if (sh.edit != null) {
+            ch.sh_y = try a.take(cap * d * 4);
+            break;
+        };
         ch.pick_vl = try a.take(cap * sl * 4);
         ch.wts_vl = try a.take(cap * sl * 4);
         ch.pm = try a.take(cap * d * 4);
@@ -472,6 +478,7 @@ pub const Chunk = struct {
             if (lay.shared) |sh| {
                 ls[13] = sh.w1;
                 ls[14] = sh.w3;
+                ls[15] = sh.w2; // an edited block's EXL3 down (a dense one is skipped below)
             }
             for (ls) |ol| {
                 const l = ol orelse continue;
@@ -554,6 +561,7 @@ fn layerLinears(e: *const Engine, ch: *Chunk, a: *Arena, lay: weights.Layer, max
         max_gz.* = @max(max_gz.*, exl3_linear.zFloats(&g, 128));
         ls[13] = sh.w1;
         ls[14] = sh.w3;
+        ls[15] = sh.w2; // an edited block's EXL3 down (addLinear skips a dense one)
     }
     for (ls) |ol| {
         const l = ol orelse continue;
@@ -937,6 +945,8 @@ pub fn attention(e: *const Engine, ch: *Chunk, cs: *const Caches, sh: *Shared, l
     }
     if (two2d(e)) |t| return t.woB(e, ch, lay); // 2D: the column partner's groups first, then this pair's columns
     try mm(e, ch, lay.wo_b, ch.u, uw, ch.attnOut(e), .fp32, c.hidden);
+    // an edited wo_b (edit.zig): this rank's partial rows edited in place, before the gather sums them
+    if (lay.wo_b_edit) |ed| try dense.edit(e.dk orelse return error.NoDenseKernels, e.s, ed, ch.attnOut(e), c.hidden, ch.attnOut(e), c.hidden, c.hidden, ch.n, false);
 }
 
 /// kv_source_update of a kv-source layer on the chunk (no earlier pending row: a chunk starting on a group boundary):
@@ -1160,7 +1170,7 @@ pub fn moe(e: *const Engine, ch: *Chunk, li: usize) !void {
         try exl3_experts.prompt(e.ex, e.s, lay.experts, xs, ch.x, d, pick, wts, ch.moeOut(e), n, c.swiglu_limit);
         if (pfHistOn()) try pfHist(e, ch, li, lay.experts.count);
     }
-    if (lay.shared) |sh| try sharedExpert(e, ch, sh, ch.x, n, .{ .g = ch.sh_g, .u = ch.sh_u, .h = ch.sh_h }, ch.moeOut(e), false);
+    if (lay.shared) |sh| try sharedExpert(e, ch, sh, ch.x, n, .{ .g = ch.sh_g, .u = ch.sh_u, .h = ch.sh_h, .y = ch.sh_y }, ch.moeOut(e), false);
 }
 
 /// TF_DS_PF_HIST=1 (debug: synchronizes after every prompt MoE, so never in a timed run): each prompt chunk's routed
@@ -1192,12 +1202,12 @@ pub fn compactSlots(e: *const Engine, pick: u64, wts: u64, pick_r: u64, wts_r: u
 }
 
 /// A shared expert's scratch: gate and up (fp32 [rows, I]) and their activation (bf16 [rows, I]).
-pub const SharedBufs = struct { g: u64, u: u64, h: u64 };
+pub const SharedBufs = struct { g: u64, u: u64, h: u64, y: u64 = 0 }; // y: an edited down's rows, fp32 [rows, D]
 
-/// A block's shared expert run alone (weights.Layer.shared: its down dense) on n rows of x (bf16 [n, D]), added to out
-/// (fp32 [n, D], the routed slots' sum: the served sum adds the shared slot, weight 1, last): gate and up through the
-/// EXL3 group (1..128 rows) or the prompt GEMM, the activation in fp32 then bf16 (dense.hip swiglu), the down by the
-/// row-invariant GEMV in a decode / verify window (`window`), else hipBLAS.
+/// A block's shared expert run alone (weights.Layer.shared: its down dense, or EXL3 and edited) on n rows of x (bf16
+/// [n, D]), added to out (fp32 [n, D], the routed slots' sum: the served sum adds the shared slot, weight 1, last):
+/// gate and up through the EXL3 group (1..128 rows) or the prompt GEMM, the activation in fp32 then bf16 (swiglu), a
+/// dense down by the row-invariant GEMV in a window, else hipBLAS; an EXL3 down as gate / up, then its edit (edit.zig).
 pub fn sharedExpert(e: *const Engine, ch: *const Chunk, sh: weights.SharedFfn, x: u64, n: usize, b: SharedBufs, out: u64, window: bool) !void {
     const d = e.c.hidden;
     const iw: usize = sh.w1.n;
@@ -1209,6 +1219,14 @@ pub fn sharedExpert(e: *const Engine, ch: *const Chunk, sh: weights.SharedFfn, x
         try mm(e, ch, sh.w3, x, d, b.u, .fp32, iw);
     }
     try dense.swiglu(dk, e.s, b.g, b.u, iw, b.h, iw, n, iw, e.c.swiglu_limit);
+    if (sh.w2.dense == 0) {
+        const ed = sh.edit orelse return error.SharedDownNotEdited;
+        if (b.y == 0) return error.NoEditBuffer;
+        if (n <= 128) {
+            try grouped(e, ch, n, &.{sh.w2}, &.{b.h}, &.{iw}, &.{b.y}, &.{d}, &.{.f32});
+        } else try mm(e, ch, sh.w2, b.h, iw, b.y, .fp32, d);
+        return dense.edit(dk, e.s, ed, b.y, d, out, d, d, n, true);
+    }
     if (window) return dense.gemv(dk, e.s, sh.w2, b.h, iw, out, d, n, true);
     try dense.gemm(e.blas, sh.w2, b.h, iw, out, d, n, true);
 }

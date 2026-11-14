@@ -24,6 +24,8 @@ serve_load() {
   VISION_DIR=${VISION_DIR:-} VISION_BIAS_SHA256=${VISION_BIAS_SHA256:-} TEST_FAULT=${TEST_FAULT:-} MAX_IMAGES=${MAX_IMAGES:-}
   [ -z "$MAX_IMAGES" ] || [[ $MAX_IMAGES =~ ^[1-9][0-9]*$ ]] || die "MAX_IMAGES must be an image count from 1 (empty: the server's 32), not $MAX_IMAGES"
   [ -n "$VISION_DIR" ] && eval "VISION_DIR=\"$VISION_DIR\""
+  EDIT=${EDIT:-} EDIT_SHA256=${EDIT_SHA256:-}
+  [ -n "$EDIT" ] && eval "EDIT=\"$EDIT\""
   case $MODALITIES in text|text_image) ;; *) die "MODALITIES must be text or text_image, not $MODALITIES";; esac
   BIN=$DEPLOY_DIR/native-hip/bin
   KIT=$DEPLOY_DIR/$KIT_SUBDIR
@@ -88,6 +90,21 @@ serve_check() {
       [ -n "$VISION_DIR" ] && [ -f "$VISION_DIR/SHA256SUMS" ] || die "rank 0: MODALITIES=text_image needs VISION_DIR, the tower's sidecar with its SHA256SUMS (tools/dsv41-zig/kit/make_vision_sidecar.py); now '$VISION_DIR'"
       (cd "$VISION_DIR" && sha256sum --quiet -c SHA256SUMS) >&2 || die "rank 0: the vision sidecar $VISION_DIR does not match its SHA256SUMS"
     fi
+  fi
+  if [ -n "$EDIT" ]; then
+    [ -f "$EDIT" ] || die "rank $RANK: missing the edit $EDIT (tools/dsv41-hip/make_edit.py)"
+    [ -n "$EDIT_SHA256" ] || die "rank $RANK: EDIT needs EDIT_SHA256 (the edit file's sha256, which make_edit.py prints)"
+    sum=$(sha256sum "$EDIT" | cut -d' ' -f1)
+    [ "$sum" = "$EDIT_SHA256" ] || die "rank $RANK: $EDIT is $sum, the config pins $EDIT_SHA256"
+    # the pack the edit was made from (its metadata's base, REPO@COMMIT) is the bundle's checkpoint
+    python3 - "$EDIT" "$BUNDLE/inputs_manifest.json" <<'PY' || die "rank $RANK: $EDIT was made for another pack than $BUNDLE's"
+import json, struct, sys
+with open(sys.argv[1], "rb") as f:
+    meta = json.loads(f.read(struct.unpack("<Q", f.read(8))[0])).get("__metadata__") or {}
+dc = json.load(open(sys.argv[2])).get("declared_checkpoint") or {}
+repo, _, rev = str(meta.get("base", "")).partition("@")
+sys.exit(0 if (repo, rev) == (dc.get("repository"), dc.get("revision")) else 1)
+PY
   fi
   sum=$(sha256sum "$BUNDLE/inputs_manifest.json" | cut -d' ' -f1)
   [ "$sum" = "$BUNDLE_SHA256" ] || die "rank $RANK: inputs_manifest.json is $sum, the config pins $BUNDLE_SHA256"
@@ -166,6 +183,7 @@ serve_env() {
   fi
   [ "$MODALITIES" = text_image ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_DS_VISION_DIR="$VISION_DIR")
   [ -n "$TEST_FAULT" ] && SERVE_ENV+=(TF_DS_TEST_FAULT="$TEST_FAULT")
+  [ -n "$EDIT" ] && SERVE_ENV+=(TF_DS_EDIT="$EDIT")
   # the launch's identity in the peers' handshake (U46): the deployed commit, the bundle's and serve.conf's hashes
   local commit
   commit=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["commit"])' "$DEPLOY_DIR/DEPLOY.json")

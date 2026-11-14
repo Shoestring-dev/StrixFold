@@ -56,6 +56,7 @@ test {
     _ = @import("ops.zig");
     _ = @import("exact.zig");
     _ = @import("weights.zig");
+    _ = @import("edit.zig");
     _ = @import("draft.zig");
     _ = @import("round.zig");
     _ = @import("prompt.zig");

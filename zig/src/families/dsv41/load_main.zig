@@ -43,11 +43,11 @@ pub fn main(init: std.process.Init) !u8 {
         defer ix.deinit();
         var file = try dir.openFile(io, name, .{});
         defer file.close(io);
-        break :blk try dsv41.weights.load(init.gpa, &driver, .{ .cache = .{ .file = file, .index = &ix, .io = io } }, cfg, .{ .rank = rank, .world = world }, dspark);
+        break :blk try dsv41.weights.load(init.gpa, &driver, .{ .cache = .{ .file = file, .index = &ix, .io = io } }, cfg, .{ .rank = rank, .world = world }, dspark, null);
     } else blk: {
         var sh = try dsv41.checkpoint.Shards.open(init.gpa, io, args[1]);
         defer sh.close(io);
-        break :blk try dsv41.weights.load(init.gpa, &driver, .{ .shards = &sh }, cfg, .{ .rank = rank, .world = world }, dspark);
+        break :blk try dsv41.weights.load(init.gpa, &driver, .{ .shards = &sh }, cfg, .{ .rank = rank, .world = world }, dspark, null);
     };
     defer w.deinit();
     const secs = @as(f64, @floatFromInt(t0.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds)) / 1e9;

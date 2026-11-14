@@ -235,7 +235,8 @@
    "kit": "dsv41",
    "kernels": [
     {"id": "dense.gemv", "symbol": "tf_ds_dense_gemv", "block": [256, 1, 1], "numerics": "dense_bf16_gemv_row_invariant"},
-    {"id": "dense.swiglu", "symbol": "tf_ds_dense_swiglu", "block": [256, 1, 1], "numerics": "swiglu_bf16"}
+    {"id": "dense.swiglu", "symbol": "tf_ds_dense_swiglu", "block": [256, 1, 1], "numerics": "swiglu_bf16"},
+    {"id": "dense.edit", "symbol": "tf_ds_dense_edit", "block": [256, 1, 1], "numerics": "rank1_edit_fp32_row_invariant"}
    ]
   },
   {

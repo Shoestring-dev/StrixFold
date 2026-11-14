@@ -65,6 +65,7 @@ pub const params = struct {
     // dense.zig (p-par, dense.hip)
     pub const DenseGemv = extern struct { w: u64, x: u64, y: u64, k: i32, n: i32, rows: i32, ldx: i64, ldy: i64, accumulate: i32 };
     pub const DenseSwiglu = extern struct { g: u64, u: u64, ld: i64, h: u64, ldh: i64, rows: i32, width: i32, limit: f32 };
+    pub const DenseEdit = extern struct { r: u64, g: u64, alpha: f32, y: u64, ldy: i64, out: u64, ldo: i64, n: i32, accumulate: i32 };
     pub const GroupPlace = extern struct { pick: u64, counts: u64, ids: u64, count: u64, members: u64, p: i32, slots: i32, e: i32, maxm: i32 };
     pub const WorkList = extern struct { counts: u64, ids: u64, count: u64, maxu: i32, work_gu: u64, rows_gu: i32, n_gu: i32, work_d: u64, rows_d: i32, n_d: i32, skip_e: i32 };
     pub const ExpertsRotIn = extern struct { x: u64, x_stride: i32, pick: u64, suh_g: u64, suh_u: u64, xg: u64, xu: u64, d: i32, slots: i32, e: i32 };
@@ -118,7 +119,7 @@ pub fn dense(kit: *const gpu.Kit) !?dense_mod.Kernels {
     const gemv = try optional(kit, "dense.gemv", params.DenseGemv);
     const swiglu = try optional(kit, "dense.swiglu", params.DenseSwiglu);
     if (gemv == null and swiglu == null) return null;
-    return .{ .gemv = gemv orelse return error.MissingKernel, .swiglu = swiglu orelse return error.MissingKernel };
+    return .{ .gemv = gemv orelse return error.MissingKernel, .swiglu = swiglu orelse return error.MissingKernel, .edit = try optional(kit, "dense.edit", params.DenseEdit) };
 }
 
 /// vision.hip's kernels (the tower, for text_image): null when the kit has none of them, an error when only some.
@@ -305,6 +306,7 @@ const Coverage = struct {
         if (lay.shared) |sh| {
             c.dense(sh.w1, prompt);
             c.dense(sh.w3, prompt);
+            c.dense(sh.w2, prompt); // an edited block's EXL3 down (a dense one returns at once)
         }
         c.experts(lay.experts);
     }
@@ -533,10 +535,13 @@ test "every launcher packs exactly the parameter list its kernel is bound with" 
     try expectPacked(mk.race(t, ax.markov_race.?, .{ .lg = 16, .tok = 32, .slot = 48, .cache = 64, .stage = 80, .keys = 96, .send = 112, .l_row = 5 * 64640, .t_stride = 6, .c_row = 64640, .s_row = 64640, .n_rows = 4, .n_cols = 64640, .id0 = 64640, .step = 2 }), .{.{ ax.markov_race.?, p.AuxMarkovRace }});
 
     // dense.hip, on a dense pack's shapes (wo_b's rank slice [5120, 4096]; the shared expert's 1152)
-    const dk: dense_mod.Kernels = .{ .gemv = fake(&n), .swiglu = fake(&n) };
+    const dk: dense_mod.Kernels = .{ .gemv = fake(&n), .swiglu = fake(&n), .edit = fake(&n) };
     const dl: @import("weights.zig").Linear = .{ .words = 0, .suh = 0, .svh = 0, .k = 4096, .n = 5120, .k2 = 0, .dense = 0x10000 };
     try expectPacked(dense_mod.gemv(&dk, s, dl, 0x1000, 4096, 0x2000, 5120, 6, true), .{.{ dk.gemv, p.DenseGemv }});
     try expectPacked(dense_mod.swiglu(&dk, s, 0x1000, 0x2000, 1152, 0x3000, 1152, 6, 1152, 10.0), .{.{ dk.swiglu, p.DenseSwiglu }});
+    // the edit (edit.zig) of a block's wo_b output in place, and of its shared down's added to the MoE sum
+    try expectPacked(dense_mod.edit(&dk, s, .{ .r = 0x1000, .g = 0x2000, .alpha = 6.0 }, 0x3000, 5120, 0x3000, 5120, 5120, 6, false), .{.{ dk.edit.?, p.DenseEdit }});
+    try expectPacked(dense_mod.edit(&dk, s, .{ .r = 0x1000, .g = 0x2000, .alpha = 6.0 }, 0x3000, 5120, 0x4000, 5120, 5120, 6, true), .{.{ dk.edit.?, p.DenseEdit }});
 
     // vision.hip, on a 1920x1080 picture's shapes (8418 patches, 968 cells) through vit_hip.zig's launchers
     const vk: vit_hip.Kernels = .{ .linear = fake(&n), .rms_norm = fake(&n), .attention = fake(&n), .rope = fake(&n), .add = fake(&n), .silu_mul = fake(&n), .gelu = fake(&n), .unfold = fake(&n), .span = fake(&n) };

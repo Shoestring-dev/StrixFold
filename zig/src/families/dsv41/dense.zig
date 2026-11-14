@@ -9,7 +9,7 @@ const weights = @import("weights.zig");
 const blas = @import("blas.zig");
 
 /// dense.hip's kernels (hip_load.zig binds them; absent from a kit without the dense group).
-pub const Kernels = struct { gemv: gpu.Function, swiglu: gpu.Function };
+pub const Kernels = struct { gemv: gpu.Function, swiglu: gpu.Function, edit: ?gpu.Function = null }; // edit: newer kits
 
 /// The output columns a GEMV block owns (dense.hip: 8 waves of 4).
 pub const block_cols = 32;
@@ -56,4 +56,22 @@ pub fn swiglu(k: *const Kernels, s: gpu.Stream, g: u64, u: u64, ld: usize, h: u6
     a.add(limit);
     const total = rows * width;
     try gpu.launch.launch(k.swiglu, .{ .grid = .{ .x = @intCast(@min((total + 255) / 256, 4096)) }, .block = .{ .x = 256 } }, s, &a);
+}
+
+/// out (+)= g * (y - alpha r (r . y)) for each fp32 row of y (edit.zig); out may be y when not accumulating.
+pub fn edit(k: *const Kernels, s: gpu.Stream, ed: weights.Edit, y: u64, ldy: usize, out: u64, ldo: usize, n: usize, rows: usize, accumulate: bool) !void {
+    const f = k.edit orelse return error.NoEditKernel;
+    if (rows == 0) return;
+    if (ldy < n or ldo < n) return error.UnsupportedShape;
+    var a: gpu.Args = .{};
+    a.add(ed.r);
+    a.add(ed.g);
+    a.add(ed.alpha);
+    a.add(y);
+    a.add(@as(i64, @intCast(ldy)));
+    a.add(out);
+    a.add(@as(i64, @intCast(ldo)));
+    a.add(@as(i32, @intCast(n)));
+    a.add(@as(i32, @intFromBool(accumulate)));
+    try gpu.launch.launch(f, .{ .grid = .{ .x = @intCast(rows) }, .block = .{ .x = 256 } }, s, &a);
 }

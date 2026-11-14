@@ -15,7 +15,14 @@
  * tf_ds_dense_swiglu: the shared expert's activation between its EXL3 gate / up (fp32) and its dense down: the
  * reference's Expert.forward (DeepSeek inference/model.py): up clamped to [-limit, limit], gate clamped from above,
  * silu(gate) * up in fp32 (silu = g / (1 + exp(-g))), then .to(bf16) (round to nearest even) for w2. A NaN stays a
- * NaN through the clamps, as torch.clamp keeps it. */
+ * NaN through the clamps, as torch.clamp keeps it.
+ *
+ * tf_ds_dense_edit: a rank-1 edit of a projection's fp32 output rows (edit.zig: an abliterated pack's changed wo_b and
+ * shared w2 expressed on the EXL3 pack's own weights), out = g * (y - alpha * r * (r . y)), or out + that (the shared
+ * expert's down, added after the routed slots). Row invariance: thread t folds elements t, t + 256, ... of r * y in
+ * order (one fma each), the 32 lanes' partials are summed by xor shuffles 16, 8, 4, 2, 1 and the 8 waves' in wave
+ * order, the same by every thread, so a row's arithmetic depends on n alone; then s = alpha * dot and each element
+ * g * fmaf(-s, r, y). */
 #include <hip/hip_runtime.h>
 #include <hip/hip_bf16.h>
 #include <stdint.h>
@@ -143,5 +150,33 @@ extern "C" __global__ void __launch_bounds__(256) tf_ds_dense_swiglu(const float
         }
         const float s = gv / (1.0f + expf(-gv));
         h[r * ldh + j] = __float2bfloat16(s * uv);
+    }
+}
+
+// out [rows, n] fp32 (rows ldo apart) = (out +) g * (y - alpha * r * (r . y)) of y [rows, n] fp32 (rows ldy apart),
+// r and g fp32 [n]; a block of 256 threads a row (grid rows). out may be y when not accumulating: each thread writes
+// only the elements it reads.
+extern "C" __global__ void __launch_bounds__(256) tf_ds_dense_edit(const float* r, const float* g, float alpha,
+                                                                   const float* y, int64_t ldy, float* out, int64_t ldo,
+                                                                   int32_t n, int32_t accumulate) {
+    __shared__ float part[8];
+    const float* yr = y + int64_t(blockIdx.x) * ldy;
+    float* orow = out + int64_t(blockIdx.x) * ldo;
+    float acc = 0.0f;
+    for (int j = threadIdx.x; j < n; j += 256) acc = fmaf(r[j], yr[j], acc);
+    acc += __shfl_xor(acc, 16);
+    acc += __shfl_xor(acc, 8);
+    acc += __shfl_xor(acc, 4);
+    acc += __shfl_xor(acc, 2);
+    acc += __shfl_xor(acc, 1);
+    if ((threadIdx.x & 31) == 0) part[threadIdx.x >> 5] = acc;
+    __syncthreads();
+    float dot = part[0];
+#pragma unroll
+    for (int w = 1; w < 8; ++w) dot += part[w];
+    const float s = alpha * dot;
+    for (int j = threadIdx.x; j < n; j += 256) {
+        const float v = g[j] * fmaf(-s, r[j], yr[j]);
+        orow[j] = accumulate ? orow[j] + v : v;
     }
 }

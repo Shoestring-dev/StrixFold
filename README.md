@@ -54,6 +54,9 @@ No NVIDIA driver, CUDA or NCCL is used. Text is the default; image input runs on
 [tools/dsv41-hip/ADAPTER.md](tools/dsv41-hip/ADAPTER.md) 8.1). Images can also go through a small local vision model:
 [docs/LOOK-AT-IMAGE.md](docs/LOOK-AT-IMAGE.md).
 
+dealignai's uncensored fine-tune of the same pack runs from the official pack's weights, 22% faster than as published:
+[docs/UNCENSORED.md](docs/UNCENSORED.md).
+
 ## What this fork adds
 
 - An AMD HIP backend for the DeepSeek-V4.1 family. The branch this fork started from had no HIP code; TensorFold's main

@@ -646,7 +646,7 @@ pub fn main(init: std.process.Init) !u8 {
     var cache_file = try cache_dir.openFile(io, cache_name, .{});
     defer cache_file.close(io);
     const sp = try dsv41.prompt2d.split(rank, world); // world 4: the 2D split (prompt2d.zig)
-    var w = try dsv41.weights.load(gpa, &driver, .{ .cache = .{ .file = cache_file, .index = &ix, .io = io } }, cfg, sp, budgets.len > 0);
+    var w = try dsv41.weights.load(gpa, &driver, .{ .cache = .{ .file = cache_file, .index = &ix, .io = io } }, cfg, sp, budgets.len > 0, null);
     defer w.deinit();
     const load_s = @as(f64, @floatFromInt(t0.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds)) / 1e9;
 

@@ -20,6 +20,7 @@ const engram_aio = @import("engram_aio.zig");
 const exl3_prefill = @import("exl3_prefill.zig");
 const exl3_linear = @import("exl3_linear.zig");
 const dense = @import("dense.zig");
+const edit_mod = @import("edit.zig");
 const exl3_experts = @import("exl3_experts.zig");
 const ops_mod = @import("ops.zig");
 const exact = @import("exact.zig");
@@ -142,6 +143,7 @@ pub const Model = struct {
     aux_which: tri_aux.Which = tri_aux.Which.triton, // HIP: TF_DS_AUX, which Triton launches take w-tri's HIP kernels
     aux: tri_aux.Aux = .{}, // their kernels (Engine.t.aux)
     dk: ?dense.Kernels = null, // HIP: dense.hip's kernels, when the kit has them (Engine.dk)
+    edit_id: []const u8 = "", // TF_DS_EDIT's file (edit.zig): its SHA-256's first 16 hex characters, "" when none
     rdma_mod: ?gpu.Module = null, // the RDMA kernels (TP2's ring or world 4's rings)
     ring: ?*prompt.Ring = null,
     set: gpu.aot.Set,
@@ -239,6 +241,7 @@ pub const Model = struct {
         m.aux_which = tri_aux.Which.triton;
         m.aux = .{};
         m.dk = null;
+        m.edit_id = ""; // (m.* is undefined: field defaults do not apply)
         if (std.c.getenv("TF_DS_REPLAY_FLOOR")) |v| prompt.replay_floor = std.mem.eql(u8, std.mem.span(v), "1"); // every rank alike
         m.spans = .empty;
         m.img_buf = null;
@@ -324,7 +327,16 @@ pub const Model = struct {
         m.cache_file = try m.cache_dir.openFile(io, cache_name, .{});
         errdefer m.cache_file.close(io);
         const sp = try fan_mod.split(o.rank, o.world);
-        m.w = try weights.load(gpa, d, .{ .cache = .{ .file = m.cache_file, .index = &m.ix, .io = io } }, c.*, sp, o.drafts);
+        // TF_DS_EDIT: an edit of blocks' wo_b and shared w2 outputs (edit.zig), loaded with the weights; not on 2D
+        var edits: ?edit_mod.File = null;
+        defer if (edits) |*x| x.close(io);
+        if (std.c.getenv("TF_DS_EDIT")) |v| if (std.mem.span(v).len > 0) {
+            if (sp.pair != null) return error.NotPortedYet;
+            edits = try edit_mod.File.open(gpa, io, std.mem.span(v));
+            try edits.?.check(c.layers, c.hidden);
+            m.edit_id = try a.dupe(u8, edits.?.sha256[0..16]);
+        };
+        m.w = try weights.load(gpa, d, .{ .cache = .{ .file = m.cache_file, .index = &m.ix, .io = io } }, c.*, sp, o.drafts, if (edits) |*x| x else null);
         errdefer m.w.deinit();
         if (o.drafts and m.w.dspark == null) return error.NoDrafter;
 
@@ -395,10 +407,21 @@ pub const Model = struct {
         if (o.prefetch and m.ops.l2_prefetch == null) return error.NoL2Prefetch;
         // a checkpoint with dense projections (a fine-tuned pack's wo_b / shared w2) needs dense.hip's kernels: refused
         // here, not at its first round (a CUDA build has none)
-        for (m.w.layers) |lay| if ((lay.wo_b.dense != 0 or lay.shared != null) and m.dk == null) {
+        for (m.w.layers) |lay| if ((lay.wo_b.dense != 0 or (lay.shared != null and lay.shared.?.w2.dense != 0)) and m.dk == null) {
             std.log.err("layer {d} has a dense projection and the kit has no dense.gemv / dense.swiglu", .{lay.idx});
             return error.MissingKernel;
         };
+        // an edited projection (TF_DS_EDIT) needs dense.hip's edit too (a kit built before it has none)
+        var n_edits: usize = 0;
+        for (m.w.layers) |lay| {
+            const edited = lay.wo_b_edit != null or (if (lay.shared) |sh| sh.edit != null else false);
+            n_edits += @as(usize, @intFromBool(lay.wo_b_edit != null)) + @intFromBool(if (lay.shared) |sh| sh.edit != null else false);
+            if (edited and (m.dk == null or m.dk.?.edit == null)) {
+                std.log.err("layer {d} is edited (TF_DS_EDIT) and the kit has no dense.edit", .{lay.idx});
+                return error.MissingKernel;
+            }
+        }
+        if (m.edit_id.len > 0) std.log.info("dsv41: TF_DS_EDIT {s}: {d} projections edited", .{ m.edit_id, n_edits });
 
         // the RoPE tables (the served build's bits: torch CPU pow and polar) for every position a stream reaches
         const half = c.rope_dim / 2;
@@ -613,6 +636,7 @@ pub const Model = struct {
             .conf = launchId("TF_DS_CONF"),
             .strict = strict,
             .disk = o.disk,
+            .edit = m.edit_id,
         });
         return id;
     }
@@ -634,16 +658,17 @@ pub const Model = struct {
         conf: []const u8,
         strict: bool,
         disk: bool, // sf-disk: " disk=1" at the end, only when on (the text is the stock one when off)
+        edit: []const u8 = "", // TF_DS_EDIT's file by its hash: " edit=<16 hex>" at the end, only when set
     };
 
     /// The handshake's plan text (identity), in `buf`.
     pub fn planText(buf: []u8, p: PlanParts) ![]u8 {
         var cb: [32]u8 = undefined;
         const ctx = if (p.context != 0 and p.context != p.pool) try std.fmt.bufPrint(&cb, " context={d}", .{p.context}) else "";
-        return std.fmt.bufPrint(buf, "drafts={} engram={} graphs={} pool={d}{s} streams={d} round_rows={d} chunk_rows={d} replay_floor={} aux={s} {s} engram_rows={} deploy={s} bundle={s} conf={s} kv={s} strict={}{s}", .{
+        return std.fmt.bufPrint(buf, "drafts={} engram={} graphs={} pool={d}{s} streams={d} round_rows={d} chunk_rows={d} replay_floor={} aux={s} {s} engram_rows={} deploy={s} bundle={s} conf={s} kv={s} strict={}{s}{s}{s}", .{
             p.drafts,       p.engram, p.graphs,  p.pool,  ctx, p.streams,  p.round_rows, chunk_rows,
             p.replay_floor, p.aux,    p.gather,  p.engram_rows, p.deploy, p.bundle, p.conf,
-            kv_format,      p.strict, if (p.disk) " disk=1" else "",
+            kv_format,      p.strict, if (p.disk) " disk=1" else "", if (p.edit.len > 0) " edit=" else "", p.edit,
         });
     }
 
@@ -1375,7 +1400,7 @@ test "the handshake names what orders a prompt chunk's gathers: split, zip, chun
     try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=3", try Model.gatherOrder(&b, 0, true, true));
 }
 
-test "the handshake's plan text is the stock one with sf-disk off, and says disk=1 only when on" {
+test "the handshake's plan text is the stock one with sf-disk off, and says disk=1 and edit= only when on" {
     var gb: [128]u8 = undefined;
     const gather = try Model.gatherOrder(&gb, 256, true, false);
     // the stock format, byte for byte (frames= is the protocol number: the disk frames do not change it)
@@ -1394,5 +1419,10 @@ test "the handshake's plan text is the stock one with sf-disk off, and says disk
     p.context = 4096;
     const split = try Model.planText(&buf, p);
     try std.testing.expect(std.mem.indexOf(u8, split, "pool=8192 context=4096 streams=1 ") != null);
+    // an edited launch names its edit file's hash after disk=1, so peers and sf-disk tell it from the unedited pack
+    p.context = 0;
+    p.disk = true;
+    p.edit = "0123456789abcdef";
+    try std.testing.expectEqualStrings(stock ++ " disk=1 edit=0123456789abcdef", try Model.planText(&buf, p));
     try std.testing.expect(!@hasField(Options, "disk") or (Options{ .model_dir = "", .cache_dir = "", .kit_dir = "", .rank = 0, .world = 2, .master = .{ 0, 0, 0, 0 }, .port = 0 }).disk == false);
 }

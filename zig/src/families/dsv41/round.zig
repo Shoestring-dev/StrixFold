@@ -199,6 +199,7 @@ pub const Round = struct {
     sh_g: u64 = 0,
     sh_u: u64 = 0,
     sh_h: u64 = 0,
+    sh_y: u64 = 0, // an edited shared down's rows before their edit (fp32 [R, D]; zero when no block is edited)
     pm: u64, // fp32 [R, D]
     gm: u64, // fp32 [world, R, D]
     // Engram
@@ -340,6 +341,7 @@ pub const Round = struct {
         rd.sh_g = 0;
         rd.sh_u = 0;
         rd.sh_h = 0;
+        rd.sh_y = 0;
         for (w.layers) |lay| {
             const sh = lay.shared orelse continue;
             rd.pick_r = try a.take(R * (e.slots() - 1) * 4);
@@ -349,6 +351,11 @@ pub const Round = struct {
             rd.sh_h = try a.take(R * sh.w1.n * 2);
             break;
         }
+        // an edited down's rows before their edit (prompt.SharedBufs.y)
+        for (w.layers) |lay| if (lay.shared) |sh| if (sh.edit != null) {
+            rd.sh_y = try a.take(R * d * 4);
+            break;
+        };
         rd.e_in = 0;
         rd.ek = 0;
         rd.ekg = 0;
@@ -778,7 +785,7 @@ fn attention(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, 
     var off: usize = 0;
     // a dense wo_b (weights.Linear.dense) reads u as it is: wo_a's epilogue rotates no rows for it
     const dense_wo_b = lay.wo_b.dense != 0;
-    if (dense_wo_b and two2d(e) != null) return error.NotPortedYet;
+    if ((dense_wo_b or lay.wo_b_edit != null) and two2d(e) != null) return error.NotPortedYet;
     for (lay.wo_a[0..lay.groups], 0..) |wo, gi| {
         const rot: ?exl3_linear.RotOut = if (two2d(e)) |tw| round2d.woRot(tw, lay, col) else if (dense_wo_b) null else .{ .suh = lay.wo_b.suh, .xh = rd.xb, .ldr = @intCast(lay.wo_b.k), .off = @intCast(col) };
         calls[gi] = .{ .layer = wo, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = rd.xhwo + off * 2, .y = rd.u + col * 2, .ldy = @intCast(uw), .y_dtype = .bf16, .counters = 0, .rot = rot };
@@ -795,6 +802,8 @@ fn attention(e: *const Engine, rd: *Round, ch: *const Chunk, cs: *const Caches, 
         var cb_call = [_]exl3_linear.Call{.{ .layer = lay.wo_b, .x = 0, .ldx = 0, .x_dtype = .bf16, .xh = rd.xb, .y = rd.attnOut(e), .ldy = @intCast(lay.wo_b.n), .y_dtype = .f32, .counters = 0 }};
         try prompt.groupedRotated(e, ch, R, &cb_call);
     }
+    // an edited wo_b (edit.zig): this rank's partial rows edited in place, before the gather sums them
+    if (lay.wo_b_edit) |ed| try dense.edit(e.dk orelse return error.NoDenseKernels, e.s, ed, rd.attnOut(e), c.hidden, rd.attnOut(e), c.hidden, c.hidden, R, false);
     // the prefetch behind wo_b: the ffn mix's weights, the router, the shared expert's gate
     try rd.prefetch(e, &.{ .{ lay.hc_ffn[0], hcFnBytes(c) }, .{ lay.gate_w, @as(u64, c.experts) * c.hidden * 2 }, lay.experts.shared_gate, lay.experts.shared_up, lay.experts.shared_down }, prefetch_budget / 2);
 }
@@ -817,7 +826,7 @@ fn moe(e: *const Engine, rd: *Round, ch: *const Chunk, li: usize) !void {
         var xsd = ch.xsd;
         xsd.slots = sl - 1;
         try exl3_experts.decode(e.ex, e.s, lay.experts, xsd, rd.x, c.hidden, rd.pick_r, rd.mw_r, rd.moeOut(e), R, c.swiglu_limit);
-        try prompt.sharedExpert(e, ch, sh, rd.x, R, .{ .g = rd.sh_g, .u = rd.sh_u, .h = rd.sh_h }, rd.moeOut(e), true);
+        try prompt.sharedExpert(e, ch, sh, rd.x, R, .{ .g = rd.sh_g, .u = rd.sh_u, .h = rd.sh_h, .y = rd.sh_y }, rd.moeOut(e), true);
     } else if (two2d(e)) |tw| {
         // 2D (round2d.experts, the profile's marks between): gate / up, the intermediate's exchange, down
         try exl3_experts2d.decodeGateUp(e.ex, e.s, lay.experts, ch.xsd, rd.x, c.hidden, rd.pick, rd.mw, rd.pm, R, c.swiglu_limit);

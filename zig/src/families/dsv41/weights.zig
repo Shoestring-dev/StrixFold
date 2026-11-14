@@ -7,6 +7,7 @@ const Config = @import("config.zig").Config;
 const plan = @import("plan.zig");
 const rank_cache = @import("rank_cache.zig");
 const checkpoint = @import("checkpoint.zig");
+const edit_mod = @import("edit.zig");
 const dio = @import("core").direct_io;
 
 /// The largest stretch of the rank cache read whole for one layer's experts.
@@ -21,9 +22,12 @@ const span_piece = 64 << 20;
 /// w2; checkpoint.zig part "dense"): its rows on the device, words / suh / svh / k2 zero; dense.zig runs it.
 pub const Linear = struct { words: u64, suh: u64, svh: u64, k: u32, n: u32, k2: u32, plan_n: u32 = 0, dense: u64 = 0 };
 
-/// A block's shared expert run alone (its w2 dense, so not in the grouped experts' table): gate and up EXL3 by output
-/// columns as the table's entries are split, down the dense slice by input rows.
-pub const SharedFfn = struct { w1: Linear, w3: Linear, w2: Linear };
+/// A block's shared expert run alone (its w2 dense, or EXL3 with an edit of its output: not in the grouped experts'
+/// table): gate and up EXL3 by output columns as the table's entries are split, down by input rows.
+pub const SharedFfn = struct { w1: Linear, w3: Linear, w2: Linear, edit: ?Edit = null };
+
+/// edit.zig's edit of one projection's output rows, on the device: r and g fp32 [D] (dense.zig's edit).
+pub const Edit = struct { r: u64, g: u64, alpha: f32 };
 
 /// A layer's routed experts and its shared expert (the last entry), as exl3_experts.prepare lays them out. On a 2D node
 /// (exl3/experts2d.py prepare) gate / up hold its intermediate blocks (width of the half's down_k) and down its
@@ -73,6 +77,7 @@ pub const Layer = struct {
     wo_a: [4]Linear = undefined, // this rank's groups
     groups: u32 = 4, // wo_a's entries loaded: the rank's groups, its pair's half of them on a 2D node
     wo_b: Linear = undefined, // this rank's groups' input rows (a 2D node: its pair's output columns of them)
+    wo_b_edit: ?Edit = null, // an edit of wo_b's output (edit.zig): on this rank's partial sum, before the gather
     comp_wkv: ?Linear = null,
     comp_wgate: ?Linear = null,
     comp_norm: u64 = 0,
@@ -85,7 +90,7 @@ pub const Layer = struct {
     gate_b: u64 = 0, // [E] f32
     gate_b_vl: u64 = 0, // [E] f32: the routing bias of image-span tokens (the checkpoint's extra gate_bias_vl)
     experts: Experts = undefined, // the routed experts and, unless `shared` is set, the shared one last
-    shared: ?SharedFfn = null, // the shared expert alone (its w2 dense): experts.count is then the routed experts'
+    shared: ?SharedFfn = null, // the shared expert alone (w2 dense or edited): experts.count is the routed experts'
     engram_wkv: ?Linear = null, // this rank's hash columns' input rows
     engram_qk: u64 = 0, // q_weight * k_weight [hc, d] f32
 };
@@ -168,6 +173,7 @@ const Loader = struct {
     d: *const gpu.Driver,
     src: Source,
     w: *Weights,
+    edits: ?*const edit_mod.File = null, // the blocks' edits (load's `edits`)
     host: std.ArrayList(u8) = .empty,
     aux: std.ArrayList(u8) = .empty,
     // A layer's expert entries read whole: experts() visits them out of file order, which defeats kernel readahead.
@@ -183,6 +189,16 @@ const Loader = struct {
         L.aux.deinit(L.gpa);
         if (L.span_buf) |b| std.heap.page_allocator.free(b);
         if (L.direct) |*f| f.close();
+    }
+
+    /// Block `i`'s edit of `which` on the device, null when it has none.
+    fn edit(L: *Loader, i: usize, which: edit_mod.Which, d: usize) !?Edit {
+        const f = L.edits orelse return null;
+        const v = (try f.get(i, which, d)) orelse return null;
+        var nb: [96]u8 = undefined;
+        const r = try L.upload(try std.fmt.bufPrint(&nb, "layers.{d}.{s}.edit.r", .{ i, @tagName(which) }), v.r);
+        const g = try L.upload(try std.fmt.bufPrint(&nb, "layers.{d}.{s}.edit.g", .{ i, @tagName(which) }), v.g);
+        return .{ .r = r, .g = g, .alpha = v.alpha };
     }
 
     fn upload(L: *Loader, name: []const u8, bytes: []const u8) !u64 {
@@ -492,6 +508,9 @@ const Loader = struct {
                 try L.dense(wp, s.woBCols(c), s.range(gl * c.o_lora))
             else
                 try L.linear(wp, s.woBCols(c), s.range(gl * c.o_lora));
+            // an edit applies to the EXL3 weights it was made from, never to a dense pack's
+            lay.wo_b_edit = if (i < c.layers) try L.edit(i, .wo_b, c.hidden) else null;
+            if (lay.wo_b_edit != null and lay.wo_b.dense != 0) return error.EditOfDenseProjection;
         }
         if (s.pair != null) {
             // the 2D column parts keep their TP2 slices' decode plans
@@ -526,14 +545,22 @@ const Loader = struct {
         const xp = s.expertParts(c);
         var kb2: [256]u8 = undefined;
         var sb: [256]u8 = undefined;
-        const shared_alone = L.has(try plan.partKey(&kb2, try std.fmt.bufPrint(&sb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half, "dense"));
+        const dense_w2 = L.has(try plan.partKey(&kb2, try std.fmt.bufPrint(&sb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half, "dense"));
+        // an edited down runs apart from the table too, as its EXL3 linear, its output edited before it is added
+        const w2_edit = if (i < c.layers) try L.edit(i, .shared_w2, c.hidden) else null;
+        if (w2_edit != null and dense_w2) return error.EditOfDenseProjection;
+        const shared_alone = dense_w2 or w2_edit != null;
         lay.experts = try L.experts(p, n_experts, xp.half, xp.gu, xp.dcols, c.hidden, shared_alone);
         if (shared_alone) {
             var pb: [256]u8 = undefined;
             lay.shared = .{
                 .w1 = try L.linear(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w1", .{p}), xp.gu, null),
                 .w3 = try L.linear(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w3", .{p}), xp.gu, null),
-                .w2 = try L.dense(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half),
+                .w2 = if (dense_w2)
+                    try L.dense(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half)
+                else
+                    try L.linear(try std.fmt.bufPrint(&pb, "{s}.ffn.shared_experts.w2", .{p}), xp.dcols, xp.half),
+                .edit = w2_edit,
             };
         }
         if (c.engram_layers.has(i)) {
@@ -556,11 +583,11 @@ const Loader = struct {
     }
 };
 
-/// Every tensor of rank `s` on device `d`, from `src` (weights.py _load, in its order).
-pub fn load(gpa: std.mem.Allocator, d: *const gpu.Driver, src: Source, c: Config, s: plan.Split, dspark: bool) !Weights {
+/// Every tensor of rank `s` on device `d`, from `src` (weights.py _load, in its order); `edits`: edit.zig's file.
+pub fn load(gpa: std.mem.Allocator, d: *const gpu.Driver, src: Source, c: Config, s: plan.Split, dspark: bool, edits: ?*const edit_mod.File) !Weights {
     var w: Weights = .{ .gpa = gpa };
     errdefer w.deinit();
-    var L: Loader = .{ .gpa = gpa, .d = d, .src = src, .w = &w };
+    var L: Loader = .{ .gpa = gpa, .d = d, .src = src, .w = &w, .edits = edits };
     defer L.deinit();
     w.embed = try L.plain("embed.weight", null);
     w.norm = try L.plain("norm.weight", null);
