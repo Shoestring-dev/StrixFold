@@ -481,7 +481,13 @@ pub const Snap = struct {
     stale: bool = false,
     wanted: u64 = 0, // when a request first waited for the live stream that holds these rows (placeKept; 0: none)
     end: usize = 0, // the extent end of the stream that kept it (placement holds [base, end) back while room allows)
+    path: u64 = 0, // its tokens [0, at) hashed (pathKey): keptOver tells this prompt's own longer states from others'
 };
+
+/// A kept state's tokens hashed: a longer state in a resume's extent is the prompt's own when its path matches.
+fn pathKey(ids: []const u32) u64 {
+    return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(ids));
+}
 
 /// How long a request waits for the live stream that holds the kept state it resumes from to end (then it resumes
 /// in place and every kept state stays) before other kept states give their room for a copy of it.
@@ -708,7 +714,7 @@ pub const Lanes = struct {
                 // in place unless the extent runs past the pool, a live stream holds it, or another kept state has
                 // rows past the kept ones (resuming there would stale it: the rows go to a free extent instead, as
                 // the Python lane's _place resumes "here" only in a free extent)
-                moved = sn.base + size > m.pool_cap or clashes(taken[0..nt], sn.base, sn.base + size) or self.keptOver(sn.base + sn.at, sn.base + size, sn);
+                moved = sn.base + size > m.pool_cap or clashes(taken[0..nt], sn.base, sn.base + size) or self.keptOver(sn.base + sn.at, sn.base + size, sn, ids);
             } else {
                 s.reuse_failed = true;
                 why = "its kept state is not usable";
@@ -1197,9 +1203,12 @@ pub const Lanes = struct {
         self.snaps.appendAssumeCapacity(sn);
     }
 
-    /// Whether a kept state other than `except` and its siblings (the same stream's other marks) has rows in [lo, hi).
-    fn keptOver(self: *const Lanes, lo: usize, hi: usize, except: *const Snap) bool {
-        for (self.snaps.items) |sn| if (sn != except and !sn.stale and sn.base != except.base and sn.base < hi and lo < sn.base + sn.at) return true;
+    /// Whether a kept state besides `except` has rows in [lo, hi): another extent's, or one off the path of `ids`.
+    fn keptOver(self: *const Lanes, lo: usize, hi: usize, except: *const Snap, ids: []const u32) bool {
+        for (self.snaps.items) |sn| if (sn != except and !sn.stale and sn.base < hi and lo < sn.base + sn.at) {
+            const own = sn.base == except.base and sn.at <= ids.len and sn.path == pathKey(ids[0..sn.at]);
+            if (!own) return true;
+        };
         return false;
     }
 
@@ -1238,7 +1247,7 @@ pub const Lanes = struct {
         if (at == 0 or at % model.chunk_rows != 0 or at > s.prompt_len -| self.m.cfg.window) return error.NotAChunkEnd;
         const sn = try self.gpa.create(Snap);
         errdefer self.gpa.destroy(sn);
-        sn.* = .{ .id = self.next_snap, .at = at, .base = l.base, .end = l.end, .buf = try gpu.DeviceBuffer.alloc(self.m.ctx.d, self.m.snapBytes()) };
+        sn.* = .{ .id = self.next_snap, .at = at, .base = l.base, .end = l.end, .path = pathKey(s.prompt()[0..at]), .buf = try gpu.DeviceBuffer.alloc(self.m.ctx.d, self.m.snapBytes()) };
         errdefer sn.buf.free();
         try self.snaps.append(self.gpa, sn);
         errdefer _ = self.snaps.pop(); // (the errdefers above free it: the list must not keep it)
@@ -2030,12 +2039,12 @@ test "retained histories preserve their replay and output reservations (PR #10: 
     }
     // All eight 100K histories can resume within their reservations without invalidating a neighbor.
     for (&snapshots) |*sn| {
-        try std.testing.expect(!ln.keptOver(sn.base + sn.at, sn.end, sn));
+        try std.testing.expect(!ln.keptOver(sn.base + sn.at, sn.end, sn, &.{}));
         ln.staleOver(sn.base + sn.at, sn.end, sn);
     }
     for (snapshots) |sn| try std.testing.expect(!sn.stale);
     // A larger continuation relocates into free room instead of overwriting the next cached prefix.
-    try std.testing.expect(ln.keptOver(snapshots[0].at, 104448, &snapshots[0]));
+    try std.testing.expect(ln.keptOver(snapshots[0].at, 104448, &snapshots[0], &.{}));
     try std.testing.expectEqual(@as(usize, 819200), try ln.placeKept(&.{}, 104448, null));
     // At genuine capacity pressure, kept states may still be evicted; a live range never is.
     const live = [_][2]usize{.{ 0, 102400 }};
@@ -2043,6 +2052,35 @@ test "retained histories preserve their replay and output reservations (PR #10: 
     try std.testing.expect(ln.snaps.items[1].stale and ln.snaps.items[4].stale);
     try std.testing.expect(!ln.snaps.items[5].stale);
     try std.testing.expect(!ln.snaps.items[0].stale); // its rows lie in the live stream: that stream holds the room
+}
+
+test "a resume from a shared cut moves when another conversation's longer state lies past it in that extent" {
+    const c = model.chunk_rows;
+    var m: Model = undefined;
+    m.pool_cap = 16 * c;
+    var ln: Lanes = .{ .gpa = std.testing.allocator, .m = &m, .peer = null };
+    defer ln.snaps.deinit(std.testing.allocator);
+    // the first conversation's prompt: a shared start of 2 chunks, then its own 3 chunks
+    const first = try std.testing.allocator.alloc(u32, 6 * c);
+    defer std.testing.allocator.free(first);
+    for (first, 0..) |*t, i| t.* = @intCast(i % 1000);
+    // a second conversation: the same 2 chunks, then its own text
+    const second = try std.testing.allocator.dupe(u32, first);
+    defer std.testing.allocator.free(second);
+    for (second[2 * c ..]) |*t| t.* +%= 7;
+    var cut: Snap = .{ .id = 1, .at = 2 * c, .base = 0, .end = 8 * c, .path = pathKey(first[0 .. 2 * c]), .buf = undefined };
+    var history: Snap = .{ .id = 2, .at = 5 * c, .base = 0, .end = 8 * c, .path = pathKey(first[0 .. 5 * c]), .buf = undefined };
+    try ln.snaps.append(std.testing.allocator, &cut);
+    try ln.snaps.append(std.testing.allocator, &history);
+    // the second conversation resuming the cut in place would overwrite the first one's history: it moves
+    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, second));
+    // the first conversation's own next turn (its history extended) may resume the cut in place: the rows are its own
+    try std.testing.expect(!ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, first));
+    // a prompt shorter than the longer state is not on its path either
+    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, first[0 .. 4 * c]));
+    // moved: the copy goes clear of both states' extents, and neither goes stale
+    try std.testing.expectEqual(@as(usize, 8 * c), try ln.placeKept(&.{}, 8 * c, &cut));
+    try std.testing.expect(!cut.stale and !history.stale);
 }
 
 test "kept states give their room least recently used first: a resumed one goes last" {
