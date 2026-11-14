@@ -275,7 +275,8 @@ test "an encoder hands each request its pictures' rows in order, the rows that c
     try std.testing.expectEqual(@as(usize, 2), try e.take(&a, 0, gpa, &out));
     try std.testing.expectEqual(@as(usize, 20), out.items.len);
     try std.testing.expect(std.mem.allEqual(u8, out.items[0..12], 9) and std.mem.allEqual(u8, out.items[12..], 7));
-    while (woken.n.load(.acquire) == 0) std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake) catch {}; // after ready
+    // the wake comes after ready
+    while (woken.n.load(.acquire) == 0) std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake) catch {};
     try std.testing.expectEqual(@as(u32, 1), woken.n.load(.acquire));
     e.forget(&a);
     try std.testing.expect(e.ready(&a)); // no job: its prompt pass says why

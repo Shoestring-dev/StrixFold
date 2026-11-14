@@ -427,7 +427,7 @@ tower on rank 0. Everything above about `text` still holds: a text rank opens, l
     42,924:1 or taller) is refused, as Pillow refuses a resize to a zero side.
   - A picture's decode buffers (RGB, padded RGB, patches) are freed once it is prepared; the request keeps only its
     payload (the grid and bf16 patches, at most about 11 MB for a 1,024-token picture).
-- **Behaviour:** an image prompt skips the RAM prompt cache and the reuse hook (its tokens are
+- **Behaviour:** an image prompt skips the RAM prompt cache, sf-disk and the reuse hook (its tokens are
   placeholders); a 1920x1080 picture encodes in about 2.9 s on gfx1151 (measured with the tower on the engine thread).
   PNG decodes in Zig; other formats need Python 3 with Pillow (the runtime image's `rocm10.0-vision` tag).
 
