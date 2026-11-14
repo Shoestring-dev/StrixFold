@@ -6,7 +6,7 @@
 #   stop_r1_decode / stop_r0_decode     SIGSTOP a rank for STOP_S (10 s, past the 2 s progress deadline), then SIGCONT
 #   kill_r1_prefill / stop_r1_prefill   the same inside a long prompt's prefill (--long 1: prompts over 128 rows)
 #   kill_r1_load                        SIGKILL rank 1 while both ranks load: rank 0 must give up, not wait forever
-#   mm_round_rows / mm_aux / mm_streams / mm_context / mm_pool / mm_kit / mm_strict / mm_conf (any other configuration byte: U46)
+#   mm_round_rows / mm_aux / mm_streams / mm_context / mm_pool / mm_kit / mm_strict / mm_conf (any other conf byte: U46)
 #                                       one rank from a configuration that differs in one setting: the peers' handshake
 #                                       must refuse before serving, naming it
 #   stale_bundle                        the configuration pins another input bundle hash: the launcher refuses

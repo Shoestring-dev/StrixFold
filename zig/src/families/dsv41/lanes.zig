@@ -612,7 +612,8 @@ pub const Lanes = struct {
         const ids = s.prompt();
         const len = ids.len;
         if (len == 0) return error.EmptyPrompt;
-        if (len + s.max_new > usableContext(m.context_cap, m.eng.round_rows)) return error.PromptTooLong; // one stream's (its extent within the pool by placement)
+        // one stream's context (its extent goes anywhere in the pool by placement)
+        if (len + s.max_new > usableContext(m.context_cap, m.eng.round_rows)) return error.PromptTooLong;
         const size = std.mem.alignForward(usize, len + s.max_new + m.eng.round_rows + 2, model.chunk_rows);
         if (self.streams.fetchRemove(s)) |old| {
             self.used[old.value.slot] = false;

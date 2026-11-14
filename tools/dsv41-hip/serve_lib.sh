@@ -28,7 +28,7 @@ serve_load() {
     size=$(stat -L -c %s "$DS_KIT/$f.f32" 2>/dev/null) || die "no RoPE table $DS_KIT/$f.f32 (DS_KIT)"
     [ -z "$rows" ] || [ $((size / 128)) -lt "$rows" ] && rows=$((size / 128))
   done
-  # the engine reads a stream's most positions (CONTEXT) plus a round's 48 rows and one (model.zig rope_rows), 128 B a row
+  # the engine reads a stream's most positions (CONTEXT), a round's 48 rows and one (model.zig rope_rows), 128 B a row
   [ "$CONTEXT" -le $((rows - 49)) ] || die "CONTEXT $CONTEXT is past the RoPE tables' $rows rows (at most $((rows - 49)))"
   # POOL: the streams' shared pool (unset: CONTEXT, one stream may take it all); above CONTEXT, several long streams
   # share it while each request stays within CONTEXT (rank 0 TF_DS_POOL, rank 1 --pool; both ranks --context CONTEXT)
@@ -173,8 +173,9 @@ serve_lanes_cmd() {
 }
 
 # serve_cmd: SERVE_CMD, the rank's argv. Rank 1's --pool, --context, --streams, --round-rows and --graphs are rank 0's
-# TF_DS_POOL, --context, TF_DS_STREAMS, TF_DS_ROUND_ROWS and TF_DS_GRAPHS (upstream #25), from the same variables (tf-dsv41-lanes reads
-# --graphs, --side, --aio and --prefetch, not TF_DS_GRAPHS, TF_DS_HC_SIDE, TF_DS_ENGRAM_AIO and TF_DS_L2_PREFETCH).
+# TF_DS_POOL, --context, TF_DS_STREAMS, TF_DS_ROUND_ROWS and TF_DS_GRAPHS (upstream #25), from the same variables
+# (tf-dsv41-lanes reads --graphs, --side, --aio and --prefetch, not TF_DS_GRAPHS, TF_DS_HC_SIDE, TF_DS_ENGRAM_AIO and
+# TF_DS_L2_PREFETCH).
 serve_cmd() {
   if [ "$RANK" = 0 ]; then
     SERVE_CMD=("$BIN/tensorfold-native" serve "$MODEL_DIR" --host "$SERVE_HOST" --port "$SERVE_PORT" --name "$SERVE_NAME"

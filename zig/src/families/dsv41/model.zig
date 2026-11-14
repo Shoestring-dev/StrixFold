@@ -411,7 +411,8 @@ pub const Model = struct {
             for ([_][]const u8{ "rope-plain-cos.f32", "rope-plain-sin.f32", "rope-compressed-cos.f32", "rope-compressed-sin.f32" }, 0..) |name, j| {
                 var f = try std.Io.Dir.cwd().openFile(io, try std.fs.path.join(a, &.{ o.kit_dir, name }), .{});
                 defer f.close(io);
-                if (try f.readPositionalAll(io, part, 0) != part.len) return error.ShortRopeTable; // fewer rows than the context
+                // a table of fewer rows than the context
+                if (try f.readPositionalAll(io, part, 0) != part.len) return error.ShortRopeTable;
                 try m.rope_buf.upload(j * part.len, part);
             }
         }
