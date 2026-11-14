@@ -171,8 +171,27 @@ fn engines(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
     dsv41.addImport("gpu", gpu);
     dsv41.addImport("lanes", lanes);
     dsv41.addImport("core", core);
-    // the RDMA ring's verbs (rdma.zig)
-    dsv41.addImport("fabric", b.createModule(.{ .root_source_file = b.path("zig/src/fabric/fabric.zig"), .target = target, .optimize = optimize, .link_libc = true }));
+    // the RDMA ring's verbs (rdma.zig); `verbs` for rdma_proxy.zig re-exports fabric.verbs: fabric owns verbs.zig
+    const fabric = b.createModule(.{ .root_source_file = b.path("zig/src/fabric/fabric.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    dsv41.addImport("fabric", fabric);
+    const verbs_shim = b.addWriteFiles().add("verbs_shim.zig",
+        \\/// Re-export of fabric.verbs for rdma_proxy.zig: one module owns verbs.zig, and that is fabric.
+        \\const verbs = @import("fabric").verbs;
+        \\pub const abi = verbs.abi;
+        \\pub const Error = verbs.Error;
+        \\pub const max_links = verbs.max_links;
+        \\pub const deviceParts = verbs.deviceParts;
+        \\pub const default_path = verbs.default_path;
+        \\pub const Api = verbs.Api;
+        \\pub const Verbs = verbs.Verbs;
+        \\
+    );
+    dsv41.addImport("verbs", b.createModule(.{
+        .root_source_file = verbs_shim,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "fabric", .module = fabric }},
+    }));
     const api = b.createModule(.{ .root_source_file = b.path("zig/src/core/engine_api.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "lanes", .module = lanes }} });
     const mod = b.createModule(.{
         .root_source_file = b.path("zig/src/native/cuda.zig"),

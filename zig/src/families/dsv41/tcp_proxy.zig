@@ -70,7 +70,7 @@ pub const idle_deep_ns: u64 = std.time.ns_per_s;
 pub const idle_deep_sleep_ns: u64 = 2 * std.time.ns_per_ms;
 
 /// One check's wait of a proxy thread that found no work; `idle_since` is 0 until the first idle check.
-fn idleWait(idle_since: *u64) void {
+pub fn idleWait(idle_since: *u64) void {
     const now = wire.monotonicNs();
     if (idle_since.* == 0) idle_since.* = now;
     const idle = now - idle_since.*;
@@ -164,7 +164,7 @@ pub const Core = struct {
 };
 
 /// Sets the abort word to 1 unless it is set: a device wait's 2 (coll.hip tf_ds_coll_fail) stays for deviceGaveUp.
-fn raiseAbort(shared: *Shared) void {
+pub fn raiseAbort(shared: *Shared) void {
     _ = @cmpxchgStrong(u32, &shared.abort, 0, 1, .acq_rel, .acquire);
 }
 
@@ -172,7 +172,7 @@ fn raiseAbort(shared: *Shared) void {
 /// gather), the first proxy thread to see it logs one line with the slot's words and marks it logged (3); 1 (the host
 /// raised it) was logged where it was raised. coll.stage waits for consumed + nslot >= its gather, coll.collect for
 /// done == seq.
-fn deviceGaveUp(shared: *Shared, rank: u32, q: u64, nslot: u32, what: []const u8) void {
+pub fn deviceGaveUp(shared: *Shared, rank: u32, q: u64, nslot: u32, what: []const u8) void {
     if (@cmpxchgStrong(u32, &shared.abort, 2, 3, .acq_rel, .acquire) != null) return;
     const slot: usize = @intCast(q % nslot);
     const w = &shared.slot[slot];
@@ -193,7 +193,7 @@ fn logExchange(w: *const wire.Wire, rank: u32, cable: u8, q: u64, site: u32, byt
     });
 }
 
-fn phaseName(site: u32) []const u8 {
+pub fn phaseName(site: u32) []const u8 {
     return if (std.enums.fromInt(coll.Phase, site >> 16)) |p| @tagName(p) else "phase ?";
 }
 
@@ -351,7 +351,7 @@ pub const TcpProxy = struct {
         t.host.w.abort();
     }
 
-    fn pin(cpu_: i32) void {
+    pub fn pin(cpu_: i32) void {
         if (cpu_ < 0) return;
         var set: std.os.linux.cpu_set_t = @splat(0);
         const cpu: usize = @intCast(cpu_);
@@ -385,7 +385,7 @@ pub const TcpProxy = struct {
         if (code != 0) t.poison(code);
     }
 
-    fn blocks(bytes: usize) u32 {
+    pub fn blocks(bytes: usize) u32 {
         return @intCast(std.math.clamp((bytes + 4095) / 4096, 1, 64));
     }
 
@@ -474,7 +474,7 @@ pub fn deadlineTicks(wall_clock_hz: u64, wait_ns: u64) u64 {
     return @intCast(@as(u128, wall_clock_hz) * wait_ns / std.time.ns_per_s);
 }
 
-fn envU(name: [:0]const u8, default: u64) !u64 {
+pub fn envU(name: [:0]const u8, default: u64) !u64 {
     const v = c.getenv(name) orelse return default;
     return std.fmt.parseInt(u64, std.mem.span(v), 10) catch error.BadSetting;
 }

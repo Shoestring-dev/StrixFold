@@ -245,6 +245,52 @@ gather per Coll at a time, no other call in between, both ranks pair them alike.
 Only rows of other work can overlap a gather (everything after a gather inside a layer depends on it), so the engine
 side runs a prefill chunk as two halves zipped layer by layer (section 5.3).
 
+### 3.6 RDMA write with immediate (rdma_proxy, pairs with RDMA network cards)
+`TF_COLL_KIND=rdma` (serve.conf `TRANSPORT=rdma`) is tcp_proxy with the TCP exchange replaced by one RC RDMA write with
+immediate per staged slot. Everything else is tcp_proxy's: the hipHostMalloc(Mapped|Coherent) slab and its
+`tf_ds_coll_shared` header, the `coll.stage` / `coll.collect` kernels, the ready / done / consumed generation protocol,
+the abort word and the fault contract (section 2.3 to 2.5); graph capture is unchanged because the proxy never sees a
+host call. Gathers larger than a slot keep tcp_host (prefill stays on TCP).
+
+Per gather q in slot s = q mod NSLOT, the proxy thread (pinned to `TF_COLL_PROXY_CPU`, busy-polling, never a completion
+channel) sees ready[s] == q; writes a 64-byte trailer (magic, session epoch, q, bytes, site, rank) into TX[s] at
+roundup(bytes, 64), so one SGE carries payload and trailer contiguously; posts one signaled RDMA_WRITE_WITH_IMM of
+roundup(bytes, 64) + 64 bytes from TX[s] into the peer's RX[s] with imm = the low 32 bits of q; polls its send CQ and
+receive CQ until both the local send completion and the peer's write of q are in; checks the receive completion's
+byte_len and immediate and the trailer the peer wrote against its own slot words (any difference: Mismatch); then
+stores done[s] = q. TX ownership is tcp_proxy's (consumed gates the stage kernel, done waits for the send completion).
+RX ownership is transitive and holds for NSLOT >= 2, so NSLOT < 2 and the stripe thread (`TF_COLL_PROXY_STRIPE_KIB`
+> 0) are refused. The peer writes gather q + NSLOT into RX[s] only after this rank's write of q + NSLOT - 1, which the
+proxy posts only once stage(q + NSLOT - 1) set ready. The engine issues every gather on its one stream, one begun
+gather at a time, so collect(q), the last reader of RX[s], is ahead of that stage in stream order. gatherEnd refuses
+an end on a different stream from its begin (CollectiveFailed), the one way a caller could break that order inside a
+gather. Two MRs cover the TX slots and the RX slots only, never the slab header. The handshake carries
+`kind=rdma` and the two Infos (QP number, PSN, rkey, GID, MTU, slot count and size, receive region), and refuses a
+mixed pair or differing slot geometry; a second small frame each is the start barrier once both QPs are in RTS.
+
+mlx5 notes: receives are posted with a 64-byte SGE (a write with immediate lands at remote_addr, the SGE only reserves
+a ring slot; a large SGE costs several striding-RQ strides and overruns the ring); the send and receive CQs are
+separate; every send is signaled (mlx5 reaps unsignaled SQ WQEs only when a signaled completion is polled).
+
+Failure: a completion with an error status poisons the collective (RETRY_EXC, RNR_RETRY_EXC, FLUSH and the remote
+errors: PeerLost; others CollectiveFailed); no completion for `TF_COLL_PROGRESS_MS`: Timeout (the proxy's deadline
+owns Timeout; the QP's own retries, `TF_RDMA_QP_TIMEOUT` exponent 14 by default, fail an unanswered write after a few
+seconds on a ConnectX-6, inside it); the peer's tcp_host socket closing: PeerLost within milliseconds (a MSG_PEEK on
+the control socket while waiting). abort and close move the QP to ERR so posted work flushes and the loop leaves.
+
+Settings: tcp_proxy's `TF_COLL_SLOTS` (8), `TF_COLL_SLOT_KIB` (4352), `TF_COLL_PROXY_CPU` (6); `TF_RDMA_DEVICES` (one
+ibdev name for both ranks, or one per rank separated by `,`; unset: the ibdev whose device/net holds
+`TF_RDMA_IFNAME`, or the box's only ibdev); `TF_RDMA_GID_INDEX` (3: usually the RoCE v2 entry of the link's address);
+plus tcp_coll.zig's. `tools/dsv41-hip/rdma_check.py` checks a box's device, port, GID, memlock and uverbs before a
+rank starts (serve_lib.sh runs it under `TRANSPORT=rdma`; `preflight.sh --rdma-check` runs it alone).
+
+Bring-up: the slab is registered with `ibv_reg_mr` on plain `hipHostMalloc` pages (no special allocation), so
+`RLIMIT_MEMLOCK` must cover 2 x slots x slot size (8 MiB, the default in ssh sessions and systemd units, is not
+enough: `limits.d` and `LimitMEMLOCK=` in any unit); an ssh `ControlMaster` session that predates a limits change
+keeps the old limit; the HIP build has no `fabric` module, so `rdma_proxy` takes libibverbs through the small
+`verbs` module (dlopen, no link dependency). The host suite's loopback tests need `TF_RDMA_TEST_DEVICE=<ibdev>`: both
+ranks' QPs on one HCA, skipped without it.
+
 ## 4. Link reliability (USB4 frame loss and TCP retransmission timeouts)
 Measured 2026-10-19 under the GPU/link lock and the quiet lock on both boxes (sessions logged in tf-port/w-link/
 reliab.log on the Mac; raw latencies node0 ~/tfp/link/raw/rel_*). Settings were changed only for the session and

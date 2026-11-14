@@ -82,6 +82,11 @@ One configuration file drives both ranks (`tools/dsv41-hip/serve.conf`, commente
 input bundle and its pinned hash, context, streams, verify rows, drafts, graphs, transport settings, timeouts and the
 probe. Put your copy at the same path under each box's `$HOME`, then from the deployment's tools on node1:
 
+A pair linked by RDMA-capable network cards (RoCE v2) can set `TRANSPORT=rdma` with `RDMA_DEV0`/`RDMA_DEV1` (or
+`RDMA_IFNAME`) and `RDMA_GID`: the slot collective then moves each gather as one RDMA write with immediate instead of
+over TCP (COLLECTIVES-DESIGN.md 3.6). `TP_STRIPE` and `COLL_PROXY_STRIPE_KIB` must be empty, `RLIMIT_MEMLOCK` must
+cover the slab, and `preflight.sh --rdma-check` on each box says whether a rank can start.
+
 ```
 cd ~/tfp/deploy/current/tools/dsv41-hip
 TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh up       # locks (node0, then node1), rank 1, rank 0, /health, probe
