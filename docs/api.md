@@ -94,6 +94,7 @@ For decisions, `chat_template_kwargs` may be omitted, null, or an object contain
 | `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` | Both |
 | `thinking_budget` | Token-count limit inside reasoning | Both |
 | `priority` | `background` yields to foreground requests | Both |
+| `shared_messages` | Chat completions: an integer k; the end of the request's first k `messages` (system and developer messages count) is kept as a shared prompt-cache cut. Anything but an integer from 1 to one less than the message count is ignored, not refused; a prefix under 512 tokens adds nothing. See [Keeping the prompt cache](#keeping-the-prompt-cache) | Native |
 
 `n` must be 1; multiple choices receive HTTP 400.
 
@@ -357,6 +358,14 @@ To keep the cache:
 - Trim history rarely and deeply. A trim changes the conversation from the cut on, so everything after the cut is read
   again. Cutting a little every turn means a long re-read every turn; cutting to half when the history reaches its limit
   means one re-read every many turns.
+
+Many conversations that start from the same messages (a system prompt and a shared reading, say) can share more than the
+system start: send `shared_messages: k` on `/v1/chat/completions`, where k counts the request's `messages` from the
+first, system included. The server keeps the end of those k messages, as the template renders them, as a shared cut,
+beside its own cuts in the system block, so another conversation with the same first k messages resumes there; on this
+engine that is the last 2,048-token boundary at or before the cut. k must be a JSON integer from 1 to one less than the
+number of messages; any other value (`2.0`, `"2"`, `true`, 0, a negative number, k past the conversation) is ignored,
+not refused, and a cut under 512 tokens adds nothing. `/v1/messages` and `/v1/responses` do not pass the field on.
 
 What a miss costs, from real agent work ([RESULTS.md](RESULTS.md#real-agent-work)): an uncached prompt reads at about
 1,100–1,250 tokens a second. On the Ryzen AI Halo pair, a 131K-token conversation read from the start took 108 s. On a
