@@ -77,12 +77,26 @@ pub const Engine = struct {
 
     /// Prefill a stream, draw its first token and ask for its first drafts; it takes part from the next round.
     pub fn addStream(e: *Engine, s: *Stream) !void {
-        _ = e.arena.reset(.retain_capacity);
-        try trail.event(e, &.{ f("ev", str("add")), f("stream", str(s.id)) });
-        e.backend.prefill(s) catch |err| {
+        _ = try e.fillStream(s, std.math.maxInt(u64), true);
+    }
+
+    /// A slice of the stream's prompt pass (begin: its first): true once the stream is in, false when it paused.
+    pub fn fillStream(e: *Engine, s: *Stream, budget_ns: u64, begin: bool) !bool {
+        if (begin) {
+            _ = e.arena.reset(.retain_capacity);
+            try trail.event(e, &.{ f("ev", str("add")), f("stream", str(s.id)) });
+        }
+        const done = e.backend.prefillSlice(s, budget_ns) catch |err| {
             if (err == error.Cancelled) e.backend.release(s); // the host finishes a cancelled stream without the core
             return err;
         };
+        if (!done) return false;
+        try e.enter(s);
+        return true;
+    }
+
+    /// A stream whose prompt is in takes its first token and joins the rounds.
+    fn enter(e: *Engine, s: *Stream) !void {
         if (s.isCancelled()) { // cancelled in its last chunk: no first token
             e.backend.release(s);
             return error.Cancelled;

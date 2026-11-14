@@ -51,8 +51,8 @@ const HipKit = if (gpu.backend == .hip) *gpu.Kit else void;
 pub const chunk_rows = 2048;
 
 /// The version of lanes.zig's frames, rank 0 to rank 1 (the handshake compares it): 2 since fill_chunk carries rank 0's
-/// Engram read-ahead plan (2026-10-22); 3 since pass carries the streams' draft sampling keys (draft_temperature).
-pub const frame_protocol = 3;
+/// read-ahead plan; 3 since pass carries draft sampling keys; 5 since a pass may pause (4: the image-keyed cache's).
+pub const frame_protocol = 5;
 
 /// The prompt chunk buffers' rows: one of chunk_rows, or two halves when chunks split (TF_DS_PREFILL_SPLIT).
 pub fn chunkCaps(split_min: usize) [2]usize {
@@ -1396,8 +1396,9 @@ test "a launch identity is one plan token of at most 16 characters" {
 
 test "the handshake names what orders a prompt chunk's gathers: split, zip, chunk rows, phase timer, frames" {
     var b: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=3", try Model.gatherOrder(&b, 256, true, false));
-    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=3", try Model.gatherOrder(&b, 0, true, true));
+    const frames = std.fmt.comptimePrint("{d}", .{frame_protocol});
+    try std.testing.expectEqualStrings("prefill_split=256 prefill_zip=true chunk_caps=1024/1024 phase_timer=false frames=" ++ frames, try Model.gatherOrder(&b, 256, true, false));
+    try std.testing.expectEqualStrings("prefill_split=0 prefill_zip=true chunk_caps=2048/0 phase_timer=true frames=" ++ frames, try Model.gatherOrder(&b, 0, true, true));
 }
 
 test "the handshake's plan text is the stock one with sf-disk off, and says disk=1 and edit= only when on" {

@@ -192,7 +192,10 @@ const Host = struct {
         h.clock = .{ .io = io };
         h.core = lanes.Engine.init(h.gpa, &h.cfg, h.backend(), h.clock.clock());
         errdefer h.core.deinit();
-        h.host = api.LaneHost.init(h.gpa, io, &h.core, info);
+        // TF_FILL_SLICE_MS=N: a prompt pass reads N ms of chunks between the decoding streams' rounds (0: whole passes)
+        var served = info;
+        if (getenv("TF_FILL_SLICE_MS")) |v| served.fill_slice_ns = std.math.mul(u64, try std.fmt.parseInt(u64, v, 10), std.time.ns_per_ms) catch return error.Overflow;
+        h.host = api.LaneHost.init(h.gpa, io, &h.core, served);
         h.host.memory = if (h.gpu != null) .{ .read = readMemory } else null;
         h.host.explain = explain;
         if (h.cache) |*store| h.host.cache = store;
@@ -216,6 +219,12 @@ const Host = struct {
                     return x.inner.vtable.prefill(x.inner.ptr, s);
                 }
             }.f,
+            .prefill_slice = if (v.prefill_slice != null) struct {
+                fn f(p: *anyopaque, s: *lanes.Stream, budget_ns: u64) anyerror!bool {
+                    const x = bind(p);
+                    return x.inner.vtable.prefill_slice.?(x.inner.ptr, s, budget_ns);
+                }
+            }.f else null,
             .first = struct {
                 fn f(p: *anyopaque, s: *lanes.Stream, position: u64) anyerror!u64 {
                     const x = bind(p);

@@ -51,3 +51,9 @@ The boxes serve at the default balanced power setting. The CPU's performance set
 
 With drafting on, identical prompts decode in lockstep, and leftover drafts break that. Turning drafting off from six
 chats at once (`DRAFT_BYPASS_AT=6`) raised eight chats from 97.8 to 108 tok/s, with the output unchanged.
+
+A long new prompt beside chats that are answering is read in slices (`FILL_SLICE_MS`, 1,000 by default), with a round
+for the others between slices. Beside three answering chats, a 100K prompt left them waiting at most 2 s at a time,
+against 71 s when read whole, and itself took 76 s instead of 72. A shorter slice gives the others more rounds, down to
+one chunk a slice (where 500 and 1,000 already are); 2,000 reads a little faster and makes them wait up to 3 s. 0 reads
+every prompt whole.

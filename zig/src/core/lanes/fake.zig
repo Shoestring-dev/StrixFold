@@ -23,6 +23,7 @@ const Lane = struct {
     held: std.ArrayList(u32) = .empty, // drafts for the next round
     base: usize = 0, // the history length before the last verify
     rows: std.ArrayList(u32) = .empty, // the last verify's row tokens
+    filled: ?usize = null, // a sliced prompt pass's chunks so far (null: no pass paused)
 };
 
 pub const Fake = struct {
@@ -46,6 +47,7 @@ pub const Fake = struct {
     prefill_hook_ctx: ?*anyopaque = null,
     refuse_sampled: bool = false, // prefill refuses a sampled stream with error.SamplingRefused
     refuse_full: usize = 0, // prefill refuses this many times with error.ContextFull while another lane is live
+    slice_chunks: usize = 0, // prefill_slice reads this many chunks a call short of a whole pass (0: all)
 
     pub fn deinit(x: *Fake) void {
         var it = x.lanes.valueIterator();
@@ -61,7 +63,7 @@ pub const Fake = struct {
     }
 
     pub fn backend(x: *Fake) be.Backend {
-        return .{ .ptr = x, .vtable = &.{ .prefill = prefill, .first = first, .queue = queue, .read = read, .verify = verify, .keep = keep, .draft = draft, .release = release } };
+        return .{ .ptr = x, .vtable = &.{ .prefill = prefill, .prefill_slice = prefillSlice, .first = first, .queue = queue, .read = read, .verify = verify, .keep = keep, .draft = draft, .release = release } };
     }
 
     fn self(ptr: *anyopaque) *Fake {
@@ -104,22 +106,37 @@ pub const Fake = struct {
     }
 
     fn prefill(ptr: *anyopaque, s: *Stream) anyerror!void {
+        _ = try prefillSlice(ptr, s, std.math.maxInt(u64));
+    }
+
+    /// A whole pass for an unbounded budget, else slice_chunks chunks a call (each call one at least).
+    fn prefillSlice(ptr: *anyopaque, s: *Stream, budget_ns: u64) anyerror!bool {
         const x = self(ptr);
-        if (x.refuse_sampled and s.sampling != null) return error.SamplingRefused;
-        if (x.refuse_full > 0 and x.lanes.count() > 0 and !x.lanes.contains(s)) {
-            x.refuse_full -= 1;
-            return error.ContextFull;
-        }
-        const got = try x.lanes.getOrPut(x.gpa, s);
-        if (got.found_existing) freeLane(x.gpa, got.value_ptr);
-        got.value_ptr.* = .{};
         const chunks = if (x.prefill_chunks == 0) 1 else x.prefill_chunks;
-        for (0..chunks) |chunk| {
+        const resumed = if (x.lanes.getPtr(s)) |l| l.filled != null else false;
+        if (!resumed) {
+            if (x.refuse_sampled and s.sampling != null) return error.SamplingRefused;
+            if (x.refuse_full > 0 and x.lanes.count() > 0 and !x.lanes.contains(s)) {
+                x.refuse_full -= 1;
+                return error.ContextFull;
+            }
+            const got = try x.lanes.getOrPut(x.gpa, s);
+            if (got.found_existing) freeLane(x.gpa, got.value_ptr);
+            got.value_ptr.* = .{ .filled = 0 };
+        }
+        const l = x.lane(s);
+        const per = if (budget_ns == std.math.maxInt(u64) or x.slice_chunks == 0) chunks else x.slice_chunks;
+        const stop = @min(chunks, l.filled.? + per);
+        while (l.filled.? < stop) {
+            const chunk = l.filled.?;
+            l.filled = chunk + 1;
             x.prefill_count += 1;
             if (x.prefill_hook) |hook| hook(x.prefill_hook_ctx.?, s, chunk);
             if (s.isCancelled()) return error.Cancelled;
         }
-        const h = &got.value_ptr.history;
+        if (l.filled.? < chunks) return false;
+        l.filled = null;
+        const h = &l.history;
         s.cached = 0;
         if (s.reuse.saved) |saved| { // the kept state's tokens stand in for the prompt's first `at`
             const kept: *std.ArrayList(u32) = @ptrCast(@alignCast(saved));
@@ -130,6 +147,7 @@ pub const Fake = struct {
             try h.append(x.gpa, t);
             if (std.mem.indexOfScalar(u32, s.reuse.marks, @intCast(at)) != null) if (s.reuse.hook) |k| k.at(k.ptr, s, @intCast(at));
         }
+        return true;
     }
 
     /// A copy of the stream's cache at `at` tokens (the prompt pass stands there), for core/prompt_cache.zig.

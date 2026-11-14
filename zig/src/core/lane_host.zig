@@ -51,6 +51,7 @@ pub const LaneHost = struct {
     // and frees its extent (its kept state then resumes in place) instead of waiting out every queued pass, as the
     // Python lane's fills leave decoding its share
     finish_until: ?i96 = null,
+    filling: ?*Job = null, // the one request whose prompt pass paused for the other streams' rounds
 
     const Mark = struct { at: i96, tokens: u64 };
     const full_retry_ns: i96 = std.time.ns_per_s;
@@ -299,6 +300,7 @@ pub const LaneHost = struct {
         dropped.deinit(h.gpa);
         for (ids) |id| {
             for (h.admitted.items, 0..) |job, i| if (job.id == id) {
+                if (h.filling == job) h.filling = null; // its paused pass: the backend frees what it placed
                 if (!job.stream.finished) h.core.discard(&job.stream);
                 h.lock();
                 _ = h.admitted.orderedRemove(i);
@@ -386,14 +388,43 @@ pub const LaneHost = struct {
         const began = std.Io.Clock.awake.now(h.io).toNanoseconds();
         job.began = began;
         if (h.loneFits(job)) return h.runLone(job, began);
-        h.core.addStream(&job.stream) catch |e| {
-            if (e == error.Cancelled) return h.cancel(job);
-            if (e == error.ContextFull and h.core.activeCount() > 0) return h.requeue(job);
-            return h.drop(job, h.words(e));
+        const done = h.core.fillStream(&job.stream, h.sliceNs(), true) catch |e| return h.failedPass(job, e);
+        if (!done) {
+            h.filling = job;
+            return false;
+        }
+        return h.entered(job, true); // in at its first call: no round ran during it
+    }
+
+    /// How long a prompt pass reads before the other streams' next round: a whole pass when none decodes.
+    fn sliceNs(h: *LaneHost) u64 {
+        if (h.info_.fill_slice_ns == 0 or h.core.activeCount() == 0) return std.math.maxInt(u64);
+        return h.info_.fill_slice_ns;
+    }
+
+    /// The paused pass's next slice (the rest at once when no other stream decodes now).
+    fn fillMore(h: *LaneHost, job: *Job) void {
+        const done = h.core.fillStream(&job.stream, h.sliceNs(), false) catch |e| {
+            h.filling = null;
+            _ = h.failedPass(job, e);
+            return;
         };
-        h.prefilled(job, began);
+        if (!done) return;
+        h.filling = null;
+        _ = h.entered(job, false);
+    }
+
+    fn failedPass(h: *LaneHost, job: *Job, e: anyerror) bool {
+        if (e == error.Cancelled) return h.cancel(job);
+        if (e == error.ContextFull and h.core.activeCount() > 0) return h.requeue(job);
+        return h.drop(job, h.words(e));
+    }
+
+    /// A stream whose prompt is in: its first token out; after a long whole pass, streams near their end go first.
+    fn entered(h: *LaneHost, job: *Job, whole: bool) bool {
+        h.prefilled(job, job.began);
         const now = std.Io.Clock.awake.now(h.io).toNanoseconds();
-        if (now - began >= long_pass_ns) {
+        if (whole and now - job.began >= long_pass_ns) {
             h.lock();
             h.finish_until = now + finish_ns;
             h.unlock();
@@ -544,7 +575,9 @@ pub const LaneHost = struct {
     fn run(h: *LaneHost) void {
         while (true) {
             h.takeCancels();
-            while (h.admitOne()) {}
+            if (h.filling == null) {
+                while (h.admitOne()) {}
+            }
             h.noteLive();
             h.lock();
             if (h.closing) {
@@ -554,31 +587,35 @@ pub const LaneHost = struct {
                 h.closeAll();
                 continue;
             }
-            if (h.core.activeCount() == 0) {
+            if (h.core.activeCount() == 0 and h.filling == null) {
                 if (h.cancels.items.len == 0 and (h.firstReady() == null or h.admitted.items.len >= h.info_.lanes))
                     h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } }) catch {};
                 h.unlock();
                 continue;
             }
             h.unlock();
-            h.core.step() catch |e| {
-                h.failAll(@errorName(e));
-                continue;
-            };
-            var i: usize = 0;
-            while (i < h.admitted.items.len) {
-                const job = h.admitted.items[i];
-                if (h.deliver(job)) {
-                    h.lock();
-                    _ = h.admitted.orderedRemove(i);
-                    h.unlock();
-                } else i += 1;
+            if (h.core.activeCount() > 0) {
+                h.core.step() catch |e| {
+                    h.failAll(@errorName(e));
+                    continue;
+                };
+                var i: usize = 0;
+                while (i < h.admitted.items.len) {
+                    const job = h.admitted.items[i];
+                    if (job != h.filling and h.deliver(job)) {
+                        h.lock();
+                        _ = h.admitted.orderedRemove(i);
+                        h.unlock();
+                    } else i += 1;
+                }
             }
+            if (h.filling) |job| h.fillMore(job); // a round, then the paused pass's next slice
         }
     }
 
     /// A failed round ends every stream it held, with the backend's error.
     fn failAll(h: *LaneHost, message: []const u8) void {
+        h.filling = null; // (its stream is released with the others)
         h.lock();
         const jobs = h.gpa.dupe(*Job, h.admitted.items) catch &.{};
         h.admitted.clearRetainingCapacity();
