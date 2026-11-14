@@ -70,7 +70,7 @@ pub const idle_deep_ns: u64 = std.time.ns_per_s;
 pub const idle_deep_sleep_ns: u64 = 2 * std.time.ns_per_ms;
 
 /// One check's wait of a proxy thread that found no work; `idle_since` is 0 until the first idle check.
-fn idleWait(idle_since: *u64) void {
+pub fn idleWait(idle_since: *u64) void {
     const now = wire.monotonicNs();
     if (idle_since.* == 0) idle_since.* = now;
     const idle = now - idle_since.*;
