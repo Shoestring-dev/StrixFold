@@ -47,6 +47,39 @@ test "the Info a peer reads is a plain extern struct" {
     try testing.expectEqual(@as(usize, 40), @offsetOf(nic.Info, "rx_base"));
 }
 
+test "an idle rdma proxy sleeps instead of spinning: its CPU time stays far under the wall clock (no device)" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    // nothing is staged, so the loop never reaches the NIC: it only waits for ready
+    var shared = std.mem.zeroes(Shared);
+    var tx: [4 * 4096]u8 = undefined;
+    var rx: [4 * 4096]u8 = undefined;
+    var stop: std.atomic.Value(u32) = .init(0);
+    var exchanged: std.atomic.Value(u64) = .init(0);
+    var core: Core = .{ .shared = &shared, .tx = &tx, .rx = &rx, .nslot = 4, .slot_bytes = 4096, .nic = undefined, .peer_rx = 0, .peer_rkey = 0, .epoch = @splat(0), .stop = &stop, .exchanged = &exchanged };
+    const Run = struct {
+        fn run(k: *Core, code: *u32) void {
+            code.* = k.run();
+        }
+    };
+    var code: u32 = 9;
+    const th = try std.Thread.spawn(.{}, Run.run, .{ &core, &code });
+    const before = std.posix.getrusage(0); // RUSAGE_SELF
+    var ts: c.timespec = .{ .sec = 0, .nsec = 300 * std.time.ns_per_ms };
+    _ = c.nanosleep(&ts, null);
+    const after = std.posix.getrusage(0);
+    stop.store(1, .release);
+    th.join();
+    const of = struct {
+        fn t(v: std.posix.timeval) u64 {
+            return @as(u64, @intCast(v.sec)) * std.time.ns_per_s + @as(u64, @intCast(v.usec)) * std.time.ns_per_us;
+        }
+    }.t;
+    const cpu = (of(after.utime) + of(after.stime)) - (of(before.utime) + of(before.stime));
+    try testing.expectEqual(@as(u32, 0), code);
+    // a spinning or yielding thread burns about the whole 300 ms; a sleeping one far less
+    try testing.expect(cpu < 100 * std.time.ns_per_ms);
+}
+
 /// A host thread doing what coll.stage and coll.collect do on a GPU, with ways to misbehave.
 const FakeGpu = struct {
     shared: *Shared,

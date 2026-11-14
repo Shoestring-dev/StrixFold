@@ -49,8 +49,7 @@ pub const Core = struct {
                     tcp_proxy.deviceGaveUp(k.shared, k.rank, q, k.nslot, "waiting for its GPU to stage gather");
                     return k.fail(2);
                 }
-                if (idle_since == 0) idle_since = wire.monotonicNs();
-                if (wire.monotonicNs() - idle_since > 20 * std.time.ns_per_ms) std.Thread.yield() catch {} else std.atomic.spinLoopHint();
+                tcp_proxy.idleWait(&idle_since);
                 continue;
             }
             idle_since = 0;
