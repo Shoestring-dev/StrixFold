@@ -260,7 +260,11 @@ receive CQ until both the local send completion and the peer's write of q are in
 byte_len and immediate and the trailer the peer wrote against its own slot words (any difference: Mismatch); then
 stores done[s] = q. TX ownership is tcp_proxy's (consumed gates the stage kernel, done waits for the send completion).
 RX ownership is transitive and holds for NSLOT >= 2, so NSLOT < 2 and the stripe thread (`TF_COLL_PROXY_STRIPE_KIB`
-> 0) are refused. Two MRs cover the TX slots and the RX slots only, never the slab header. The handshake carries
+> 0) are refused. The peer writes gather q + NSLOT into RX[s] only after this rank's write of q + NSLOT - 1, which the
+proxy posts only once stage(q + NSLOT - 1) set ready. The engine issues every gather on its one stream, one begun
+gather at a time, so collect(q), the last reader of RX[s], is ahead of that stage in stream order. gatherEnd refuses
+an end on a different stream from its begin (CollectiveFailed), the one way a caller could break that order inside a
+gather. Two MRs cover the TX slots and the RX slots only, never the slab header. The handshake carries
 `kind=rdma` and the two Infos (QP number, PSN, rkey, GID, MTU, slot count and size, receive region), and refuses a
 mixed pair or differing slot geometry; a second small frame each is the start barrier once both QPs are in RTS.
 

@@ -47,7 +47,8 @@ pub const RdmaProxy = struct {
     exchanged: std.atomic.Value(u64) = .init(0),
     begun: ?Begun = null,
 
-    const Begun = struct { host: bool, recv: u64, bytes: usize };
+    /// `stream` is the begin's; the end must be on it (see gatherEnd)
+    const Begun = struct { host: bool, recv: u64, bytes: usize, stream: gpu.Stream };
     const vtable: coll.Coll.VTable = .{ .all_gather = allGather, .abort = abort, .close = close, .gather_begin = gatherBegin, .gather_end = gatherEnd, .check = check, .counts = counts };
 
     fn counts(ptr: *anyopaque) coll.Coll.Counts {
@@ -133,10 +134,10 @@ pub const RdmaProxy = struct {
                 return error.CollectiveFailed;
             }
             try t.host.coll_().vtable.gather_begin.?(t.host, stream, site, send, recv, bytes);
-            t.begun = .{ .host = true, .recv = recv, .bytes = bytes };
+            t.begun = .{ .host = true, .recv = recv, .bytes = bytes, .stream = stream };
             return;
         }
-        t.begun = .{ .host = false, .recv = recv, .bytes = bytes };
+        t.begun = .{ .host = false, .recv = recv, .bytes = bytes, .stream = stream };
         if (bytes == 0) return;
         const site_word = (@as(u32, @intFromEnum(site.phase)) << 16) | site.layer;
         const cfg: gpu.Config = .{ .grid = .{ .x = tcp_proxy.TcpProxy.blocks(bytes), .y = 1, .z = 1 }, .block = .{ .x = 256, .y = 1, .z = 1 } };
@@ -151,6 +152,8 @@ pub const RdmaProxy = struct {
         const t: *RdmaProxy = @ptrCast(@alignCast(ptr));
         const b = t.begun orelse return t.misuse("a gather ended that was never begun");
         t.begun = null;
+        // RX[s] reuse needs collect(q) ahead of stage(q + nslot - 1) in stream order (COLLECTIVES-DESIGN 3.6)
+        if (b.stream.handle != stream.handle) return t.misuse("a gather ended on a different stream from its begin");
         if (b.host) return t.host.coll_().vtable.gather_end.?(t.host, stream);
         if (t.status()) |e| return e;
         if (b.bytes == 0) return;
