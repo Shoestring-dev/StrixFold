@@ -230,7 +230,7 @@ pub fn gated(raw_path: []const u8, metrics_open: bool) bool {
     const path = routePath(raw_path);
     if (metrics_open and (std.mem.eql(u8, path, "/metrics") or std.mem.eql(u8, path, "/v1/metrics"))) return false;
     if (std.mem.eql(u8, path, "/v1") or std.mem.startsWith(u8, path, "/v1/")) return true;
-    for ([_][]const u8{ "/metrics", "/dashboard", "/stats", "/tokenize", "/detokenize", "/models", "/messages", "/messages/count_tokens", "/chat/completions", "/completions", "/decisions", "/responses" }) |p| if (std.mem.eql(u8, path, p)) return true;
+    for ([_][]const u8{ "/metrics", "/dashboard", "/stats", "/tokenize", "/detokenize", "/models", "/messages", "/messages/count_tokens", "/chat/completions", "/completions", "/decisions", "/responses", "/cache/probe", "/cache/export", "/cache/import" }) |p| if (std.mem.eql(u8, path, p)) return true;
     if (std.mem.startsWith(u8, path, "/responses/")) return true;
     for ([_][]const u8{ "/chat/completions", "/completions", "/decisions", "/models" }) |end| if (std.mem.endsWith(u8, path, end)) return true;
     return false;
@@ -257,15 +257,16 @@ test "gates and digests" {
     try std.testing.expect(!gated("/health", false));
     try std.testing.expect(!gated("/metrics/", true));
     try std.testing.expect(gated("/alternative/chat/completions", false));
+    for ([_][]const u8{ "/cache/probe", "/cache/export", "/cache/import/", "/v1/cache/import", "/cache/export?x=1" }) |p| try std.testing.expect(gated(p, true));
     try std.testing.expect(digest("has space") == null);
     try std.testing.expect(loopback("127.0.0.1") and loopback("::1") and !loopback("0.0.0.0"));
 }
 
 /// A file's type and permission bits, size, identity and mtime: statx on Linux (its libc has no stat), stat elsewhere.
-const Meta = struct { mode: u32, size: u64, dev: u64, ino: u64, mtime_ns: i128 };
+pub const Meta = struct { mode: u32, size: u64, dev: u64, ino: u64, mtime_ns: i128 };
 
 /// `path` at the working directory, or the open `fd` itself when `path` is null.
-fn meta(fd: posix.fd_t, path: ?[*:0]const u8) ?Meta {
+pub fn meta(fd: posix.fd_t, path: ?[*:0]const u8) ?Meta {
     if (builtin.os.tag == .linux) {
         const linux = std.os.linux;
         var sx: linux.Statx = undefined;

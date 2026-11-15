@@ -3,6 +3,7 @@ const std = @import("std");
 const api = @import("engine_api");
 const json = @import("json.zig");
 const auth = @import("auth.zig");
+const cache_key = @import("cache_key.zig");
 const cli = @import("cli.zig");
 const log = @import("log.zig");
 const live = @import("live.zig");
@@ -105,8 +106,13 @@ pub fn run(gpa: Allocator, io: std.Io, args: cli.Args, s: Setup) u8 {
         std.debug.print("tensorfold: TENSORFOLD_SSE_KEEPALIVE={s}: whole seconds (0: off)\n", .{t});
         return 1;
     } else 0;
+    const transfer: ?cache_key.Key = if (args.cache_transfer_key) |path| cache_key.Key.load(gpa, path, &problem) catch {
+        std.debug.print("tensorfold: --cache-transfer-key {s}: {s}\n", .{ path, if (problem.len > 0) problem else "cannot be opened safely" });
+        return 1;
+    } else null;
     const config: server_mod.Config = .{
         .served_name = s.served,
+        .transfer = transfer,
         .model_ids = ids.items,
         .default_max_tokens = args.max_tokens,
         .max_images = args.vision_max_images,

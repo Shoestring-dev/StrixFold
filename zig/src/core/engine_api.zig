@@ -200,8 +200,7 @@ pub const Status = struct {
 
 pub const SubmitError = error{ Closed, Busy };
 
-/// A prompt-cache transfer (POST /cache/probe, export, import): the request thread fills it and waits; the engine's
-/// thread runs only the store lookup and the device copies between rounds (lane_host_cache.zig).
+/// A prompt-cache transfer (POST /cache/probe, export, import): the request thread fills it and waits for the engine's.
 pub const CacheOp = struct {
     kind: Kind,
     prompt: []const u32 = &.{}, // probe, export: the rendered prompt; import: the ids the state carries
@@ -314,6 +313,7 @@ pub const prompt_imprint = @import("prompt_imprint.zig");
 pub const keepalive = @import("keepalive.zig");
 
 test {
+    _ = @import("cache_wire.zig");
     _ = @import("lane_host.zig");
     _ = @import("lane_host_cache.zig");
     _ = @import("lane_host_reuse_test.zig");

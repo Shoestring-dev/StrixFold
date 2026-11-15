@@ -44,14 +44,14 @@ const Fake = struct {
         of(ptr).live -= 1;
     }
     /// The slot: the position and the sum (12 bytes); the rows: one byte a position, the position's low byte.
-    fn exportFn(_: *anyopaque, saved: Saved, gpa: Allocator, out: *pc.Moved) anyerror!void {
+    fn exportFn(_: *anyopaque, saved: Saved, gpa: Allocator, slot: *[]u8, rows: *[]u8) anyerror!void {
         const st: *State = @ptrCast(@alignCast(saved));
-        out.slot = try gpa.alloc(u8, 12);
-        errdefer gpa.free(out.slot);
-        std.mem.writeInt(u32, out.slot[0..4], st.at, .little);
-        std.mem.writeInt(u64, out.slot[4..12], st.sum, .little);
-        out.rows = try gpa.alloc(u8, st.at);
-        for (out.rows, 0..) |*b, i| b.* = @truncate(i);
+        slot.* = try gpa.alloc(u8, 12);
+        errdefer gpa.free(slot.*);
+        std.mem.writeInt(u32, slot.*[0..4], st.at, .little);
+        std.mem.writeInt(u64, slot.*[4..12], st.sum, .little);
+        rows.* = try gpa.alloc(u8, st.at);
+        for (rows.*, 0..) |*b, i| b.* = @truncate(i);
     }
     fn importFn(ptr: *anyopaque, at: u32, slot: []const u8, rows: []const u8) anyerror!Saved {
         const f = of(ptr);

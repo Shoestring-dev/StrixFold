@@ -94,6 +94,8 @@ pub const flags = [_]Flag{
     .{ .name = "--learn", .kind = .store_true, .native = true },
     .{ .name = "--learn-dir", .native = true },
     .{ .name = "--learn-gib", .native = true },
+    // the native server's own: the file whose key signs exported prompt states and admits the /cache routes
+    .{ .name = "--cache-transfer-key", .native = true },
 };
 
 /// The variables this binary honours as the Python engine does, then the CUDA build's.
@@ -117,6 +119,7 @@ pub const Args = struct {
     learn: bool = false, // keep shared prompt states on disk (--learn-dir: where; it implies --learn)
     learn_dir: ?[]const u8 = null,
     learn_gib: f64 = 32, // disk for learned states, every model and build together
+    cache_transfer_key: ?[]const u8 = null, // the /cache routes' key file (null: those routes are absent)
     max_tokens: i64 = 4096,
     vision_max_images: u32 = 32, // image parts a request may carry (an engine with vision)
     temperature: ?f64 = null,
@@ -233,7 +236,7 @@ fn apply(a: Allocator, out: *Args, name: []const u8, value: ?[]const u8, u: *Usa
     } else if (is(name, "--learn-gib")) {
         out.learn = true;
         out.learn_gib = try gib(u, a, name, v);
-    } else if (is(name, "--vision-max-images")) {
+    } else if (is(name, "--cache-transfer-key")) out.cache_transfer_key = v else if (is(name, "--vision-max-images")) {
         const n = try int(u, a, name, v);
         if (n < 1) return fail(u, a, "argument --vision-max-images: expected an image count from 1: '{s}'", .{v});
         out.vision_max_images = std.math.cast(u32, n) orelse std.math.maxInt(u32);
@@ -334,6 +337,8 @@ test "parse and capabilities share the table" {
     try std.testing.expect(dir.learn and std.mem.eql(u8, "/x/y", dir.learn_dir.?));
     const capped = try parse(a, &.{ "m", "--learn-gib", "8" }, &u);
     try std.testing.expect(capped.learn and capped.learn_gib == 8);
+    try std.testing.expect((try parse(a, &.{"m"}, &u)).cache_transfer_key == null);
+    try std.testing.expectEqualStrings("/k/f", (try parse(a, &.{ "m", "--cache-transfer-key", "/k/f" }, &u)).cache_transfer_key.?);
     for ([_][]const u8{ "1e300", "inf", "nan", "-1", "17179869184" }) |bad| try std.testing.expectError(error.Usage, parse(a, &.{ "m", "--prompt-cache-gib", bad }, &u));
     var out: std.Io.Writer.Allocating = .init(a);
     try capabilities(&out.writer, .{ .version = "0.6.5" });
@@ -341,6 +346,7 @@ test "parse and capabilities share the table" {
     try std.testing.expect(std.mem.indexOf(u8, doc, "\"--no-thinking\": {}") != null);
     try std.testing.expect(std.mem.indexOf(u8, doc, "\"--drafter\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, doc, "\"--compact-at\": {}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doc, "\"--cache-transfer-key\": {}") != null);
     const on = try parse(a, &.{ "m", "--compact-at", "auto", "--compact-keep", "100", "--compact-memory", "notes" }, &u);
     try std.testing.expect(on.compact_auto);
     try std.testing.expectEqual(@as(?u32, 100), on.compact_keep);

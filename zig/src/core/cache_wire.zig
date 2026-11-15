@@ -1,4 +1,4 @@
-//! A kept prompt state on the wire (POST /cache/export and /cache/import): a signed header and sf-disk's payload layout.
+//! A kept prompt state on the wire (POST /cache/export, /cache/import): a signed header over sf-disk's payload layout.
 const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
