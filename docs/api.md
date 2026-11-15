@@ -372,6 +372,31 @@ What a miss costs, from real agent work ([RESULTS.md](RESULTS.md#real-agent-work
 Bosgame M5 pair, a 24K-token re-read took about 25 s. A prompt is read whole before the pair's next decode step, so the
 other requests on the pair wait for it: an agent's steps that landed in such re-reads decoded at about 3 tok/s.
 
+### Moving a kept state off the engine and back
+
+Off by default. `--cache-transfer-key FILE` (serve.conf `CACHE_TRANSFER_KEY=`) adds three routes to the native server
+on the AMD pair; without it they are absent (404). The file, mode `0600`, holds two lines: the HMAC-SHA256 key as 64
+hex digits, then the bearer the routes answer to. That bearer is separate from the API keys: send it as
+`Authorization: Bearer` or `x-cache-transfer-key`, and the API key (when keys are configured) in the other header.
+A request without it is a 401 before any body is read.
+
+| Route | Behavior |
+| --- | --- |
+| `POST /cache/probe` | A chat body (`messages`, `tools`, the fields that shape the prompt); `{"tokens": N, "prompt_tokens": M}`: N positions of a kept state the prompt resumes, 0 for none |
+| `POST /cache/export` | The same body; the longest kept state the prompt resumes as `application/octet-stream`, its positions in `x-cache-tokens`; 404 when none |
+| `POST /cache/import` | An export's bytes back as a kept state on both ranks; `{"tokens": N}` |
+
+An export is the state's slot bytes and its blocks' rows in sf-disk's layout (the bytes the disk tier keeps for the same
+prompt), behind a header that binds the engine's identity (as the disk tier's: build, checkpoint, plan and settings),
+the positions, the token ids and their SHA-256; the body ends in an HMAC-SHA256 of all of it under the server's key.
+Import verifies that MAC in constant time before reading anything else, so only what this server (or one sharing its
+key) handed out comes back, and a state never lands on a different prompt. The header's lengths are then checked
+against the engine's own sizes and the body's length before any byte is copied; a mismatch is a 400 naming the field.
+A `Content-Length` past the largest state the engine takes is a 413 before the body is read, and a chunked body a 411.
+The request's thread reads, verifies and parses; the engine's thread only copies the state to the devices between
+rounds, so decoding streams see one short pause. An import past the budget evicts the least recently used kept state;
+one that fits nowhere in the pool now is a 503.
+
 ## Metrics
 
 `GET /metrics` and `GET /v1/metrics` answer as Prometheus text on both servers. Each family is read on its own
