@@ -227,6 +227,8 @@ serve_env() {
   local commit
   commit=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["commit"])' "$DEPLOY_DIR/DEPLOY.json")
   SERVE_ENV+=(TF_DS_DEPLOY="$commit" TF_DS_BUNDLE="$BUNDLE_SHA256" TF_DS_CONF="$(sha256sum "$SERVE_CONF" | cut -d' ' -f1)")
+  # rank 1's run dir, where first_light.sh down leaves its stop marker (exit 0 on a stop, 1 on a lost peer)
+  [ "$RANK" = 1 ] && [ -n "${RUN:-}" ] && SERVE_ENV+=(TF_TFP_RUN="$RUN")
   if [ "$RANK" = 0 ]; then
     SERVE_ENV+=(TF_TP_WORLD="$WORLD" TF_TP_MASTER="$MASTER_IP" TF_TP_PORT="$TP_PORT" TF_DS_RANK_CACHE="$RANK_CACHE"
       TF_DS_KIT="$DS_KIT" TF_DS_ENGRAM="$ENGRAM_DIR" TF_DS_TOKEN_MAP="$TOKEN_MAP" TF_DS_STREAMS="$STREAMS"

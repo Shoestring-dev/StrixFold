@@ -15,8 +15,9 @@
 #               TTFT, prefill and decode tok/s, the server's /metrics, load on both boxes before and after
 #            RUN/first_light.json: both resolved configurations, the probe, the timed run, uptime on both boxes.
 #            Any failure takes the run down again (exit 1).
-#   down     rank 0 stopped cleanly (SIGTERM: the engine closes, rank 1 hears done and leaves), rank 1 stopped if it
-#            has not left, both locks released
+#   down     RUN/stopping written, then rank 0 stopped cleanly (SIGTERM: the engine closes, rank 1 hears done and
+#            leaves with exit 0; without the marker a peer that goes away is exit 1), rank 1 stopped if it has not
+#            left, both locks released
 #   restart  down, then up (a new run)
 #   status   both ranks
 set -Eeuo pipefail  # (-E: the ERR trap reaches failures inside functions)
@@ -42,6 +43,8 @@ down() {
   set +e
   # a quiet window left on by a failure (the requests also expire after 20 minutes)
   [ -n "${QUIET_TAG:-}" ] && quiet_both off
+  # rank 1 reads this marker (its TF_TFP_RUN, serve_lib.sh) and leaves with 0 when its peer goes; without it, 1
+  : > "$RUN/stopping" 2>/dev/null || echo "first_light down: cannot write $RUN/stopping (rank 1 exits 1)" >&2
   r0 stop
   local i
   for i in $(seq 1 "$STOP_TIMEOUT_S"); do [ -z "$(serve_pid "$RUN/rank1.pid")" ] && break; sleep 1; done
@@ -56,6 +59,7 @@ up() {
   export RUN_ID
   RUN=$RUN_ROOT/$RUN_ID
   mkdir -p "$RUN"
+  rm -f "$RUN/stopping"   # (a reused RUN_ID: the marker was an earlier down's, not this run's)
   echo "run $RUN_ID: rank 0 on $R0, rank 1 on $(hostname)"
   r0 check > "$RUN/resolved-rank0.json"
   ./serve-rank1.sh check > /dev/null

@@ -39,6 +39,17 @@ const Job = struct {
     done: bool = false,
 };
 
+/// Rank 1's exit without libc exit(): the dlopened GPU runtime's fini list faults once the device is torn down.
+fn rank1Exit(code: u8) noreturn {
+    std.c._exit(code);
+}
+
+/// Whether the run dir TF_TFP_RUN names (the launcher's) holds the stop marker; unset, as a rank run by hand: no.
+fn stoppedHere(io: std.Io) bool {
+    const dir = std.c.getenv("TF_TFP_RUN") orelse return false;
+    return dsv41.stop_marker.present(io, std.mem.span(dir));
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const a = init.arena.allocator();
     const gpa = init.gpa;
@@ -137,6 +148,11 @@ pub fn main(init: std.process.Init) !u8 {
     var out = std.Io.File.stdout().writer(io, &out_buf);
     const w = &out.interface;
 
+    // rank 1 leaves through rank1Exit after its teardown (this defer runs last): a stop is 0, a lost peer 1
+    var rank1_code: u8 = 1;
+    var rank1_leaving = false; // only its two normal ways out; an error exit is unchanged
+    defer if (o.rank != 0 and rank1_leaving) rank1Exit(rank1_code);
+
     var driver = try gpu.Driver.open();
     defer driver.close();
     var ctx = try gpu.Context.init(&driver, 0);
@@ -177,10 +193,14 @@ pub fn main(init: std.process.Init) !u8 {
         dsv41.lanes.follow(gpa, m) catch |err| {
             try w.print("{{\"rank\": {d}, \"follow\": \"{s}\"}}\n", .{ o.rank, @errorName(err) });
             try w.flush();
+            rank1_code = if (stoppedHere(io)) 0 else 1; // a PeerDown with the marker is the stop it asked for
+            rank1_leaving = true;
             return 1;
         };
         try w.print("{{\"rank\": {d}, \"followed\": true}}\n", .{o.rank});
         try w.flush();
+        rank1_code = 0;
+        rank1_leaving = true;
         return 0;
     }
 

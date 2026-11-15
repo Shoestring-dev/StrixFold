@@ -91,7 +91,7 @@ cover the slab, and `preflight.sh --rdma-check` on each box says whether a rank 
 cd ~/tfp/deploy/current/tools/dsv41-hip
 TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh up       # locks (node0, then node1), rank 1, rank 0, /health, probe
 TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh status
-TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh down     # rank 0 SIGTERM (rank 1 leaves with it), locks released
+TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh down     # rank 0 SIGTERM (rank 1 leaves with it, exit 0), locks released
 TF_SERVE_CONF=$HOME/tfp/run/conf/my.conf ./first_light.sh restart
 ```
 `up` refuses to start unless both ranks resolve to the same deploy commit, kit manifest and configuration, and the
