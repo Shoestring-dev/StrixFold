@@ -30,6 +30,7 @@ test "the text capability stays a HIP rank's default; text_image is asked for" {
 test {
     // the host tests of the files a HIP rank uses
     _ = @import("coll.zig");
+    _ = @import("cache_move.zig");
     _ = @import("model.zig");
     _ = @import("tcp_wire.zig");
     _ = @import("tcp_coll.zig");
