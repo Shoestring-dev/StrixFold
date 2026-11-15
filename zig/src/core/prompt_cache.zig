@@ -7,7 +7,7 @@ const wire = @import("cache_wire.zig");
 /// A family's copy of one state.
 pub const Saved = *anyopaque;
 
-/// A kept state's parts off the engine (POST /cache/export): its slot bytes, then each block's plane rows (sf-disk's).
+/// A kept state's parts off the engine (POST /cache/export): its slot bytes, then its blocks' rows (as sf-disk).
 pub const Moved = struct { slot: []u8 = &.{}, rows: []u8 = &.{} };
 
 /// What a family gives the cache: copies of its state while the prompt pass stands at a chunk end.
@@ -37,8 +37,8 @@ pub const Snapshots = struct {
         read: ?*const fn (ptr: *anyopaque, dir: [:0]const u8, key: u64, at: u32) anyerror!Saved = null,
         /// Learned state `key`'s files under `dir` removed (the cap needs room, or they no longer read back).
         forget: ?*const fn (ptr: *anyopaque, dir: [:0]const u8, key: u64) void = null,
-        /// `saved` copied off the engine in sf-disk's layout (POST /cache/export), both parts allocated in `gpa`.
-        export_state: ?*const fn (ptr: *anyopaque, saved: Saved, gpa: Allocator, out: *Moved) anyerror!void = null,
+        /// `saved` copied off the engine in sf-disk's layout (POST /cache/export): slot bytes and block rows, in `gpa`.
+        export_state: ?*const fn (ptr: *anyopaque, saved: Saved, gpa: Allocator, slot: *[]u8, rows: *[]u8) anyerror!void = null,
         /// A state of `at` positions from an export's parts (POST /cache/import), into new storage on every rank.
         import_state: ?*const fn (ptr: *anyopaque, at: u32, slot: []const u8, rows: []const u8) anyerror!Saved = null,
     };
@@ -128,7 +128,7 @@ pub const Store = struct {
         const e = s.find(prompt, starts) orelse return null;
         var out: Exported = .{ .at = e.at, .ids = try gpa.dupe(u32, e.tokens), .parts = .{} };
         errdefer gpa.free(out.ids);
-        try ex(s.family.ptr, e.saved, gpa, &out.parts);
+        try ex(s.family.ptr, e.saved, gpa, &out.parts.slot, &out.parts.rows);
         return out;
     }
 

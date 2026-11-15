@@ -18,6 +18,7 @@ const prompt = @import("prompt.zig");
 const tool_specs = @import("tool_specs.zig");
 const chunk_plan = @import("chunk_plan.zig");
 const messages_mod = @import("messages.zig");
+const cache_key = @import("cache_key.zig");
 const log = @import("log.zig");
 const Value = json.Value;
 const Cx = errors.Cx;
@@ -57,6 +58,8 @@ pub const Config = struct {
     /// Directory of the stored note, or null when notes are not stored.
     compact_memory: ?[]const u8 = null,
     timeouts: http_conn.Timeouts = .{},
+    /// --cache-transfer-key: what signs an export and admits the /cache routes; null: those routes are absent (404).
+    transfer: ?cache_key.Key = null,
 };
 
 pub const Server = struct {
