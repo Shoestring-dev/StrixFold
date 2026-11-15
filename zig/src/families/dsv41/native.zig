@@ -33,6 +33,7 @@ const gpu = @import("gpu");
 const lanes = @import("lanes");
 const model = @import("model.zig");
 const lanes_mod = @import("lanes.zig");
+const cache_move = @import("cache_move.zig");
 const round = @import("round.zig");
 const draft_mod = @import("draft.zig");
 const link = @import("link.zig");
@@ -99,6 +100,11 @@ pub const Snaps = struct {
     save: *const fn (*anyopaque, ?*anyopaque, u32) anyerror!*anyopaque,
     restore: *const fn (*anyopaque, ?*anyopaque, *anyopaque) anyerror!void,
     drop: *const fn (*anyopaque, *anyopaque) void,
+    /// POST /cache/export and /cache/import: a kept state off the engine in sf-disk's layout and back (cache_move.zig).
+    export_state: ?*const fn (*anyopaque, *anyopaque, std.mem.Allocator, *[]u8, *[]u8) anyerror!void = null,
+    import_state: ?*const fn (*anyopaque, u32, []const u8, []const u8) anyerror!*anyopaque = null,
+    /// What the states look like on the wire (the identity namespace and sizes); null: no transfers.
+    shape: ?cache_move.Shape = null,
 };
 
 /// The rank's model and the backend over it (what `open` hands the server, freed by `deinit`).
@@ -250,7 +256,7 @@ pub fn open(gpa: std.mem.Allocator, io: std.Io, ctx: *const gpu.Context, dir: []
     };
     // the pool is the model's (preallocated): a stream takes no device memory of its own
     const L = lanes_mod.Lanes;
-    const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn };
+    const snaps: Snaps = .{ .ptr = &st.lanes, .bytes = L.snapBytesFn, .save = L.snapSaveFn, .restore = L.snapRestoreFn, .drop = L.snapDropFn, .export_state = cache_move.exportFn, .import_state = cache_move.importFn, .shape = cache_move.shapeOf(gpa, st.m) };
     return .{ .backend = st.lanes.backend(), .facts = st.lanes.facts(), .rows = @intCast(st.m.eng.round_rows), .stream_bytes = 0, .ctx = st, .deinit = deinitFn, .snaps = snaps, .vision = hook, .structures = st.vocab != null, .context_window = lanes_mod.usableContext(st.m.context_cap, st.m.eng.round_rows) };
 }
 

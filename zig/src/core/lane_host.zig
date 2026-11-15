@@ -3,6 +3,7 @@ const std = @import("std");
 const lanes = @import("lanes");
 const api = @import("engine_api.zig");
 const pc = @import("prompt_cache.zig");
+const cache_mail = @import("lane_host_cache.zig");
 const Allocator = std.mem.Allocator;
 const Id = api.Id;
 const Request = api.Request;
@@ -39,6 +40,8 @@ pub const LaneHost = struct {
     lone: ?api.Lone = null, // the backend's driver for a lone greedy stream; null: every stream in the lane core
     lone_job: ?*Job = null, // the job that driver holds now
     cache: ?*pc.Store = null, // kept prompt states (engine thread only); the backend restores and saves them
+    ops: std.ArrayList(*api.CacheOp) = .empty, // prompt-cache transfers queued for the engine thread (cache_mail)
+    ops_done: std.Io.Condition = .init, // a transfer finished: its caller stops waiting
     memory: ?api.MemorySource = null, // the backend's memory counts; null: Engine.memory reports none
     explain: ?api.Explain = null, // the backend's words for a request it refuses; null: the error's name
     // the request at the queue's front waits for room in the backend's pool (its prompt pass refused ContextFull while
@@ -114,6 +117,7 @@ pub const LaneHost = struct {
         if (h.thread) |t| t.join();
         h.thread = null;
         h.queued.deinit(h.gpa);
+        h.ops.deinit(h.gpa);
         h.admitted.deinit(h.gpa);
         h.cancels.deinit(h.gpa);
         h.decoded.deinit(h.gpa);
@@ -121,7 +125,7 @@ pub const LaneHost = struct {
     }
 
     pub fn engine(h: *LaneHost) Engine {
-        return .{ .ctx = h, .vtable = &.{ .info = infoFn, .submit = submitFn, .cancel = cancelFn, .status = statusFn, .memory = memoryFn, .keepalive = keepaliveFn } };
+        return .{ .ctx = h, .vtable = &.{ .info = infoFn, .submit = submitFn, .cancel = cancelFn, .status = statusFn, .memory = memoryFn, .keepalive = keepaliveFn, .cache = cache_mail.cacheFn, .cache_shape = cache_mail.shapeFn } };
     }
 
     /// The family's queue as a keepalive target, when it set one.
@@ -575,6 +579,7 @@ pub const LaneHost = struct {
     fn run(h: *LaneHost) void {
         while (true) {
             h.takeCancels();
+            cache_mail.takeOps(h);
             if (h.filling == null) {
                 while (h.admitOne()) {}
             }
@@ -583,12 +588,12 @@ pub const LaneHost = struct {
             if (h.closing) {
                 const left = h.queued.items.len + h.admitted.items.len;
                 h.unlock();
-                if (left == 0) return;
+                if (left == 0) return cache_mail.closeOps(h);
                 h.closeAll();
                 continue;
             }
             if (h.core.activeCount() == 0 and h.filling == null) {
-                if (h.cancels.items.len == 0 and (h.firstReady() == null or h.admitted.items.len >= h.info_.lanes))
+                if (h.cancels.items.len == 0 and h.ops.items.len == 0 and (h.firstReady() == null or h.admitted.items.len >= h.info_.lanes))
                     h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } }) catch {};
                 h.unlock();
                 continue;

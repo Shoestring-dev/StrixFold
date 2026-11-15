@@ -41,6 +41,8 @@ test {
     _ = @import("top_k_test.zig");
     _ = @import("image_limits_test.zig");
     _ = @import("late_system_test.zig");
+    _ = @import("cache_key.zig");
+    _ = @import("cache_routes_test.zig");
     _ = @import("effort_values_test.zig");
     _ = @import("telemetry_reply_test.zig");
     _ = @import("compact_test.zig");

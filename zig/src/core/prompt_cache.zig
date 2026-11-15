@@ -2,9 +2,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const imprint = @import("prompt_imprint.zig");
+const wire = @import("cache_wire.zig");
 
 /// A family's copy of one state.
 pub const Saved = *anyopaque;
+
+/// A kept state's parts off the engine (POST /cache/export): its slot bytes, then its blocks' rows (as sf-disk).
+pub const Moved = struct { slot: []u8 = &.{}, rows: []u8 = &.{} };
 
 /// What a family gives the cache: copies of its state while the prompt pass stands at a chunk end.
 pub const Snapshots = struct {
@@ -33,8 +37,15 @@ pub const Snapshots = struct {
         read: ?*const fn (ptr: *anyopaque, dir: [:0]const u8, key: u64, at: u32) anyerror!Saved = null,
         /// Learned state `key`'s files under `dir` removed (the cap needs room, or they no longer read back).
         forget: ?*const fn (ptr: *anyopaque, dir: [:0]const u8, key: u64) void = null,
+        /// `saved` copied off the engine in sf-disk's layout (POST /cache/export): slot bytes and block rows, in `gpa`.
+        export_state: ?*const fn (ptr: *anyopaque, saved: Saved, gpa: Allocator, slot: *[]u8, rows: *[]u8) anyerror!void = null,
+        /// A state of `at` positions from an export's parts (POST /cache/import), into new storage on every rank.
+        import_state: ?*const fn (ptr: *anyopaque, at: u32, slot: []const u8, rows: []const u8) anyerror!Saved = null,
     };
 };
+
+/// A kept state off the engine: its positions, the ids it carries (gpa) and its parts (gpa).
+pub const Exported = struct { at: u32, ids: []u32, parts: Moved };
 
 /// What a family's states depend on beyond their position.
 pub const Rules = struct {
@@ -78,6 +89,7 @@ pub const Store = struct {
     counts: Counts = .{},
     shared_keys: std.ArrayList(u64) = .empty, // the tokens of recently planned shared cuts, hashed (at most SHARED_KEYS)
     imprint: ?*imprint.Imprint = null, // --learn: shared cuts' states on disk, read back by later sessions and servers
+    shape: ?wire.Shape = null, // what the family's states look like on the wire (set by its backend); null: no transfers
 
     const SHARED_KEYS = 64;
 
@@ -103,6 +115,49 @@ pub const Store = struct {
         const e = s.entries.orderedRemove(i);
         s.held -= e.bytes;
         s.free(e);
+    }
+
+    /// The positions of the longest kept state `prompt` resumes (POST /cache/probe): 0 when none.
+    pub fn probe(s: *Store, prompt: []const u32, starts: []const u32) u32 {
+        return if (s.find(prompt, starts)) |e| e.at else 0;
+    }
+
+    /// The longest kept state `prompt` resumes, copied off the engine (POST /cache/export); null when none.
+    pub fn exportState(s: *Store, gpa: Allocator, prompt: []const u32, starts: []const u32) !?Exported {
+        const ex = s.family.vtable.export_state orelse return error.NoTransfer;
+        const e = s.find(prompt, starts) orelse return null;
+        var out: Exported = .{ .at = e.at, .ids = try gpa.dupe(u32, e.tokens), .parts = .{} };
+        errdefer gpa.free(out.ids);
+        try ex(s.family.ptr, e.saved, gpa, &out.parts.slot, &out.parts.rows);
+        return out;
+    }
+
+    /// An exported state of `at` positions taken back as a kept one for `ids` (POST /cache/import); kept once.
+    pub fn importState(s: *Store, ids: []const u32, at: u32, slot: []const u8, rows: []const u8) !u32 {
+        const im = s.family.vtable.import_state orelse return error.NoTransfer;
+        if (at == 0 or ids.len != @as(usize, at) + s.rules.lookahead) return error.BadState;
+        for (s.entries.items) |e| if (e.at == at and std.mem.eql(u32, e.tokens, ids)) return at;
+        const need = s.family.vtable.bytes(s.family.ptr, at);
+        if (need > s.budget) return error.PastBudget;
+        while (s.held + s.spare() + need > s.budget) {
+            s.remove(s.victimBut(null, ids) orelse return error.PastBudget);
+            s.counts.evicted += 1;
+        }
+        const e = try s.gpa.create(Entry);
+        errdefer s.gpa.destroy(e);
+        const tokens = try s.gpa.dupe(u32, ids);
+        errdefer s.gpa.free(tokens);
+        const last = try s.gpa.dupe(u32, ids);
+        errdefer s.gpa.free(last);
+        try s.entries.ensureUnusedCapacity(s.gpa, 1);
+        const saved = try im(s.family.ptr, at, slot, rows);
+        s.clock += 1;
+        const charged = if (s.family.vtable.charged) |f| f(s.family.ptr, saved) else need;
+        e.* = .{ .tokens = tokens, .at = at, .saved = saved, .bytes = charged, .born = @intCast(ids.len), .used = s.clock, .last = last };
+        s.entries.appendAssumeCapacity(e);
+        s.held += charged;
+        s.counts.kept += 1;
+        return at;
     }
 
     /// The family's free storage kept for later saves.
@@ -409,4 +464,5 @@ fn floorStart(starts: []const u32, at: u32) u32 {
 
 test {
     _ = @import("prompt_cache_test.zig");
+    _ = @import("prompt_cache_transfer_test.zig");
 }
