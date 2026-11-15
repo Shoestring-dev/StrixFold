@@ -385,7 +385,15 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
         const want: u64 = @intFromFloat((o.prompt_cache_gib orelse 0.5) * gib);
         if (want > 0) {
             h.snap_vt = .{ .bytes = sn.bytes, .save = sn.save, .restore = sn.restore, .drop = sn.drop, .resumes = if (@hasField(@TypeOf(sn), "resumes")) sn.resumes else null, .live = if (@hasField(@TypeOf(sn), "live")) sn.live else null };
+            // a family whose states move (POST /cache/export, /cache/import): its copies, and their wire shape
+            if (@hasField(@TypeOf(sn), "export_state")) {
+                h.snap_vt.export_state = sn.export_state;
+                h.snap_vt.import_state = sn.import_state;
+            }
             h.cache = api.prompt_cache.Store.init(gpa, .{ .ptr = sn.ptr, .vtable = &h.snap_vt }, .{ .tail = if (@hasField(@TypeOf(sn), "tail")) sn.tail else 0 }, want);
+            if (@hasField(@TypeOf(sn), "shape")) if (sn.shape) |sh| {
+                h.cache.?.shape = .{ .ns = sh.ns, .block_tokens = sh.block_tokens, .max_blocks = sh.max_blocks, .max_positions = sh.max_positions, .slot_bytes = sh.slot_bytes, .block_bytes = sh.block_bytes };
+            };
         }
     };
     // text only on HIP (D13): the family hands no vision hook, so the server refuses image parts
