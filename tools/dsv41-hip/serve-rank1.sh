@@ -17,6 +17,7 @@ RUN=$RUN_ROOT/${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 case ${1:-} in
   start)
     mkdir -p "$RUN"; ln -sfn "$(basename "$RUN")" "$RUN_ROOT/latest"
+    rm -f "$RUN/stopping"   # (a reused run dir, as RUN_ID's default latest: the marker was an earlier down's)
     [ -z "$(serve_pid "$RUN/rank1.pid")" ] || die "rank 1 already runs ($(cat "$RUN/rank1.pid"))"
     serve_check; serve_idle; serve_env; serve_cmd; serve_resolved "$RUN/resolved-rank1.json"
     serve_spawn "$RUN/rank1.pid" "$RUN/rank1.log" "$([ "${2:-}" = --locked ] && echo 1 || echo 0)"
