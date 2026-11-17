@@ -175,9 +175,10 @@ pub const Reader = struct {
         return b;
     }
 
-    /// A list of ids written by Wire.ids, into `out` (replacing it).
+    /// A list of ids written by Wire.ids, into `out` (replacing it; BadFrame before resizing if the frame is short).
     pub fn ids(r: *Reader, gpa: std.mem.Allocator, out: *std.ArrayList(i32)) !void {
         const n = try r.int(u32);
+        if (r.b.len - r.at < @as(u64, n) * @sizeOf(i32)) return error.BadFrame;
         try out.resize(gpa, n);
         for (out.items) |*x| x.* = try r.int(i32);
     }
@@ -2003,6 +2004,42 @@ test "a frame's fields read back as written" {
     try r.ids(gpa, &got);
     try std.testing.expectEqualSlices(i32, &.{ 1, -2, 129279 }, got.items);
     try std.testing.expectError(error.ShortFrame, r.int(u8));
+}
+
+test "a list of ids followed by fields reads back; a count its frame does not hold is refused before any allocation" {
+    const gpa = std.testing.allocator;
+    var w: Wire = .{};
+    defer w.deinit(gpa);
+    try w.begin(gpa, .verify, 3);
+    try w.ids(gpa, &.{ 5, -6, 7 });
+    try w.int(gpa, u64, 42); // a verify window's ids are followed by the next window's fields
+    var r: Reader = .{ .b = w.buf.items[9..] }; // past the kind and the step
+    var got: std.ArrayList(i32) = .empty;
+    defer got.deinit(gpa);
+    try r.ids(gpa, &got);
+    try std.testing.expectEqualSlices(i32, &.{ 5, -6, 7 }, got.items);
+    try std.testing.expectEqual(@as(u64, 42), try r.int(u64));
+    try r.end();
+    const after = w.buf.items[13..]; // the ids' and the u64's bytes
+    // an allocator that fails every allocation: a refusal before resizing is BadFrame, not OutOfMemory
+    var none = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    var out: std.ArrayList(i32) = .empty;
+    const cases = [_]struct { n: u32, bytes: usize }{
+        .{ .n = 3, .bytes = 8 }, // short
+        .{ .n = 3, .bytes = 11 }, // a partial id
+        .{ .n = 6, .bytes = 20 }, // the fields after it do not make up the rest
+        .{ .n = std.math.maxInt(u32), .bytes = 20 }, // a count from an out-of-step frame
+    };
+    for (cases) |cs| {
+        var f: std.ArrayList(u8) = .empty;
+        defer f.deinit(gpa);
+        var nb: [4]u8 = undefined;
+        std.mem.writeInt(u32, &nb, cs.n, .little);
+        try f.appendSlice(gpa, &nb);
+        try f.appendSlice(gpa, after[0..cs.bytes]);
+        var rb: Reader = .{ .b = f.items };
+        try std.testing.expectError(error.BadFrame, rb.ids(none.allocator(), &out));
+    }
 }
 
 test "a round's rows: each window at its positions, its ids written over the rejected rows" {
