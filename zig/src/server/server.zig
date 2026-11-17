@@ -322,8 +322,7 @@ pub const Server = struct {
         }
     }
 
-    /// A handler that returned without a whole response (an allocation failure before its reply) closes the
-    /// connection, so a keep-alive client is not left waiting for a reply that never comes.
+    /// A handler that sent no whole reply (out of memory) closes the connection, so no keep-alive client waits on it.
     pub fn dispatch(srv: *Server, conn: *http_conn.Conn, a: Allocator) void {
         routes.dispatch(srv, conn, a);
         if (!conn.response_complete) conn.close = true;
