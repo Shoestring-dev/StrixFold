@@ -159,6 +159,15 @@ pub const Reader = struct {
         return k;
     }
 
+    /// A count and that many keys, the rest of the frame (BadFrame before any allocation if its bytes do not hold them)
+    pub fn keys(r: *Reader, gpa: std.mem.Allocator) ![]pd.Key {
+        const n = try r.int(u32);
+        if (r.b.len - r.at != @as(u64, n) * @sizeOf(pd.Key)) return error.BadFrame;
+        const out = try gpa.alloc(pd.Key, n);
+        for (out) |*k| k.* = try r.key();
+        return out;
+    }
+
     /// The frame's bytes after those read.
     pub fn rest(r: *Reader) []const u8 {
         const b = r.b[r.at..];
@@ -1896,10 +1905,8 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
                 }
             },
             .disk_drop => {
-                const n = try r.int(u32);
-                const keys = try gpa.alloc(pd.Key, n);
+                const keys = try r.keys(gpa);
                 defer gpa.free(keys);
-                for (keys) |*k| k.* = try r.key();
                 try r.end();
                 if (disk) |d| d.tier.drop(keys);
             },

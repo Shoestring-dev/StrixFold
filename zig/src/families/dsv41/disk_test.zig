@@ -2,6 +2,7 @@
 const std = @import("std");
 const core = @import("core");
 const disk = @import("disk.zig");
+const lanes = @import("lanes.zig");
 const pd = core.prompt_disk;
 const Key = pd.Key;
 const Settings = disk.Settings;
@@ -250,4 +251,42 @@ test "a run whose submit fails queues nothing: its reservation comes back and it
     try std.testing.expectEqual(@as(u64, 1 << 20), t.queueRoom());
     try std.testing.expectEqual(@as(usize, 0), t.blocks.count());
     try std.testing.expectEqual(@as(u64, 0), t.bytes);
+}
+
+test "a drop frame's keys: read back as written; a count its bytes do not hold is refused before any allocation" {
+    const gpa = std.testing.allocator;
+    var w: lanes.Wire = .{};
+    defer w.deinit(gpa);
+    const ks = [_]Key{ @splat(1), @splat(2), @splat(3) };
+    try w.begin(gpa, .disk_drop, 5);
+    try w.int(gpa, u32, ks.len);
+    for (ks) |k| try w.key(gpa, k);
+    var r: lanes.Reader = .{ .b = w.buf.items[9..] }; // past the kind and the step
+    const got = try r.keys(gpa);
+    defer gpa.free(got);
+    try std.testing.expectEqualSlices(Key, &ks, got);
+    try r.end();
+    const all = w.buf.items[13..]; // the keys' bytes
+    // an allocator that fails every allocation: a refusal before allocating is BadFrame, not OutOfMemory
+    var none = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    const cases = [_]struct { n: u32, bytes: usize }{
+        .{ .n = 3, .bytes = 2 * 32 }, // short
+        .{ .n = 2, .bytes = 3 * 32 }, // oversized
+        .{ .n = 3, .bytes = 3 * 32 - 1 }, // a partial key
+        .{ .n = std.math.maxInt(u32), .bytes = 32 }, // a count from an out-of-step frame
+    };
+    for (cases) |cs| {
+        var f: std.ArrayList(u8) = .empty;
+        defer f.deinit(gpa);
+        var nb: [4]u8 = undefined;
+        std.mem.writeInt(u32, &nb, cs.n, .little);
+        try f.appendSlice(gpa, &nb);
+        try f.appendSlice(gpa, all[0..cs.bytes]);
+        var rb: lanes.Reader = .{ .b = f.items };
+        try std.testing.expectError(error.BadFrame, rb.keys(none.allocator()));
+    }
+    var empty: lanes.Reader = .{ .b = &[_]u8{ 0, 0, 0, 0 } };
+    const no_keys = try empty.keys(gpa);
+    defer gpa.free(no_keys);
+    try std.testing.expectEqual(@as(usize, 0), no_keys.len);
 }
