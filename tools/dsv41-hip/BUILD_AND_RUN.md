@@ -117,7 +117,9 @@ and every hash, `probe.json`).
 - **Several chats at once:** `STREAMS` and `PARALLEL` up to 8 (the measured 1-8 chat results in
   [docs/RESULTS.md](../../docs/RESULTS.md)). Every stream shares the pool's `CONTEXT` positions.
 - **Longer context:** `CONTEXT` up to the RoPE tables' rows minus 49. With the default 65,536 rows that is 63,488
-  tokens; longer windows need inputs prepared with more rows (the 1M-token runs in RESULTS did that).
+  tokens; longer windows need inputs prepared with more rows (`prepare_inputs.sh`'s fourth argument), checked with the
+  pool as `verify_inputs.sh`'s sixth, and deployed with that bundle's `--ds-kit`: the steps are in
+  [GETTING-STARTED.md, Longer context](../../docs/GETTING-STARTED.md#longer-context).
 - **Drafts:** `DRAFTS=1` (the default) turns on DSpark drafting, which the published speeds need: on our pair the
   `bench` code prompt writes 74.5 tok/s with it and about 33 without. It gives exactly the same text as `DRAFTS=0`.
 

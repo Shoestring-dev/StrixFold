@@ -10,9 +10,9 @@ One box's inputs for one TP2 rank, checked before that rank may load them:
   3. the CPU assets against identities kept in this repository, not flags in the bundle: chat template c282975e...;
      token map, Engram layers/ngram/heads/pad/primes/offsets/multipliers and token-map hash equal to the creator kit
      v0.6.1 engram.json (assets/creator_kit_v0.6.1_engram.json); the four RoPE tables hash equal to the reference for
-     their row count (assets/rope_reference_<rows>.json, derived from the creator kit's served tables by
-     rope_reference.py; --rope-reference for other row counts) and cover the requested pool (model.zig reads pool + 49
-     rows);
+     their row count (assets/rope_reference_<rows>.json for 65,536, 131,072, 262,144, 524,288, 1,048,576 and 1,114,112
+     rows, derived from the creator kit's served tables; for other row counts the BUNDLE.rope-reference.json that
+     prepare_inputs.sh wrote, or --rope-reference) and cover the requested pool (model.zig reads pool + 49 rows);
   4. the checkpoint (MODEL_DIR) authenticated file by file against the pinned HF metadata, with the Python rank plan
      for this rank;
   5. both Engram shards authenticated against the pinned original metadata;
@@ -58,6 +58,14 @@ def file_sha256(path: Path) -> str:
         for b in iter(lambda: f.read(1 << 24), b""):
             h.update(b)
     return h.hexdigest()
+
+
+def rope_reference_path(given: Path | None, bundle: Path, rows: int) -> Path:
+    """--rope-reference, else the shipped reference for this row count, else prepare_inputs.sh's beside the bundle."""
+    if given:
+        return given
+    shipped = HERE / "assets" / f"rope_reference_{rows}.json"
+    return shipped if shipped.exists() else Path(f"{bundle.resolve()}.rope-reference.json")
 
 
 def tools_identity(tools: Path, kit_commit: str) -> dict:
@@ -130,7 +138,8 @@ def main() -> int:
     ap.add_argument("--tools", type=Path, required=True, help="directory holding the input-tool Python modules")
     ap.add_argument("--kit-commit", required=True, help="the component kit commit the tools must be checked out at")
     ap.add_argument("--pool", type=int, default=8192, help="the --context the rank will serve")
-    ap.add_argument("--rope-reference", type=Path, help="default: assets/rope_reference_<rows>.json")
+    ap.add_argument("--rope-reference", type=Path,
+                    help="default: assets/rope_reference_<rows>.json, else BUNDLE.rope-reference.json")
     ap.add_argument("--skip-model-auth", action="store_true")
     ap.add_argument("--skip-engram-auth", action="store_true")
     ap.add_argument("--quiet-lock", default=None, help="hold this lock shared per I/O phase (none by default)")
@@ -198,7 +207,7 @@ def main() -> int:
         rope = read_json(a.bundle / "kit/rope.json")
         rows = {n: (a.bundle / "kit" / n).stat().st_size // (rope["half"] * 4) for n in ROPE_TABLES}
         nrows = set(rows.values())
-        ref_path = a.rope_reference or HERE / "assets" / f"rope_reference_{max(nrows)}.json"
+        ref_path = rope_reference_path(a.rope_reference, a.bundle, max(nrows))
         ref = json.loads(ref_path.read_text()) if ref_path.exists() else {}
         got = {n: file_sha256(a.bundle / "kit" / n) for n in ROPE_TABLES}
         need = a.pool + ROPE_EXTRA_ROWS

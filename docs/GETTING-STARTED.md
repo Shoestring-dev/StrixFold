@@ -97,6 +97,11 @@ Connect each USB4 port to the matching port on the other box. Each cable shows u
 ip -br link | grep thunderbolt     # thunderbolt0 and thunderbolt1; if none, run: sudo modprobe thunderbolt_net
 ```
 
+If a cable still makes no interface, try another pair of ports. On other machines than these two, not every USB4 port
+links to another computer: a Framework Desktop and a Minisforum MS-S1 Max found no link between their AMD USB4 ports,
+and linked when the Framework's USB4 port was cabled to one of the MS-S1 Max's Intel USB4 v2 ports (a community
+report, November 2026). `sudo dmesg | grep -i thunderbolt` shows whether the boxes saw each other at all.
+
 Give the interfaces fixed addresses that survive a restart, with IPv6 off on the link. A Bosgame M5 set up with
 BOSGAME-M5.md uses ifupdown; write this file on node0, and on node1 the same file with `.2` in place of `.1` in both
 addresses:
@@ -349,6 +354,32 @@ another machine, forward the port: `ssh -L 18080:127.0.0.1:18080 node0`. For age
 
 `./first_light.sh status` shows both ranks. `./first_light.sh down` stops them and releases the GPU locks; run it
 with the same `TF_SERVE_CONF` as `up`.
+
+### Longer context
+
+The inputs above hold RoPE tables for 65,536 positions, and `CONTEXT` can be at most the tables' rows minus 49. For a
+longer window, prepare the inputs again with more rows: `prepare_inputs.sh` takes the row count as a fourth argument.
+This repository keeps the tables' reference hashes for 65,536, 131,072, 262,144, 524,288, 1,048,576 and 1,114,112 rows,
+so with one of those `verify_inputs.sh` needs nothing extra. For a 1M-token window:
+
+```bash
+R=1048576   # CONTEXT up to R - 49 = 1,048,527
+tools/dsv41-hip/prepare_inputs.sh ~/models/tf-port/libertai-2.9bpw ~/models/tf-port/ds1017-1bae0e10 \
+    ~/models/tf-port/inputs-tp2-1m $R
+H=$(sha256sum ~/models/tf-port/inputs-tp2-1m/inputs_manifest.json | cut -d' ' -f1); echo $H
+rsync -a --exclude rank1/ ~/models/tf-port/inputs-tp2-1m node0:models/tf-port/
+tools/dsv41-hip/verify_inputs.sh ~/models/tf-port/inputs-tp2-1m 1 \
+    ~/models/tf-port/libertai-2.9bpw ~/models/tf-port/ds1017-1bae0e10 $H $((R - 49))
+```
+
+This is a full second prepare (about as long as the first), into a new directory, and `$H` is new. Then:
+- deploy with `--ds-kit ~/models/tf-port/inputs-tp2-1m/kit`: the deployment carries the tables the engine reads;
+- check node0's copy as in [Deploy](#deploy), with the new directory, `$H` and the same last argument, `$((R - 49))`;
+- in your configuration, set `BUNDLE` to the new directory, `BUNDLE_SHA256=$H` and `CONTEXT` (at most `R - 49`).
+
+For any other row count up to 1,114,112, `prepare_inputs.sh` writes the reference beside the bundle
+(`inputs-tp2-1m.rope-reference.json`) and `verify_inputs.sh` finds it there: copy that file to node0 too, beside its
+bundle. A full 1M window read cold takes about 16 minutes ([RESULTS.md](RESULTS.md)).
 
 ### Benchmark
 
