@@ -1,6 +1,7 @@
 //! sf-disk's store on the host: keys, files, the index and its scan, eviction, the floor, the queue and the bitmap.
 const std = @import("std");
 const pd = @import("prompt_disk.zig");
+const fs = @import("prompt_disk_fs.zig");
 const Key = pd.Key;
 const Tier = pd.Tier;
 const c = std.c;
@@ -269,6 +270,50 @@ test "a corrupt or missing file is a bad resume; a state still being written is 
     t.abandon(&p2, &keys2, true, 0);
     try std.testing.expectEqual(pd.Load.bad, t.readState(keys2[5], 6, &got, slot));
     try std.testing.expectEqual(@as(u64, 1 << 20), t.queueRoom()); // the reservation came back
+}
+
+test "a state that names a block of the wrong size fails its save as an io failure and is not kept" {
+    const gpa = std.testing.allocator;
+    var rb: [128]u8 = undefined;
+    const root = try scratch(&rb, "blocksize");
+    defer rmTree(root);
+    var toks: [24]u32 = undefined;
+    var keys: [6]Key = undefined;
+    pd.chain(pd.seed("id"), prompt(&toks, null), B, &keys);
+    const t = try Tier.open(gpa, cfgFor(root), "id", 0, slot_bytes, &planes);
+    defer t.close();
+    var p4 = try save(t, keys[0..4]);
+    p4.deinit(gpa);
+    try std.testing.expect(t.flush(5 * std.time.ns_per_s));
+    var pb: [512]u8 = undefined;
+    const fd = c.open(try path(&pb, root, keys[1], true), .{ .ACCMODE = .RDWR }, @as(c.mode_t, 0));
+    try std.testing.expect(fd >= 0);
+    try std.testing.expectEqual(@as(c_int, 0), c.ftruncate(fd, @intCast(pd.head_bytes + block_bytes - 3)));
+    _ = c.close(fd);
+    var p6 = try save(t, &keys); // blocks 1-4 are on disk: only 5-6 are written, and block 2 is short
+    defer p6.deinit(gpa);
+    try std.testing.expect(p6.result == .ok);
+    // the writer's results before drain applies them: the state job failed, as an io failure
+    const until = fs.now() + 5 * std.time.ns_per_s;
+    while (true) {
+        _ = c.pthread_mutex_lock(&t.mu);
+        const idle = t.jobs.len() == 0 and !t.running;
+        _ = c.pthread_mutex_unlock(&t.mu);
+        if (idle) break;
+        try std.testing.expect(fs.now() < until);
+        fs.sleepNs(std.time.ns_per_ms);
+    }
+    var failed: usize = 0;
+    for (t.done.items) |d| if (d.job == .state) {
+        try std.testing.expect(!d.ok);
+        try std.testing.expectEqual(pd.Reason.io, d.reason);
+        failed += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), failed);
+    try std.testing.expect(t.flush(5 * std.time.ns_per_s));
+    try std.testing.expectEqual(@as(u64, 1), t.counts.failed);
+    try std.testing.expectEqual(@as(?pd.Status, null), t.stateOf(keys[5]));
+    try std.testing.expect(!exists(try path(&pb, root, keys[5], false)));
 }
 
 test "the scan at open removes temporary files, unlisted blocks and states missing a block" {

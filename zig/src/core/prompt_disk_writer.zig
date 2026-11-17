@@ -97,7 +97,11 @@ fn run(t: *Tier, j: *Job, reason: *Reason) bool {
                     t.line("event=save result=failed reason=block-missing tokens={d} key={s}", .{ s.k * t.cfg.block_tokens, &short(s.key) });
                     return false;
                 };
-                if (st.size != head_bytes + t.block_bytes) return false;
+                if (st.size != head_bytes + t.block_bytes) {
+                    reason.* = .io;
+                    t.line("event=save result=failed reason=block-size tokens={d} key={s} size={d}", .{ s.k * t.cfg.block_tokens, &short(s.key), st.size });
+                    return false;
+                }
             }
             const file = t.stateFile(s.k);
             if (t.freeBytes() < t.cfg.floor + file) {
