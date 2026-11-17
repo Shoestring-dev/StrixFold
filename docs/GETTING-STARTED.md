@@ -354,8 +354,10 @@ A good reply is a JSON chat completion whose `choices[0].message.content` names 
 another machine, forward the port: `ssh -L 18080:127.0.0.1:18080 node0`. For agents and tool calls, see
 [AGENTS.md](AGENTS.md).
 
-`./first_light.sh status` shows both ranks. `./first_light.sh down` stops them and releases the GPU locks; run it
-with the same `TF_SERVE_CONF` as `up`.
+`./first_light.sh status` shows both ranks and each box's GPU lock. `./first_light.sh down` stops them and releases
+the GPU locks; run it with the same `TF_SERVE_CONF` as `up`. A rank that dies without a `down` (the kernel's OOM
+killer, a crash) lets its box's lock go by itself, and the next `up` takes down whatever that run left (a rank 1 still
+waiting, a lock) before it starts: no `pkill` needed.
 
 ### Longer context
 
@@ -427,8 +429,9 @@ please add your numbers to [COMMUNITY-RESULTS.md](COMMUNITY-RESULTS.md).
 - **`no verify report`:** run `verify_inputs.sh` on that box (the Inputs and Deploy steps above).
 - **`is not idle` or `MemAvailable ... a rank needs`:** another engine is running on that box, or there's too little
   free memory. A rank needs `PEAK_GIB` + 8 GiB free.
-- **`the GPU lock ... was not free`:** another GPU job holds `/var/tmp/halo-gpu.lock` on that box. For example, a
-  run you didn't stop: use `./first_light.sh down`.
+- **`the GPU lock ... was not free`:** another GPU job holds `/var/tmp/halo-gpu.lock` on that box (a benchmark, a
+  test, another engine). A run of this pair is not one: `up` says so when one is still up (`./first_light.sh down`
+  first) and clears one whose rank 0 died.
 - **Rank 0's log is empty after `up` returns:** your system ends a session's processes when SSH disconnects. See
   `SPAWN_UNIT` in `serve.conf`.
 - **Questions:** the [StrixFold Discord](https://discord.gg/D4FgAJnKd9) or a GitHub issue.

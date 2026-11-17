@@ -8,7 +8,7 @@
 #   check   resolve and check only: RUN/resolved-rank1.json printed (identities: deploy commit, kit, config)
 #   lock [WAIT_S] / unlock   hold (waiting at most WAIT_S, default LOCK_WAIT_S) / release this box's GPU lock for
 #           the run (first_light.sh takes node0's, then node1's)
-#   status       running or not, and the log's last line
+#   status       running or not, the run's hold on this box's GPU lock, and the log's last line
 set -euo pipefail
 source "$(dirname "$0")/serve_lib.sh"
 serve_load 1
@@ -34,7 +34,9 @@ case ${1:-} in
   unlock) serve_lock_release "$RUN"; echo "GPU lock released on $(hostname)";;
   stop) serve_stop "$RUN/rank1.pid" "rank 1";;
   status)
-    pid=$(serve_pid "$RUN/rank1.pid"); echo "rank 1 ${pid:+running ($pid)}${pid:-not running}: $RUN"
+    pid=$(serve_pid "$RUN/rank1.pid")  # (ended: it started in this run and is gone)
+    echo "rank 1 ${pid:+running ($pid)}${pid:-not running$([ -e "$RUN/rank1.pid" ] && echo " (ended)")}: $RUN"
+    pid=$(serve_pid "$RUN/lock.pid"); echo "GPU lock on $(hostname): ${pid:+held by this run ($pid)}${pid:-not held by this run}"
     tail -1 "$RUN/rank1.log" 2>/dev/null || true;;
   *) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2;;
 esac

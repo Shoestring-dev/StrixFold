@@ -4,6 +4,8 @@
 # rank 0 uses node0's deployed copy of these tools (DEPLOY_DIR/tools/dsv41-hip), rank 1 this box's. TF_SERVE_CONF, when
 # set, must name a file at the same place under each box's $HOME.
 #   up       a run (RUN_ID, default the UTC time) on both boxes:
+#            0. without RUN_ID, the latest run first: still up, up stops there and says so; its rank 0 gone without a
+#               down (the OOM killer, a fault), what it left (rank 1, a GPU lock) is taken down (no pkill needed)
 #            1. both ranks resolved and checked (check): the same deploy commit, kit manifest and config on both
 #            2. the GPU locks, all or nothing: node0's (waiting up to LOCK_WAIT_S), then node1's within
 #               LOCK_PAIR_S; if node1's is busy, node0's is released and the pair retried after 30 s (LOCK_TRIES times);
@@ -19,7 +21,7 @@
 #            leaves with exit 0; without the marker a peer that goes away is exit 1), rank 1 stopped if it has not
 #            left, both locks released
 #   restart  down, then up (a new run)
-#   status   both ranks
+#   status   both ranks, and whether the run still holds each box's GPU lock (a rank's end lets its box's lock go)
 set -Eeuo pipefail  # (-E: the ERR trap reaches failures inside functions)
 cd "$(dirname "$0")"
 source ./serve_lib.sh
@@ -54,7 +56,22 @@ down() {
   set -e
 }
 
+# the latest run, before a new one: still up, it is said (no new run while it holds both GPUs); its rank 0 gone without a
+# down (the kernel's OOM killer, a fault), what it left (a rank 1 that did not leave, a GPU lock still held) is taken down
+# first, so the new run never waits out the old one's locks
+prior_run() {
+  local was st0 st1; was=$(serve_latest)
+  [ -n "$was" ] || return 0
+  st0=$(RUN_ID=$was r0 status 2>/dev/null || true); st1=$(RUN_ID=$was ./serve-rank1.sh status 2>/dev/null || true)
+  if grep -q '^rank 0 running' <<< "$st0"; then die "run $was is up (rank 0 runs on $R0): ./first_light.sh down first, or restart"; fi
+  grep -q '^rank 0 not running (ended)' <<< "$st0" || return 0  # (not started yet: another up's, still taking its locks)
+  grep -q '^rank 1 running\|: held by this run' <<< "$st0"$'\n'"$st1" || return 0
+  echo "run $was: rank 0 is gone without a down (its log's last line: $(tail -n1 <<< "$st0")); taking the rest down first"
+  RUN_ID=$was RUN=$RUN_ROOT/$was down
+}
+
 up() {
+  [ -n "${RUN_ID:-}" ] || prior_run
   RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
   export RUN_ID
   RUN=$RUN_ROOT/$RUN_ID
