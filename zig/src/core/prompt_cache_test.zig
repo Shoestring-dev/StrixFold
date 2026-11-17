@@ -40,8 +40,7 @@ const Fake = struct {
     fn snapshots(f: *Fake) Snapshots {
         return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn } };
     }
-    /// With the family's own resume check: a state resumes a prompt only `window` tokens or more before its end, and
-    /// the state at `dead_at` lost its rows.
+    /// With the family's resume check: a state resumes only `window` or more tokens before the end; `dead_at` is lost.
     fn checked(f: *Fake) Snapshots {
         return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn, .resumes = resumesFn, .live = liveFn } };
     }

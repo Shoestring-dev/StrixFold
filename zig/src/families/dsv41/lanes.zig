@@ -1188,9 +1188,7 @@ pub const Lanes = struct {
         return true;
     }
 
-    /// Why a kept state does not restore for a prompt of `len` tokens (null: it does): it restores while live, not
-    /// stale, at a chunk end before the prompt's replay (the rows before it ran the encoder layers alone, as a fresh
-    /// pass of this prompt runs them).
+    /// Why a kept state does not restore for `len` tokens (null: live, not stale, at a chunk end before the replay).
     fn refusal(self: *const Lanes, sn: *const Snap, len: usize) ?Refusal {
         if (std.mem.indexOfScalar(*Snap, self.snaps.items, @constCast(sn)) == null) return .dropped;
         if (sn.stale) return .stale;
@@ -1491,8 +1489,7 @@ pub const Lanes = struct {
         return error.BackendRestores; // the prompt pass restores, before its first chunk
     }
 
-    /// Whether a kept state restores for a prompt of `len` tokens: the prompt cache passes one that does not over for
-    /// an earlier state (the prompt pass would refuse it, and the prompt would run from 0).
+    /// Whether a kept state restores for `len` tokens: the prompt cache looks for an earlier one when it does not.
     pub fn snapResumesFn(ptr: *anyopaque, saved: *anyopaque, len: u32) bool {
         const sn: *Snap = @ptrCast(@alignCast(saved));
         const why = of(ptr).refusal(sn, len) orelse return true;

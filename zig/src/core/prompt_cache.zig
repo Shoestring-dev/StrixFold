@@ -19,8 +19,7 @@ pub const Snapshots = struct {
         /// Make the live state `saved`'s: the next prompt chunk starts at its position.
         restore: *const fn (ptr: *anyopaque, owner: ?*anyopaque, saved: Saved) anyerror!void,
         drop: *const fn (ptr: *anyopaque, saved: Saved) void,
-        /// Whether the family resumes `saved` for a prompt of `len` tokens: find passes a state it refuses over for
-        /// an earlier one (null: every state find matches).
+        /// Whether the family resumes `saved` for `len` prompt tokens; find passes over one it refuses (null: all).
         resumes: ?*const fn (ptr: *anyopaque, saved: Saved, len: u32) bool = null,
         /// Whether `saved` still holds its state: one that lost it leaves the store when find meets it (null: always).
         live: ?*const fn (ptr: *anyopaque, saved: Saved) bool = null,
@@ -51,7 +50,7 @@ pub const Rules = struct {
     min_gap: u32 = 256,
     /// Shorter prompts keep nothing: below it a mark's extra prompt call costs more than a later turn's reuse saves.
     min_prompt: u32 = 4096,
-    /// Rows a resumed pass must still run past its state (DeepSeek's sliding window): a state nearer the end is passed over.
+    /// Rows a resumed pass must still run past its state (DeepSeek's window): find passes over a state nearer the end.
     tail: u32 = 0,
 };
 
@@ -127,7 +126,7 @@ pub const Store = struct {
         return at > 0 and (!s.rules.planned or std.mem.indexOfScalar(u32, starts, at) != null);
     }
 
-    /// The longest kept state `prompt` resumes exactly: its tokens a prefix of the prompt, at least one row and `tail` left.
+    /// The longest kept state `prompt` resumes exactly: its tokens a prefix of the prompt, one row and `tail` past it.
     pub fn find(s: *Store, prompt: []const u32, starts: []const u32) ?*Entry {
         var best: ?*Entry = null;
         var i: usize = 0;
@@ -151,9 +150,7 @@ pub const Store = struct {
         return best;
     }
 
-    /// Whether the family resumes `e` for a prompt of `len` tokens: a state it refuses is passed over for an earlier
-    /// one. One that lost its rows also leaves the store now (counted as evicted); one this prompt only ends too near
-    /// stays for the longer prompts of the conversation that kept it.
+    /// Whether the family resumes `e` for `len` tokens; a refused state that lost its rows leaves the store (evicted).
     fn familyResumes(s: *Store, e: *Entry, len: usize) Resumes {
         const f = s.family.vtable.resumes orelse return .resumes;
         if (f(s.family.ptr, e.saved, @intCast(len))) return .resumes;
