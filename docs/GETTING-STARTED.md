@@ -267,6 +267,8 @@ ssh node0 mkdir -p models/tf-port
 rsync -a ~/models/tf-port/libertai-2.9bpw ~/models/tf-port/ds1017-1bae0e10 node0:models/tf-port/
 ```
 
+dealignai's fine-tune of this pack runs from these same files: [UNCENSORED.md](UNCENSORED.md).
+
 ### Inputs
 
 [BUILD_AND_RUN.md §3](../tools/dsv41-hip/BUILD_AND_RUN.md#3-inputs-cpu-only-once-per-checkpoint-revision): this builds
