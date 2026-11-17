@@ -64,8 +64,7 @@ pub const Model = struct {
     fn bpe(m: *const Model, ctx: *steps.Context, vocab: *const Vocab, word: []const u8, out: *std.ArrayList(u32)) Error!void {
         const a = ctx.a;
         if (m.ignore_merges) if (m.id(vocab, word)) |whole| return out.append(a, whole);
-        // the word's scratch lives in ctx.word when the caller gives one and is emptied for the next word, so an encode
-        // of a long text holds one word's symbols and queue instead of every word's; the ids still go to `a`
+        // one word's symbols and queue live in ctx.word when given, emptied per word; the ids still go to `a`
         const w = if (ctx.word) |scratch| scratch.allocator() else a;
         defer if (ctx.word) |scratch| {
             _ = scratch.reset(.retain_capacity);

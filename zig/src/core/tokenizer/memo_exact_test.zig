@@ -1,12 +1,10 @@
-//! The memo's ids equal a fresh encode's on DeepSeek-shaped tokenizers: raw and normalized markers, a raw image
-//! placeholder, a normalizer that composes or lengthens text, and invalid UTF-8 next to every kind of segment.
+//! The memo's ids equal a fresh encode's on DeepSeek-shaped tokenizers, invalid UTF-8 beside every kind of segment.
 const std = @import("std");
 const tokenizer = @import("tokenizer.zig");
 const steps = @import("steps.zig");
 const memo = @import("memo.zig");
 
-// raw special, normalized chat markers (as DeepSeek-V4's), a raw non-special image placeholder (as
-// <｜deepseek_image｜>), strip tokens, and a normalized one whose spelling NFC composes
+// raw, normalized (DeepSeek-V4's markers), a raw non-special image placeholder, strip, and one NFC composes
 const added =
     \\"added_tokens":[{"id":1000,"content":"<|bos|>","single_word":false,"lstrip":false,"rstrip":false,"normalized":false,"special":true},
     \\ {"id":1001,"content":"<|User|>","single_word":false,"lstrip":false,"rstrip":false,"normalized":true,"special":false},

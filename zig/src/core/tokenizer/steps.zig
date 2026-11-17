@@ -13,7 +13,7 @@ pub const Context = struct {
     matcher: regex.Matcher,
     spans: std.ArrayList(Span) = .empty,
     hits: std.ArrayList([2]usize) = .empty,
-    /// One word's scratch for the model (BPE's symbols and merge queue), emptied after each word; null: it stays in `a`.
+    /// One word's scratch for the model (BPE symbols and merge queue), emptied per word; null: it stays in `a`.
     word: ?*std.heap.ArenaAllocator = null,
 };
 

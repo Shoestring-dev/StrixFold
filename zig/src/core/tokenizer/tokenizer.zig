@@ -118,8 +118,7 @@ pub const Tokenizer = struct {
 
     /// Token ids for `text`, without post-processor tokens; invalid UTF-8 reads as U+FFFD. Caller frees with `a`.
     pub fn encode(t: *const Tokenizer, a: Allocator, text: []const u8) Error![]u32 {
-        // the scratch comes from the tokenizer's allocator, not `a`, so it goes back when the ids exist even when `a` is
-        // an arena that lives on (a server request's); only the returned ids are `a`'s
+        // scratch on the tokenizer's allocator, not `a` (maybe a request's arena): it goes back once the ids exist
         var arena = std.heap.ArenaAllocator.init(t.allocator);
         defer arena.deinit();
         var word = std.heap.ArenaAllocator.init(t.allocator);
@@ -149,10 +148,7 @@ pub const Tokenizer = struct {
             if (seg.end == seg.start) continue;
             const part = normalized[seg.start..seg.end];
             const lead = seg.start < zero;
-            // a long segment goes through the memo here, between every added token: a chat's markers can be ones
-            // matched after normalization (DeepSeek-V4's are), and only here does a message's text stand alone, the
-            // same in the prompt's render, the history's and the next turn's. Its ids come from its text and `lead`
-            // alone, the memo's key.
+            // a long segment between added tokens (normalized ones too) is a message's text alone: the memo's key
             const kept = if (part.len >= @import("memo.zig").min_bytes) t.memo else null;
             if (kept) |k| if (try k.append(part, lead, ctx.a, ids)) continue;
             const from = ids.items.len;
@@ -411,8 +407,7 @@ test "the memo keeps a 64-byte segment and tokenizes one under min_bytes each ti
 }
 
 test "the memo keeps a message's text between markers matched after normalization, as a chat's are" {
-    // DeepSeek-V4's chat markers are added tokens with "normalized": true: the prompt's render and the history's
-    // differ past the message, and the message's text is the same segment in both only after the split on them
+    // DeepSeek-V4's markers are normalized added tokens: a message's text is one segment only after splitting on them
     const json =
         \\{"added_tokens":[{"id":7,"content":"<|end|>","single_word":false,"lstrip":false,"rstrip":false,"normalized":false,"special":true},
         \\ {"id":8,"content":"<|user|>","single_word":false,"lstrip":false,"rstrip":false,"normalized":true,"special":false},
