@@ -1,0 +1,37 @@
+# StrixFold's container as a systemd --user service: copy to ~/.config/containers/systemd/, then daemon-reload.
+[Unit]
+Description=StrixFold ROCm container
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=localhost/strixfold-rocm:latest
+ContainerName=strixfold
+Exec=sleep infinity
+# A PID 1 that forwards signals and reaps the ranks when they exit.
+RunInit=true
+# Host network, UTS and IPC: the USB4 links, the ranks' ports, the box's hostname and large shared memory.
+Network=host
+PodmanArgs=--uts host --ipc host
+# Your own uid inside, and the host's render and video groups for /dev/kfd and /dev/dri (keep-groups needs crun).
+UserNS=keep-id
+GroupAdd=keep-groups
+AddDevice=/dev/kfd
+AddDevice=/dev/dri
+# label=disable instead of :Z, so SELinux never relabels your home directory.
+SecurityLabelDisable=true
+Volume=%h:%h
+# /var/tmp holds the GPU lock that StrixFold's scripts take, shared with the host.
+Volume=/var/tmp:/var/tmp
+Volume=/etc/localtime:/etc/localtime:ro
+Environment=HOME=%h
+WorkingDir=%h
+# A data drive ~/tfp points into: Volume=DIR:DIR and RequiresMountsFor=DIR in a strixfold.container.d drop-in.
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+# Starting at boot without a login also needs: sudo loginctl enable-linger $USER
+WantedBy=default.target

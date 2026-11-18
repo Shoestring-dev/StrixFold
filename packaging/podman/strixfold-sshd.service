@@ -1,0 +1,16 @@
+# node0 only: the sshd node1 drives it through (ssh node0, port 2222); first run strixfold-ct.sh sshd-config ADDR.
+[Unit]
+Description=sshd for node1 inside the StrixFold container
+BindsTo=strixfold.service
+After=strixfold.service
+ConditionPathExists=%h/.config/strixfold-sshd/sshd_config
+
+[Service]
+# It listens on node0's USB4 address, which exists only once that link is up, so it retries until then.
+ExecStart=/usr/bin/podman exec strixfold /usr/sbin/sshd -D -e -f %h/.config/strixfold-sshd/sshd_config
+Restart=always
+RestartSec=5
+
+[Install]
+# Copy to ~/.config/systemd/user/, then: systemctl --user daemon-reload && systemctl --user enable --now strixfold-sshd
+WantedBy=strixfold.service

@@ -1,0 +1,33 @@
+#!/bin/sh
+# A container's systemd-run for StrixFold's scopes: AllowedCPUs becomes taskset; strixfold-ct.sh job sets the rest.
+cpus=; dropped=; unit=; scope=
+prop() {
+  case "$1" in
+    AllowedCPUs=*) cpus=${1#AllowedCPUs=} ;;
+    CPUQuota=*|MemoryHigh=*|MemoryMax=*) dropped="$dropped $1" ;;
+  esac
+}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scope) scope=1; shift ;;
+    --user|--quiet|--collect|--wait|--pty) shift ;;
+    -u|--unit) unit=$2; shift 2 ;;
+    --unit=*) unit=${1#--unit=}; shift ;;
+    -p|--property) prop "$2"; shift 2 ;;
+    --property=*) prop "${1#--property=}"; shift ;;
+    -p*) prop "${1#-p}"; shift ;;
+    --slice) shift 2 ;;
+    --slice=*) shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "systemd-run stand-in: no command" >&2; exit 1; }
+if [ -n "$unit" ] && [ -z "$scope" ]; then
+  echo "systemd-run stand-in: no user units in the container ($unit); keep SPAWN_UNIT=0" >&2; exit 1
+fi
+if [ -n "$dropped" ] && [ "$(cat /sys/fs/cgroup/memory.max 2>/dev/null)" = max ]; then
+  echo "systemd-run stand-in: not applied here:$dropped (strixfold-ct.sh job runs a command with limits)" >&2
+fi
+[ -n "$cpus" ] && exec taskset -c "$cpus" "$@"
+exec "$@"

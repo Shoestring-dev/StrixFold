@@ -8,7 +8,8 @@ The two boxes play different parts. **node0** is rank 0 and serves the API. **no
 you build and run the scripts. Pick which box is which before you start.
 
 Our published numbers come from a pair of AMD Ryzen AI Halo boxes (see [Tested on](../README.md#tested-on)). We've
-also run pairs of Bosgame M5s: their speed, cooling and USB4 links are in [BOSGAME-M5.md](BOSGAME-M5.md).
+also run pairs of Bosgame M5s: their speed, cooling and USB4 links are in [BOSGAME-M5.md](BOSGAME-M5.md). To run
+StrixFold's userspace in a rootless Podman container on Fedora instead, see [FEDORA-PODMAN.md](FEDORA-PODMAN.md).
 
 ## 1. What you need
 
