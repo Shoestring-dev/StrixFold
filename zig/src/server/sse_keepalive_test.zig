@@ -1,5 +1,4 @@
-//! A stream that sends nothing for Config.sse_keepalive_ms (a long prompt's prefill) sends SSE comments until its
-//! reply comes; with the setting off its bytes are as before.
+//! A stream silent for Config.sse_keepalive_ms sends SSE comments until its reply; off, its bytes are as before.
 const std = @import("std");
 const api = @import("engine_api");
 const server = @import("root.zig");

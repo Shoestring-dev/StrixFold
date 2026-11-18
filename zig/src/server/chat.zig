@@ -461,8 +461,7 @@ const Generation = struct {
         if (g.srv.config.sse_keepalive_ms > 0) g.sent_ns = nowNs(g.srv.io);
     }
 
-    /// The sink's keepalive once the stream has sent nothing for Config.sse_keepalive_ms (a long prompt's prefill),
-    /// so a client's idle timer keeps it; a client that left cancels the reply.
+    /// The sink's keepalive after Config.sse_keepalive_ms of silence (a long prefill); a gone client cancels the reply.
     fn keepAlive(g: *Generation) Failure!void {
         const every = g.srv.config.sse_keepalive_ms;
         if (every == 0) return;
