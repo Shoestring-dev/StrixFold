@@ -1685,10 +1685,7 @@ fn testFault(kind: Fault) bool {
 
 /// A primitive this rank refused: rank 0 runs the same one on the same inputs and refuses it at the same step (its
 /// request ends with the error), so the follower reports it and takes the next frame instead of ending; unless the
-/// pair itself failed (broken), which ends the follower (U47). A device fault is this rank's alone: rank 0 runs on
-/// into its next exchange and waits there for this rank, whose device runs nothing after the fault (tp2 #25). A
-/// sticky fault's own result (DeviceFault) is broken already; a GPU call that failed otherwise asks the device
-/// (Model.contextFailed), and one that is faulted for good ends the follower too: its link closes, and rank 0 stops.
+/// pair itself failed (broken, U47) or a failed GPU call left this rank's device faulted (contextFailed): both end it.
 fn refused(m: anytype, err: anyerror) !void {
     std.debug.print("{{\"follow_refused\": \"{s}\"}}\n", .{@errorName(err)});
     if (broken(err)) return err;

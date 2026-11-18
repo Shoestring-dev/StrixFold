@@ -193,8 +193,7 @@ pub fn main(init: std.process.Init) !u8 {
         dsv41.lanes.follow(gpa, m) catch |err| {
             try w.print("{{\"rank\": {d}, \"follow\": \"{s}\"}}\n", .{ o.rank, @errorName(err) });
             try w.flush();
-            // a faulted device frees nothing in order (the collectives' teardown can wait on a peer): end the process
-            // now, so its links close and rank 0 stops
+            // a faulted device frees nothing in order (teardown can wait on the peer): exit now, so rank 0 stops too
             if (err == error.GpuContextFailed or err == error.DeviceFault or m.contextFailed()) {
                 std.debug.print("dsv41: rank {d} stops: its device failed ({s})\n", .{ o.rank, @errorName(err) });
                 rank1Exit(1);
