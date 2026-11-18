@@ -283,8 +283,7 @@ pub const LaneHost = struct {
         h.decoded.append(h.gpa, .{ .at = now, .tokens = n }) catch {};
     }
 
-    /// Cancels queued and admitted jobs named since the last round; the names are taken whole, so none is lost to
-    /// memory.
+    /// Cancels queued and admitted jobs named since the last round, taking the names whole so none is lost to memory.
     pub fn takeCancels(h: *LaneHost) void {
         h.lock();
         var ids = h.cancels;
