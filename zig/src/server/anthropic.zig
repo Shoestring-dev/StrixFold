@@ -116,8 +116,7 @@ const Wire = struct {
     fn open(ctx: *anyopaque, prompt_len: usize) error{Closed}!void {
         const w: *Wire = @ptrCast(@alignCast(ctx));
         w.opened = true;
-        // the head names the prompt's whole size, as the Anthropic streaming spec reads it; the split of it
-        // that the engine restored from cache (input = full - cached, cache_read = cached) arrives with the final message_delta
+        // the head names the whole prompt (Anthropic's streaming spec); the cached split comes in the last delta
         if (prompt_len > 0) {
             const n = json.intValue(w.reply.a, prompt_len) catch return error.Closed;
             w.reply.tokens.object.put(w.reply.a, "input_tokens", n) catch return error.Closed;
