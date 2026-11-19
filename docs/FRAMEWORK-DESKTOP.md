@@ -3,8 +3,9 @@
 A pair of Framework Desktops (AMD Ryzen AI Max 300 Series, Ryzen AI Max+ 395, Radeon 8060S / gfx1151, 128 GB) on
 Ubuntu 26.10 with the stock Ubuntu kernel 7.3.0-10-generic, instead of the Debian-13 rex stack in
 [GETTING-STARTED.md](GETTING-STARTED.md). This page records the deviations that were needed and what was verified.
-Status at time of writing: link up, Triton kit and zig build green, GPU tests and serving in progress; the numbers
-below are not yet a full qualification run.
+The stack here is ROCm 10.1.0 (HIP 7.16), newer than the 10.0.0-4 (HIP 7.15) the published numbers use, as
+[FEDORA-PODMAN.md](FEDORA-PODMAN.md) reports for its image. Status at time of writing: link up, Triton kit, zig
+build and the GPU tests (smoke, ABI, glue) green; serving and the bench cases pending.
 
 ## What was different, and what fixed it
 
@@ -26,9 +27,9 @@ Two changes together fixed it:
 
 After both boxes were on 3.06 + `amd_iommu=pt`, both cables linked (ping ~1 ms between the boxes).
 
-Note: [GETTING-STARTED.md](GETTING-STARTED.md) §3 carries a community report that a Framework Desktop found no link
-to a Minisforum MS-S1 Max over their AMD USB4 ports. This pair (Desktop-to-Desktop) links fine on 3.06; the older
-report may predate it.
+Note: this covers Framework-to-Framework. The community report in [GETTING-STARTED.md](GETTING-STARTED.md) §3
+(Framework + Minisforum MS-S1 Max) is about the MS-S1 side: that Framework was already on BIOS 3.06, and its ports
+linked to the MS-S1 Max's rear Intel USB4 v2 ports but not to the MS-S1's AMD ports.
 
 ### 2. Only the rear USB-C ports are USB4
 
@@ -37,12 +38,16 @@ the rear ports at the I/O shield.
 
 ### 3. GRUB line (GPU memory)
 
+The shipped line from [BOSGAME-M5.md](BOSGAME-M5.md) step 5 plus the IOMMU option:
+
 ```
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash kho=off amdgpu.noretry=0 amdgpu.lockup_timeout=10000,60000,10000,10000 amd_iommu=pt ttm.pages_limit=33030144 ttm.page_pool_size=33030144"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash amdgpu.gttsize=126976 ttm.pages_limit=32505856 amd_iommu=pt"
 ```
 
-`amdgpu.gttsize` omitted (deprecated, as noted in the repo). GTT comes up at ~123-125 GiB, matching the tested
-stack's 124 GiB closely enough for `PEAK_GIB`/`MEMORY_LIMIT_GB` as shipped.
+`ttm.pages_limit=32505856` (124 GiB) is the shipped value; this pair previously ran 33030144 (126 GiB) with no
+observed difference, and the shipped value leaves the OS about 2 GiB more. The pair's boxes also carried `kho=off`,
+`amdgpu.noretry=0` and `amdgpu.lockup_timeout=...` from an earlier setup; none of them is needed here, so they are
+dropped.
 
 ### 4. ROCm from AMD's Ubuntu repo, gfx1151-only
 
@@ -55,7 +60,8 @@ sudo apt install amdrocm10.1-gfx1151 amdrocm-core-sdk10.1-gfx1151
 ```
 
 Do not install the plain `amdrocm10.1` meta: it pulls every architecture's libraries (several GB of
-gfx908/gfx942/gfx1201/gfx1250) for nothing.
+gfx908/gfx942/gfx1201/gfx1250) for nothing. This gives ROCm 10.1.0 (HIP 7.16), newer than the 10.0.0-4 (HIP 7.15)
+the published numbers use; the build, kit and GPU tests pass on it.
 
 ### 5. Register /opt/rocm/lib with ldconfig (the therock equivalent)
 
@@ -69,8 +75,10 @@ sudo ldconfig
 
 ### 6. Python 3.13 on Ubuntu 26.10
 
-Ubuntu 26.10 ships 3.14/3.15; the pinned Triton wheel is cp313. deadsnakes has no 26.10 (stonking) build, but its
-26.04 (resolute) pocket installs and works:
+Ubuntu 26.10 ships 3.14/3.15; the pinned Triton wheel is cp313. Two ways to get 3.13:
+
+- `uv python install 3.13` (what [FEDORA-PODMAN.md](FEDORA-PODMAN.md)'s Containerfile does) — no PPA, no suite mixing.
+- Or the deadsnakes PPA: it has no 26.10 (stonking) build, but its 26.04 (resolute) pocket installs and works:
 
 ```
 sudo add-apt-repository -y ppa:deadsnakes/ppa
@@ -92,5 +100,6 @@ off). Two notes:
 - BIOS 3.06 on both boxes; `thunderbolt0`/`thunderbolt1` up on both, MTU 1500, ping ~1 ms on both cables.
 - Triton AOT kit: 280 variants built, 0 failed (pinned triton 3.8.0+rocm10.1.0a wheel, cp313).
 - `zig_build.sh install` and the test build (`native-hip`, kit attached): green.
+- GPU tests (`run_gpu_tests.sh`): smoke, ABI and glue all exit 0.
 - `rocminfo` sees gfx1151; HIP 7.16.
-- Not yet run at draft time: GPU tests after the ldconfig fix, prepare_inputs, deploy, serve, benchmark.
+- Not yet run at draft time: `first_light.sh` up with the bench cases; those numbers go here before this leaves draft.
