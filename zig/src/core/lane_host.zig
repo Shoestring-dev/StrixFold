@@ -217,8 +217,7 @@ pub const LaneHost = struct {
         const key = job.key orelse return 0;
         h.cache_lock.lockUncancelable(h.io);
         defer h.cache_lock.unlock(h.io);
-        const e = store.findSealed(key, job.spans, job.request.chunks) orelse return 0;
-        return e.at;
+        return store.peekSealed(key, job.spans, job.request.chunks); // (this thread asks the family nothing: its calls send frames)
     }
 
     /// The family's off-thread tower for a request with images; null: its prompt pass runs any tower itself.

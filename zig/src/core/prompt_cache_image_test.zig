@@ -118,3 +118,27 @@ test "a shared cut past a picture is that picture's: the same text with another 
     try std.testing.expect(s.keepSealed(ka, &sa, 2, null, &.{}));
     try std.testing.expectEqual(@as(u32, 2), s.findSealed(kb[0..6], &sb, &.{}).?.at);
 }
+
+test "a submit's hint (peekSealed) asks the family nothing and changes nothing; the engine's find then evicts a lost state" {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var f: Fake = .{ .gpa = gpa };
+    var s = Store.init(gpa, f.checked(), .{ .min_prompt = 0 }, 1 << 20);
+    defer s.deinit();
+    const t1 = [_]u32{ 1, 2, 3, 4, 5, 6 };
+    _ = f.pass(&s, &t1, try s.begin(a, &t1, 2, &.{}, &.{}, null)); // keeps 2
+    const t2 = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    _ = f.pass(&s, &t2, try s.begin(a, &t2, 5, &.{}, &.{}, null)); // keeps 5
+    f.dead_at = 5; // another stream wrote over its rows
+    const t3 = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    try std.testing.expectEqual(@as(u32, 5), s.peekSealed(&t3, &.{}, &.{})); // the hint: the longest match, lost or not
+    try std.testing.expectEqual(@as(usize, 2), s.entries.items.len);
+    try std.testing.expectEqual(@as(u64, 0), s.counts.evicted);
+    try std.testing.expectEqual(@as(usize, 2), f.live); // nothing dropped
+    try std.testing.expectEqual(@as(u32, 2), s.find(&t3, &.{}).?.at); // the engine thread's find: the lost one goes
+    try std.testing.expectEqual(@as(u64, 1), s.counts.evicted);
+    try std.testing.expectEqual(@as(usize, 1), f.live);
+    try std.testing.expectEqual(@as(u32, 2), s.peekSealed(&t3, &.{}, &.{}));
+}
