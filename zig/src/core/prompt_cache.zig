@@ -462,4 +462,5 @@ fn floorStart(starts: []const u32, at: u32) u32 {
 
 test {
     _ = @import("prompt_cache_test.zig");
+    _ = @import("prompt_cache_image_test.zig");
 }
