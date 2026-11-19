@@ -147,11 +147,8 @@ pub const Store = struct {
         while (i < s.entries.items.len) {
             const e = s.entries.items[i];
             i += 1;
-            if (e.tokens.len > prompt.len or e.at >= prompt.len or @as(usize, e.at) + s.rules.tail > prompt.len or !s.usable(e.at, starts)) continue;
             if (best != null and e.at <= best.?.at) continue;
-            const n = e.tokens.len;
-            if (prompt[n - 1] != e.tokens[n - 1] or !std.mem.eql(u32, prompt[0..n], e.tokens)) continue;
-            if (!std.mem.eql(u8, &e.seal, &image_key.sealOf(spans, n))) continue; // another picture's state: not this prompt's
+            if (!s.holds(e, prompt, spans, starts)) continue;
             switch (s.familyResumes(e, prompt.len)) {
                 .resumes => best = e,
                 .refused => {},
@@ -163,6 +160,23 @@ pub const Store = struct {
             }
         }
         return best;
+    }
+
+    /// Where findSealed would resume at most, without asking the family or changing the store (another thread's hint).
+    pub fn peekSealed(s: *const Store, prompt: []const u32, spans: []const KeySpan, starts: []const u32) u32 {
+        var at: u32 = 0;
+        for (s.entries.items) |e| if (e.at > at and s.holds(e, prompt, spans, starts)) {
+            at = e.at;
+        };
+        return at;
+    }
+
+    /// Whether `e` is a prefix of `prompt` it may resume, with the seal of `prompt`'s pictures (the family not asked).
+    fn holds(s: *const Store, e: *const Entry, prompt: []const u32, spans: []const KeySpan, starts: []const u32) bool {
+        if (e.tokens.len > prompt.len or e.at >= prompt.len or @as(usize, e.at) + s.rules.tail > prompt.len or !s.usable(e.at, starts)) return false;
+        const n = e.tokens.len;
+        if (prompt[n - 1] != e.tokens[n - 1] or !std.mem.eql(u32, prompt[0..n], e.tokens)) return false;
+        return std.mem.eql(u8, &e.seal, &image_key.sealOf(spans, n)); // (another picture's state: not this prompt's)
     }
 
     /// Whether the family resumes `e` for `len` tokens; a refused state that lost its rows leaves the store (evicted).

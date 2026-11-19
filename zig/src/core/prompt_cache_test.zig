@@ -41,7 +41,7 @@ pub const Fake = struct {
         return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn } };
     }
     /// With the family's resume check: a state resumes only `window` or more tokens before the end; `dead_at` is lost.
-    fn checked(f: *Fake) Snapshots {
+    pub fn checked(f: *Fake) Snapshots {
         return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn, .resumes = resumesFn, .live = liveFn } };
     }
     fn resumesFn(ptr: *anyopaque, saved: Saved, len: u32) bool {
@@ -147,7 +147,7 @@ pub const Fake = struct {
     }
 
     /// A prompt pass from `plan.from`, keeping at each mark; returns the sum a fresh pass would give.
-    fn pass(f: *Fake, s: *Store, prompt: []const u32, plan: Plan) u64 {
+    pub fn pass(f: *Fake, s: *Store, prompt: []const u32, plan: Plan) u64 {
         if (plan.from == 0) f.* = .{ .gpa = f.gpa, .fail_save = f.fail_save, .fail_restore = f.fail_restore, .live = f.live, .spare_bytes = f.spare_bytes, .peer = f.peer, .window = f.window, .dead_at = f.dead_at };
         if (f.peer) |p| p.in_pass = true;
         defer if (f.peer) |p| {
