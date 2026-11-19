@@ -14,7 +14,8 @@ StrixFold's userspace in a rootless Podman container on Fedora instead, see [FED
 ## 1. What you need
 
 - **Two boxes of the same type:** two AMD Ryzen AI Halo developer boxes, or two Bosgame M5s. Both types have the Ryzen
-  AI Max+ 395 (Radeon 8060S, gfx1151) with 128 GB of memory.
+  AI Max+ 395 (Radeon 8060S, gfx1151) with 128 GB of memory. Other brands with that chip and memory work too, including
+  pairs of two different brands: [HARDWARE.md](HARDWARE.md) lists them, with their USB4 ports and BIOS notes.
 - **Two USB4 cables** between the boxes.
 - **For a Bosgame M5:** a USB stick of 1 GB or more, a monitor and a USB keyboard
   ([BOSGAME-M5.md](BOSGAME-M5.md)).

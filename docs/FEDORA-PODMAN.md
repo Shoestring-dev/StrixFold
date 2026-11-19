@@ -34,7 +34,9 @@ sudo grubby --update-kernel=ALL --args="amdgpu.gttsize=126976 ttm.pages_limit=32
 cat /sys/class/drm/card*/device/mem_info_gtt_total   # 133143986176 after the restart
 ```
 
-Ours also had `iommu=pt`. Stop the boxes from sleeping: the input preparation runs for a long time.
+Ours also had `iommu=pt`. A pair of Framework Desktops needed BIOS 3.06 and `amd_iommu=pt` both before their USB4
+link came up ([HARDWARE.md](HARDWARE.md#usb4-ports)). Stop the boxes from sleeping: the input preparation runs for a
+long time.
 
 ```bash
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
@@ -216,9 +218,10 @@ The pair above, `serve.conf` as shipped (`DRAFTS=1`), the bundle's own `BUNDLE_S
 | `qual_bench.sh`, mean of the 8 category medians | 58.6 tok/s | 52.8 tok/s |
 | `qual_bench.sh` prompt reading, 2,952 tokens | 1,349 tok/s | 1,414 tok/s |
 
-Commit 93d2845 (the `qual_bench.sh` rows at fc1399c). Host tests passed 371 of 379 (8 skipped); the Triton kit built
-280 of 280 kernels; the GPU tests passed (smoke 14, ABI 6, glue 11; the f16x2 lane bug is present with clang 24, as
-with clang 23). From a cold boot the container started 15 s after the box, and `first_light.sh up` was ready in
+Commit 93d2845 (the `qual_bench.sh` rows at fc1399c). The published pair's `qual_bench.sh` numbers come from the October
+release build, so those two rows compare builds as well as boxes. Host tests passed 371 of 379 (8 skipped); the Triton
+kit built 280 of 280 kernels; the GPU tests passed (smoke 14, ABI 6, glue 11; the f16x2 lane bug is present with clang
+24, as with clang 23). From a cold boot the container started 15 s after the box, and `first_light.sh up` was ready in
 41-42 s. Under `qual_bench.sh` the Framework Desktop's GPU reached 91 °C at about 2,880 MHz without throttling.
 
 ## If something goes wrong

@@ -26,3 +26,5 @@ gives exactly the same text.
 | Who | Boxes | Link | GPU stack | Settings | Code, prose (tok/s) | Prompt reading | Notes |
 |---|---|---|---|---|---:|---:|---|
 | StrixFold (6 Nov 2026) | 2 × AMD Ryzen AI Halo, 128 GB | 2 × USB4, MTU 1500 | ROCm 10.0.0-4, kernel 7.2.7 | `serve.conf` defaults, `DRAFTS=1` | 74.5, 42.4 | 1,381 at 1,818 tokens | balanced power; the bench cases above |
+| StrixFold (12 Nov 2026) | 2 × Bosgame M5, 128 GB | 2 × USB4 at Gen 3 with the host-to-host setting, MTU 1500 | ROCm 10.0.0-4, kernel 7.2.7 | `serve.conf` defaults, `DRAFTS=1` | 70.7, 41.1 | 1,284 at 1,818 tokens | stock power (85 W); `first_light.sh`; [BOSGAME-M5.md](BOSGAME-M5.md#speed-on-a-pair-of-m5s) |
+| derekwheel (18 Nov 2026, [#36](https://github.com/Shoestring-dev/StrixFold/pull/36)) | Framework Desktop + Minisforum MS-S1 Max, 128 GB each | 2 × USB4 into the MS-S1 Max's USB4 v2 ports, MTU 1500 | ROCm 10.1.0 (HIP 7.16) in Podman, kernel 7.3.3 | `serve.conf` as shipped, `DRAFTS=1` | 72.2, 41.9 | 1,363 at 1,818 tokens | Fedora 44/45; `first_light.sh` at 93d2845; [FEDORA-PODMAN.md](FEDORA-PODMAN.md) |

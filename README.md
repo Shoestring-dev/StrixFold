@@ -37,7 +37,8 @@ machines it runs DeepSeek-V4.1-Flash at about 72% of the speed of two NVIDIA DGX
 - Numbers from other people's boxes: [docs/COMMUNITY-RESULTS.md](docs/COMMUNITY-RESULTS.md). Add yours.
 
 New boxes? [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) goes step by step from two AMD Ryzen AI Halo boxes
-or two Bosgame M5s to a first answer and a benchmark.
+or two Bosgame M5s to a first answer and a benchmark. Owners also run it on Framework Desktops, Minisforum MS-S1 Maxes,
+GMKtec EVO-X2s and Beelink GTR9 Pros: [docs/HARDWARE.md](docs/HARDWARE.md) lists each and what to watch for.
 
 ## Tested on
 
@@ -92,7 +93,8 @@ power settings) is in [docs/TUNING.md](docs/TUNING.md). Most of it applies to an
 
 ## Known limits
 
-- Tested on this exact setup only. Other Strix Halo machines, ROCm versions and cables may behave differently.
+- Our numbers come from this exact setup. Other Strix Halo boxes, ROCm versions and cables may behave differently;
+  what owners have found so far is in [docs/HARDWARE.md](docs/HARDWARE.md).
 - Images are off unless `MODALITIES=text_image` is set. A request then takes at most 32 images (`MAX_IMAGES`),
   134,217,728 decoded pixels and 4,096 image tokens in all; past any of them it is refused with a 400.
 - Provided as-is. Issues are welcome; support is best effort.
