@@ -22,6 +22,8 @@ const sampling = @import("sampling.zig");
 const link = @import("link.zig");
 const disk_mod = @import("disk.zig");
 const pd = @import("core").prompt_disk;
+const image_key = lanes.image_key;
+const fill_spans = @import("fill_spans.zig");
 const gpu = @import("gpu");
 /// The vision tower's type (vision.zig: CUDA's vit.zig, HIP's vit_hip.zig); an empty type in a build without one.
 pub const VisionTower = if (gpu.features.vision) @import("vision.zig").Vision else opaque {};
@@ -491,12 +493,22 @@ pub const Snap = struct {
     stale: bool = false,
     wanted: u64 = 0, // when a request first waited for the live stream that holds these rows (placeKept; 0: none)
     end: usize = 0, // the extent end of the stream that kept it (placement holds [base, end) back while room allows)
-    path: u64 = 0, // its tokens [0, at) hashed (pathKey): keptOver tells this prompt's own longer states from others'
+    path: u64 = 0, // its key ids [0, at) hashed (pathKey): keptOver tells this prompt's own longer states from others'
 };
 
-/// A kept state's tokens hashed: a longer state in a resume's extent is the prompt's own when its path matches.
-fn pathKey(ids: []const u32) u64 {
-    return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(ids));
+/// A kept state's key ids and its pictures' whole digests hashed: a longer state on a resume's path is its prompt's.
+fn pathKey(key: []const u32, spans: []const image_key.KeySpan) u64 {
+    var h = std.hash.Wyhash.init(0);
+    h.update(std.mem.sliceAsBytes(key));
+    const seal = image_key.sealOf(spans, key.len);
+    if (!std.mem.allEqual(u8, &seal, 0)) h.update(&seal);
+    return h.final();
+}
+
+/// The ids a stream's kept states are keyed by: its prompt's, or with images the host's key (null: none made).
+fn keyOf(s: *const lanes.Stream) ?[]const u32 {
+    if (s.images.len == 0) return s.prompt();
+    return if (s.cache_key.len == s.prompt_len and s.cache_spans.len == s.images.len) s.cache_key else null;
 }
 
 /// Why a kept state does not restore for a prompt (Lanes.refusal).
@@ -506,7 +518,7 @@ const Refusal = enum {
     short, // the prompt ends at or before it
     off_chunk, // it is not at a chunk end
     near_end, // the prompt ends within the window past it: its replay starts before the state
-    images, // the prompt has images: it runs whole and keeps nothing
+    images, // the prompt has images but no cache key: it runs whole and keeps nothing
 
     fn says(r: Refusal) []const u8 {
         return switch (r) {
@@ -515,7 +527,7 @@ const Refusal = enum {
             .short => "the prompt ends at or before it",
             .off_chunk => "it is not at a chunk end",
             .near_end => "the prompt ends within the window past it",
-            .images => "the prompt has images",
+            .images => "the prompt has images but no cache key",
         };
     }
 };
@@ -542,6 +554,7 @@ const Fill = struct {
     replay: usize,
     last_end: usize,
     start: usize,
+    keyed: bool, // its states are kept: a text prompt, or one with images and the host's key for them
     head: bool = false,
     paused: bool = false,
 };
@@ -740,13 +753,16 @@ pub const Lanes = struct {
         // a kept state of this prompt's prefix: the pass resumes at its chunk end, in its extent, or in one of its own
         // with the kept rows copied there when a live stream holds that extent (a burst's second request on a prompt)
         s.cached = 0;
+        // kept states are keyed by the prompt's ids, or with images the host's key (none: nothing kept or resumed)
+        const keyed = keyOf(s) != null;
+        const key: []const u32 = keyOf(s) orelse ids;
         var kept: ?*Snap = null;
         var moved = false;
         var why: []const u8 = "no kept state"; // (the pass line's reason for running from 0)
         if (s.reuse.saved) |p| {
             const sn: *Snap = @ptrCast(@alignCast(p));
-            // (a kept state knows no images: a prompt with them runs whole and keeps nothing)
-            const refusing: ?Refusal = if (s.images.len > 0) .images else self.refusal(sn, len);
+            // (a prompt with images and no cache key from the host: it runs whole and keeps nothing)
+            const refusing: ?Refusal = if (!keyed) .images else self.refusal(sn, len);
             if (refusing) |r| {
                 noteRefusal(sn, len, r, if (self.disk != null) "it runs from 0 or from a state on disk" else "it runs from 0");
                 s.reuse_failed = true;
@@ -756,13 +772,13 @@ pub const Lanes = struct {
                 // in place unless the extent runs past the pool, a live stream holds it, or another kept state has
                 // rows past the kept ones (resuming there would stale it: the rows go to a free extent instead, as
                 // the Python lane's _place resumes "here" only in a free extent)
-                moved = sn.base + size > m.pool_cap or clashes(taken[0..nt], sn.base, sn.base + size) or self.keptOver(sn.base + sn.at, sn.base + size, sn, ids);
+                moved = sn.base + size > m.pool_cap or clashes(taken[0..nt], sn.base, sn.base + size) or self.keptOver(sn.base + sn.at, sn.base + size, sn, key, s.cache_spans);
             }
         }
         // sf-disk: a state on disk past the kept one in memory (after a restart, or when the kept rows went stale)
         var disk_k: u32 = 0;
-        if (self.disk) |d| if (!d.off and s.images.len == 0) {
-            d.beginPass(std.mem.sliceAsBytes(ids));
+        if (self.disk) |d| if (!d.off and keyed) {
+            d.beginPass(std.mem.sliceAsBytes(key), s.cache_spans);
             const k_max: u32 = @intCast(@min(len - 1, len -| m.cfg.window) / model.chunk_rows);
             const k_min: u32 = if (kept) |sn| @intCast(sn.at / model.chunk_rows) else 0;
             if (d.tier.longest(d.chain.items, k_min, k_max)) |k| {
@@ -808,22 +824,58 @@ pub const Lanes = struct {
         const seq = &self.seqs[slot];
         try seq.resize(gpa, len);
         for (seq.items, ids) |*q, id| q.* = @intCast(id);
-        // images: each span's positions dead in the sequence (negative: no Engram n-gram reaches into or across one),
-        // its rows ready (a gate's) or the tower's (rank 0), all of them sent to rank 1 after the fill's start
+        // images: each span's positions dead in the sequence (negative: no Engram n-gram reaches into or across one)
+        if (s.images.len > 0) {
+            const image_id = m.cfg.image_token orelse return error.NoVision;
+            var end: usize = 0; // spans in prompt order and apart (rank 1 refuses others in fill_begin)
+            for (s.images, 0..) |img, k| {
+                if (img.tokens == 0 or img.at < end or @as(usize, img.at) + img.tokens > len) return error.BadImageSpan;
+                if (keyed and (s.cache_spans[k].at != img.at or s.cache_spans[k].len != img.tokens)) return error.BadImageSpan;
+                end = @as(usize, img.at) + img.tokens;
+                for (seq.items[img.at..][0..img.tokens]) |*q| {
+                    if (q.* != @as(i64, image_id)) return error.BadImageSpan;
+                    q.* = -1;
+                }
+            }
+        }
+        if (try self.begin(.fill_begin)) {
+            try self.wire.int(gpa, u32, @intCast(slot));
+            try self.wire.int(gpa, u64, base);
+            try self.wire.ids(gpa, seq.items);
+            // the pictures (spans, digests): rank 1 keys its disk states as rank 0 does (its sequence holds -1 there)
+            try fill_spans.write(&self.wire, gpa, if (keyed) s.cache_spans else &.{});
+            try self.flush();
+        }
+        try m.fillBegin(slot, base);
+        const replay = len -| m.cfg.window;
+        var start: usize = 0;
+        if (kept) |sn| {
+            if (try self.begin(.snap_restore)) {
+                try self.wire.int(gpa, u64, sn.id);
+                try self.wire.int(gpa, u32, @intCast(slot));
+                try self.wire.int(gpa, u64, sn.base);
+                try self.wire.int(gpa, u64, base);
+                try self.wire.int(gpa, u64, sn.at);
+                try self.flush();
+            }
+            if (base != sn.base) try m.copyExtent(sn.base, base, sn.at);
+            try m.snapCopy(slot, sn.buf.ptr, false);
+            start = sn.at;
+            s.cached = @intCast(sn.at);
+        } else if (disk_k > 0) {
+            start = try self.diskResume(slot, base, disk_k);
+            s.cached = @intCast(start);
+        }
+        // the rows of the spans past the resume (a gate's or the tower's), sent to rank 1 at their absolute positions
         var spans: std.ArrayList(@import("prompt.zig").Span) = .empty;
         defer spans.deinit(gpa);
         var rows: std.ArrayList(u8) = .empty;
         defer rows.deinit(gpa);
         if (s.images.len > 0) {
-            const image_id = m.cfg.image_token orelse return error.NoVision;
             const row_bytes = m.cfg.hidden * 2;
-            var at_row: usize = 0;
+            try fill_spans.rowSpans(gpa, s.images, start, &spans);
             for (s.images, 0..) |img, k| {
-                if (img.tokens == 0 or @as(usize, img.at) + img.tokens > len) return error.BadImageSpan;
-                for (seq.items[img.at..][0..img.tokens]) |*q| {
-                    if (q.* != @as(i64, image_id)) return error.BadImageSpan;
-                    q.* = -1;
-                }
+                if (!fill_spans.pastResume(img.at, img.tokens, start)) continue;
                 if (img.rows) {
                     if (img.bytes.len != img.tokens * row_bytes) return error.BadImageRows;
                     try rows.appendSlice(gpa, img.bytes);
@@ -835,17 +887,8 @@ pub const Lanes = struct {
                     const t = if (self.encoder) |enc| try enc.take(s.images, k, gpa, &rows) else try v.rows(img.bytes, gpa, &rows);
                     if (t != img.tokens) return error.BadImageSpan;
                 }
-                try spans.append(gpa, .{ .at = img.at, .len = img.tokens, .row = at_row });
-                at_row += img.tokens;
             }
         }
-        if (try self.begin(.fill_begin)) {
-            try self.wire.int(gpa, u32, @intCast(slot));
-            try self.wire.int(gpa, u64, base);
-            try self.wire.ids(gpa, seq.items);
-            try self.flush();
-        }
-        try m.fillBegin(slot, base);
         if (spans.items.len > 0) {
             // the spans and their rows, image_piece bytes of rows a frame (a follower's frame buffer holds 64 KiB and
             // the ids of a full pool)
@@ -869,32 +912,13 @@ pub const Lanes = struct {
             }
             try m.setImages(spans.items, rows.items);
         }
-        const replay = len -| m.cfg.window;
-        var start: usize = 0;
-        if (kept) |sn| {
-            if (try self.begin(.snap_restore)) {
-                try self.wire.int(gpa, u64, sn.id);
-                try self.wire.int(gpa, u32, @intCast(slot));
-                try self.wire.int(gpa, u64, sn.base);
-                try self.wire.int(gpa, u64, base);
-                try self.wire.int(gpa, u64, sn.at);
-                try self.flush();
-            }
-            if (base != sn.base) try m.copyExtent(sn.base, base, sn.at);
-            try m.snapCopy(slot, sn.buf.ptr, false);
-            start = sn.at;
-            s.cached = @intCast(sn.at);
-        } else if (disk_k > 0) {
-            start = try self.diskResume(slot, base, disk_k);
-            s.cached = @intCast(start);
-        }
         // where this pass keeps states: the cache's marks and its last chunk end before the replay (the served lane's
         // kept prompt), each at the chunk end at or before it
         const last_end = @min(replay, len - 1) / model.chunk_rows * model.chunk_rows;
         // sf-disk: a pass that keeps states writes its finished blocks as it goes (diskStream)
         if (self.disk) |d| d.streaming = d.passing and !d.off and s.reuse.hook != null and last_end >= d.settings.min_tokens;
         m.fill_seq = seq.items;
-        self.fill = .{ .s = s, .slot = slot, .base = base, .len = len, .replay = replay, .last_end = last_end, .start = start };
+        self.fill = .{ .s = s, .slot = slot, .base = base, .len = len, .replay = replay, .last_end = last_end, .start = start, .keyed = keyed };
     }
 
     /// The pass's next chunks for up to budget_ns, then its first token; stopping short, rank 1 hears fill_pause.
@@ -918,7 +942,7 @@ pub const Lanes = struct {
             f.head = try m.fillChunk(seq.items[0 .. f.start + n], f.start, n, f.replay, cf.pre_read);
             f.start += n;
             if (self.disk) |d| if (d.streaming and f.start <= f.last_end and f.start % model.chunk_rows == 0) try self.diskStream(d, f.slot, f.base, f.start, f.last_end);
-            if (s.images.len == 0) if (s.reuse.hook) |k| if (f.start < len and f.start <= f.replay and (f.start == f.last_end or markEnds(s.reuse.marks, f.start))) k.at(k.ptr, s, @intCast(f.start));
+            if (f.keyed) if (s.reuse.hook) |k| if (f.start < len and f.start <= f.replay and (f.start == f.last_end or markEnds(s.reuse.marks, f.start))) k.at(k.ptr, s, @intCast(f.start));
             if (f.start < len and m.now() - t0 >= budget_ns) {
                 m.joinAhead(); // as rank 1 does at fill_pause: the next chunk reads its Engram rows (pre_read false)
                 try m.stream.synchronize(); // the slice's chunks done, so the round's measured time is the round's own
@@ -1245,10 +1269,10 @@ pub const Lanes = struct {
         self.snaps.appendAssumeCapacity(sn);
     }
 
-    /// Whether a kept state besides `except` has rows in [lo, hi): another extent's, or one off the path of `ids`.
-    fn keptOver(self: *const Lanes, lo: usize, hi: usize, except: *const Snap, ids: []const u32) bool {
+    /// Whether a kept state besides `except` has rows in [lo, hi): another extent's, or one off the path of `key`.
+    fn keptOver(self: *const Lanes, lo: usize, hi: usize, except: *const Snap, key: []const u32, spans: []const image_key.KeySpan) bool {
         for (self.snaps.items) |sn| if (sn != except and !sn.stale and sn.base < hi and lo < sn.base + sn.at) {
-            const own = sn.base == except.base and sn.at <= ids.len and sn.path == pathKey(ids[0..sn.at]);
+            const own = sn.base == except.base and sn.at <= key.len and sn.path == pathKey(key[0..sn.at], spans);
             if (!own) return true;
         };
         return false;
@@ -1287,9 +1311,10 @@ pub const Lanes = struct {
         const s: *const lanes.Stream = @ptrCast(@alignCast(owner orelse return error.NoStream));
         const l = self.streams.getPtr(s) orelse return error.UnknownStream;
         if (at == 0 or at % model.chunk_rows != 0 or at > s.prompt_len -| self.m.cfg.window) return error.NotAChunkEnd;
+        const key = keyOf(s) orelse return error.NoCacheKey; // (a prompt with images and no key keeps nothing)
         const sn = try self.gpa.create(Snap);
         errdefer self.gpa.destroy(sn);
-        sn.* = .{ .id = self.next_snap, .at = at, .base = l.base, .end = l.end, .path = pathKey(s.prompt()[0..at]), .buf = try gpu.DeviceBuffer.alloc(self.m.ctx.d, self.m.snapBytes()) };
+        sn.* = .{ .id = self.next_snap, .at = at, .base = l.base, .end = l.end, .path = pathKey(key[0..at], s.cache_spans), .buf = try gpu.DeviceBuffer.alloc(self.m.ctx.d, self.m.snapBytes()) };
         errdefer sn.buf.free();
         try self.snaps.append(self.gpa, sn);
         errdefer _ = self.snaps.pop(); // (the errdefers above free it: the list must not keep it)
@@ -1916,6 +1941,7 @@ pub fn follow(gpa: std.mem.Allocator, m: *Model) !void {
 /// follow's loop, with what it keeps on the GPU in `held`.
 fn followHeld(gpa: std.mem.Allocator, m: *Model, held: *Held(gpu.DeviceBuffer, disk_mod.Disk), disk_settings: *?disk_mod.Settings) !void {
     const peer = m.peer();
+    // a frame: the ids of a full pool and 64 KiB (image rows, or a prompt's picture digests)
     const buf = try gpa.alloc(u8, (m.pool_cap + 1) * 4 + (1 << 16));
     defer gpa.free(buf);
     var seqs: [max_streams]std.ArrayList(i32) = @splat(.empty);
@@ -1928,6 +1954,10 @@ fn followHeld(gpa: std.mem.Allocator, m: *Model, held: *Held(gpu.DeviceBuffer, d
     var plan_diffs: u64 = 0; // chunks whose read-ahead plan here differed from rank 0's (the warning: oftenEnough)
     var img_rows: std.ArrayList(u8) = .empty; // a prompt's image rows as their pieces come
     defer img_rows.deinit(gpa);
+    var key_ids: std.ArrayList(u32) = .empty; // a prompt with images: its cache key (made from rank 0's spans)
+    defer key_ids.deinit(gpa);
+    var key_spans: std.ArrayList(image_key.KeySpan) = .empty;
+    defer key_spans.deinit(gpa);
     const kept = &held.kept;
     var sync_keys: std.ArrayList(pd.Key) = .empty;
     defer sync_keys.deinit(gpa);
@@ -1972,8 +2002,14 @@ fn followHeld(gpa: std.mem.Allocator, m: *Model, held: *Held(gpu.DeviceBuffer, d
                 if (slot >= max_streams) return error.BadSlot;
                 img_rows.clearRetainingCapacity();
                 try r.ids(gpa, &seqs[slot]);
+                // rank 0's pictures: this rank's disk states keyed alike (its sequence holds -1 there)
+                const seq = seqs[slot].items;
+                try fill_spans.read(&r, gpa, seq, &key_spans);
                 try r.end();
-                if (held.disk) |d| d.beginPass(std.mem.sliceAsBytes(seqs[slot].items));
+                if (held.disk) |d| {
+                    try fill_spans.keyIds(gpa, seq, key_spans.items, &key_ids);
+                    d.beginPass(std.mem.sliceAsBytes(key_ids.items), key_spans.items);
+                }
                 notePass(m, step - 1, 1, seqs[slot].items.len, slot, @intCast(base), "");
                 m.fillBegin(slot, @intCast(base)) catch |err| try refused(m, err);
                 m.fill_seq = seqs[slot].items;
@@ -2310,12 +2346,12 @@ test "retained histories preserve their replay and output reservations (PR #10: 
     }
     // All eight 100K histories can resume within their reservations without invalidating a neighbor.
     for (&snapshots) |*sn| {
-        try std.testing.expect(!ln.keptOver(sn.base + sn.at, sn.end, sn, &.{}));
+        try std.testing.expect(!ln.keptOver(sn.base + sn.at, sn.end, sn, &.{}, &.{}));
         ln.staleOver(sn.base + sn.at, sn.end, sn);
     }
     for (snapshots) |sn| try std.testing.expect(!sn.stale);
     // A larger continuation relocates into free room instead of overwriting the next cached prefix.
-    try std.testing.expect(ln.keptOver(snapshots[0].at, 104448, &snapshots[0], &.{}));
+    try std.testing.expect(ln.keptOver(snapshots[0].at, 104448, &snapshots[0], &.{}, &.{}));
     try std.testing.expectEqual(@as(usize, 819200), try ln.placeKept(&.{}, 104448, null));
     // At genuine capacity pressure, kept states may still be evicted; a live range never is.
     const live = [_][2]usize{.{ 0, 102400 }};
@@ -2339,17 +2375,60 @@ test "a resume from a shared cut moves when another conversation's longer state 
     const second = try std.testing.allocator.dupe(u32, first);
     defer std.testing.allocator.free(second);
     for (second[2 * c ..]) |*t| t.* +%= 7;
-    var cut: Snap = .{ .id = 1, .at = 2 * c, .base = 0, .end = 8 * c, .path = pathKey(first[0 .. 2 * c]), .buf = undefined };
-    var history: Snap = .{ .id = 2, .at = 5 * c, .base = 0, .end = 8 * c, .path = pathKey(first[0 .. 5 * c]), .buf = undefined };
+    var cut: Snap = .{ .id = 1, .at = 2 * c, .base = 0, .end = 8 * c, .path = pathKey(first[0 .. 2 * c], &.{}), .buf = undefined };
+    var history: Snap = .{ .id = 2, .at = 5 * c, .base = 0, .end = 8 * c, .path = pathKey(first[0 .. 5 * c], &.{}), .buf = undefined };
     try ln.snaps.append(std.testing.allocator, &cut);
     try ln.snaps.append(std.testing.allocator, &history);
     // the second conversation resuming the cut in place would overwrite the first one's history: it moves
-    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, second));
+    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, second, &.{}));
     // the first conversation's own next turn (its history extended) may resume the cut in place: the rows are its own
-    try std.testing.expect(!ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, first));
+    try std.testing.expect(!ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, first, &.{}));
     // a prompt shorter than the longer state is not on its path either
-    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, first[0 .. 4 * c]));
+    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, first[0 .. 4 * c], &.{}));
     // moved: the copy goes clear of both states' extents, and neither goes stale
+    try std.testing.expectEqual(@as(usize, 8 * c), try ln.placeKept(&.{}, 8 * c, &cut));
+    try std.testing.expect(!cut.stale and !history.stale);
+}
+
+test "two prompts alike but for a same-size picture are on different paths: neither resumes in place over the other's states" {
+    const c = model.chunk_rows;
+    const gpa = std.testing.allocator;
+    var m: Model = undefined;
+    m.pool_cap = 16 * c;
+    var ln: Lanes = .{ .gpa = gpa, .m = &m, .peer = null };
+    defer ln.snaps.deinit(gpa);
+    // the same ids for both: text, then a picture's span across the second chunk's end, then text
+    const ids = try gpa.alloc(u32, 6 * c);
+    defer gpa.free(ids);
+    for (ids, 0..) |*t, i| t.* = @intCast(i % 1000);
+    const at = 2 * c - 100;
+    @memset(ids[at..][0..300], 128815);
+    const sa = [_]image_key.KeySpan{.{ .at = at, .len = 300, .digest = image_key.imageDigest("picture A") }};
+    const sb = [_]image_key.KeySpan{.{ .at = at, .len = 300, .digest = image_key.imageDigest("picture B") }};
+    const ka = try image_key.keyIds(gpa, ids, &sa);
+    defer gpa.free(ka);
+    const kb = try image_key.keyIds(gpa, ids, &sb);
+    defer gpa.free(kb);
+    // a state before the picture is on both paths; one inside its span or past it is one picture's only
+    try std.testing.expectEqual(pathKey(ka[0..c], &sa), pathKey(kb[0..c], &sb));
+    try std.testing.expectEqual(pathKey(ids[0..c], &.{}), pathKey(ka[0..c], &sa));
+    for ([_]usize{ 2 * c, 3 * c, 5 * c }) |n| try std.testing.expect(pathKey(ka[0..n], &sa) != pathKey(kb[0..n], &sb));
+    // the whole digests decide, not the 31-bit key ids alone: A's key ids with B's picture are off A's path
+    try std.testing.expect(pathKey(ka[0 .. 3 * c], &sa) != pathKey(ka[0 .. 3 * c], &sb));
+    // conversation A kept the cut before the picture and its history past it, in one extent
+    var cut: Snap = .{ .id = 1, .at = c, .base = 0, .end = 8 * c, .path = pathKey(ka[0..c], &sa), .buf = undefined };
+    var history: Snap = .{ .id = 2, .at = 5 * c, .base = 0, .end = 8 * c, .path = pathKey(ka[0 .. 5 * c], &sa), .buf = undefined };
+    try ln.snaps.append(gpa, &cut);
+    try ln.snaps.append(gpa, &history);
+    // B resumes the cut (it holds no picture): in place it would write over A's history, so it moves
+    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, kb, &sb));
+    // A's own next turn resumes in place
+    try std.testing.expect(!ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, ka, &sa));
+    // and the other way round: B's history in the extent, A resuming the cut
+    history.path = pathKey(kb[0 .. 5 * c], &sb);
+    try std.testing.expect(ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, ka, &sa));
+    try std.testing.expect(!ln.keptOver(cut.base + cut.at, cut.base + 8 * c, &cut, kb, &sb));
+    // moved: the copy goes clear of both states, and neither goes stale
     try std.testing.expectEqual(@as(usize, 8 * c), try ln.placeKept(&.{}, 8 * c, &cut));
     try std.testing.expect(!cut.stale and !history.stale);
 }
