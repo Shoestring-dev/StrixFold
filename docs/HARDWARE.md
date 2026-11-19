@@ -15,7 +15,7 @@ for on each.
 | Framework Desktop + Minisforum MS-S1 Max | Measured by a user, in a container on Fedora | [FEDORA-PODMAN.md](FEDORA-PODMAN.md) | Cable the Framework to the MS-S1 Max's rear USB4 v2 ports |
 | 2 × Framework Desktop | Reported working | In progress ([#50](https://github.com/Shoestring-dev/StrixFold/pull/50)) | BIOS 3.06 and `amd_iommu=pt` before the link comes up; rear USB-C ports only |
 | 2 × Minisforum MS-S1 Max | Reported working, with 1M-token context | | |
-| 2 × GMKtec EVO-X2 | Reported working | | |
+| 2 × GMKtec EVO-X2 | Reported working | | One USB4 port on the front and one on the back: cable front to front and back to back |
 | 2 × Beelink GTR9 Pro | Reported working, two USB4 cables | | |
 | Minisforum MS-S1 Max + GMKtec EVO-X2 | Reported working | | 40 Gb/s through the MS-S1 Max's USB4 v2 ports, 20 Gb/s through its other USB4 ports |
 
@@ -35,6 +35,7 @@ link, and a port that works for a USB4 drive may still refuse one. What owners h
 - **Framework Desktop:** only the rear USB-C ports are USB4; the front ones are USB 3.2. On BIOS 3.05 no port made an
   interface; BIOS 3.06 together with the kernel option `amd_iommu=pt` fixed it (the kernel refuses host-to-host links
   with the IOMMU off).
+- **GMKtec EVO-X2:** one USB4 port on the front and one on the back. An owner cabled front to front and back to back.
 - **Bosgame M5:** both of its USB4 ports link, but at Gen 2 until both ends are unplugged and plugged back in
   ([The USB4 links](BOSGAME-M5.md#the-usb4-links)).
 - **Cables:** use cables rated for 40 Gb/s or more. A Framework Desktop owner found the cable made the difference.
