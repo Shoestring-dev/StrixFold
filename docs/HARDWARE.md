@@ -13,7 +13,7 @@ for on each.
 | 2 × AMD Ryzen AI Halo | Measured: the published numbers | [GETTING-STARTED 2a](GETTING-STARTED.md#2a-amd-ryzen-ai-halo) | Ships with the tested stack |
 | 2 × Bosgame M5 | Measured by us | [BOSGAME-M5.md](BOSGAME-M5.md) | Links train at Gen 2 until replugged; 85 W sustained in the stock power mode |
 | Framework Desktop + Minisforum MS-S1 Max | Measured by a user, in a container on Fedora | [FEDORA-PODMAN.md](FEDORA-PODMAN.md) | Cable the Framework to the MS-S1 Max's rear USB4 v2 ports |
-| 2 × Framework Desktop | Reported working | In progress ([#50](https://github.com/Shoestring-dev/StrixFold/pull/50)) | BIOS 3.06 and `amd_iommu=pt` before the link comes up; rear USB-C ports only |
+| 2 × Framework Desktop | Measured by a user, with 1M-token context | [FRAMEWORK-DESKTOP.md](FRAMEWORK-DESKTOP.md) | BIOS 3.06 and `amd_iommu=pt` before the link comes up; rear USB-C ports only; a load-wedge workaround on the stock Ubuntu kernel (guide §9) |
 | 2 × Minisforum MS-S1 Max | Reported working, with 1M-token context | | |
 | 2 × GMKtec EVO-X2 | Reported working | | One USB4 port on the front and one on the back: cable front to front and back to back |
 | 2 × Beelink GTR9 Pro | Reported working, two USB4 cables | | |
@@ -78,8 +78,7 @@ load before anything else.
 The published numbers use Debian 13 with AMD's kernel 7.2.7 and ROCm 10.0.0-4 (HIP 7.15). Owners also run:
 
 - **Fedora 44 and 45** with ROCm 10.1 inside a rootless Podman container: [FEDORA-PODMAN.md](FEDORA-PODMAN.md).
-- **Ubuntu 26.10** with AMD's ROCm 10.1 packages: in progress in
-  [#50](https://github.com/Shoestring-dev/StrixFold/pull/50).
+- **Ubuntu 26.10** with AMD's ROCm 10.1 packages: [FRAMEWORK-DESKTOP.md](FRAMEWORK-DESKTOP.md).
 
 ## What doesn't work yet
 
