@@ -10,6 +10,7 @@ pub const Tower = struct {
     ctx: *anyopaque,
     bind: *const fn (ctx: *anyopaque) anyerror!void,
     rows: *const fn (ctx: *anyopaque, payload: []const u8, gpa: Allocator, out: *std.ArrayList(u8)) anyerror!usize,
+    row_bytes: usize, // a span row's bytes: a job reserves its pictures' rows exactly before their encode
 };
 
 const Job = struct {
@@ -18,6 +19,7 @@ const Job = struct {
     tokens: []usize, // each picture's span, as its encode returned it
     ends: []usize, // where each image's rows end in `rows`
     rows: std.ArrayList(u8) = .empty,
+    need: usize = 0, // the span rows of the pictures it encodes (their tokens): `rows` is reserved to them exactly
     state: enum { queued, running, done } = .queued,
     err: ?anyerror = null,
     gone: bool = false, // forgotten while it ran: the thread frees it
@@ -28,7 +30,7 @@ pub const Encoder = struct {
     gpa: Allocator,
     io: std.Io,
     tower: Tower,
-    cap: usize, // a request's image rows at most (Model.image_rows_reserved): more fail at once, nothing encoded
+    cap: usize, // a request's image rows at most (Model.image_rows): more fail at once, nothing encoded
     mutex: std.Io.Mutex = .init,
     cond: std.Io.Condition = .init,
     jobs: std.ArrayList(*Job) = .empty,
@@ -101,6 +103,7 @@ pub const Encoder = struct {
         } else for (images, j.payloads) |img, *p| if (!img.rows) {
             p.* = try e.gpa.alignedAlloc(u8, .@"16", img.bytes.len);
             @memcpy(p.*, img.bytes);
+            j.need += img.tokens;
         };
         e.lock();
         defer e.unlock();
@@ -212,6 +215,7 @@ pub const Encoder = struct {
     fn encode(e: *Encoder, j: *Job) !void {
         for (j.payloads, j.tokens, j.ends) |p, *t, *end| {
             if (p.len > 0 and e.stopped(j)) return error.EncodeCancelled;
+            if (p.len > 0) try j.rows.ensureTotalCapacityPrecise(e.gpa, j.need * e.tower.row_bytes); // exactly, once
             t.* = if (p.len > 0) try e.tower.rows(e.tower.ctx, p, e.gpa, &j.rows) else 0;
             end.* = j.rows.items.len;
         }
@@ -226,7 +230,7 @@ const Fake = struct {
     fail: bool = false,
 
     fn tower(f: *Fake) Tower {
-        return .{ .ctx = f, .bind = bind, .rows = rows };
+        return .{ .ctx = f, .bind = bind, .rows = rows, .row_bytes = 4 };
     }
 
     fn bind(_: *anyopaque) anyerror!void {}
@@ -269,6 +273,10 @@ test "an encoder hands each request its pictures' rows in order, the rows that c
     const a = [_]Image{ .{ .at = 0, .tokens = 2, .bytes = &.{ 2, 7 } }, .{ .at = 3, .tokens = 1, .bytes = "rows", .rows = true }, .{ .at = 5, .tokens = 3, .bytes = &.{ 3, 9 } } };
     try e.submit(&a, woken.wake());
     waitReady(&e, &a);
+    e.lock();
+    const reserved = e.find(&a).?.rows.capacity;
+    e.unlock();
+    try std.testing.expectEqual(@as(usize, 20), reserved); // the encoded pictures' 5 rows exactly
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 3), try e.take(&a, 2, gpa, &out));
