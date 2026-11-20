@@ -16,6 +16,7 @@
 const std = @import("std");
 const lanes = @import("lanes");
 const model = @import("model.zig");
+const coll_mod = @import("coll.zig");
 const round = @import("round.zig");
 const draft = @import("draft.zig");
 const sampling = @import("sampling.zig");
@@ -689,6 +690,10 @@ pub const Lanes = struct {
 
     fn prefillSlice(self: *Lanes, s: *lanes.Stream, budget_ns: u64) !bool {
         const t0 = self.m.now();
+        if (self.m.coll.timer) |t| t.in_pass = true; // TF_DS_COLL_TIME: this slice's collectives are the pass's
+        defer if (self.m.coll.timer) |t| {
+            t.in_pass = false;
+        };
         defer if (self.prof) |*p| {
             p.prefill += self.m.now() - t0;
         };
@@ -1041,6 +1046,7 @@ pub const Lanes = struct {
         const logits: []const f32 = if (greedy) &.{} else try m.roundLogits(rows.ids.len);
         const traced: []const f32 = if (trace_rounds >= 2) (if (greedy) try m.roundLogits(rows.ids.len) else logits) else &.{};
         const t3 = m.now();
+        if (m.coll.timer) |t| t.round_count += 1; // TF_DS_COLL_TIME: a decode round
         defer if (self.prof) |*p| {
             p.send += t1 - t0;
             p.enqueue += m.t_enqueue;
@@ -1529,6 +1535,7 @@ pub const Lanes = struct {
         const kv = self.streams.fetchRemove(s) orelse return;
         self.used[kv.value.slot] = false;
         s.telemetry_len = kv.value.tel.write(if (self.m.graphs) |*g| g else null, &s.telemetry_buf);
+        noteColl(self.m, self.step, 0, "reply end");
         if (kv.value.grammar) |c| {
             const l = kv.value;
             std.log.info("structured reply: {d} rows drawn under its grammar, {d:.1} us a row on the host ({d} token checks, {d} full masks)", .{ l.grammar_rows, @as(f64, @floatFromInt(l.grammar_ns)) / 1e3 / @as(f64, @floatFromInt(@max(l.grammar_rows, 1))), c.checks, c.masks });
@@ -1644,6 +1651,13 @@ fn notePass(m: *Model, step: u64, rank: u32, len: usize, slot: usize, base: usiz
     std.log.info("lanes: step {d} rank {d} prompt pass: {d} tokens, slot {d}, extent at {d}{s}; collectives (stream {s}): staged {d}, cable1 {d}, cable2 {d}, host {d}", .{
         step, rank, len, slot, base, detail, if (idle) "idle" else "busy", n.staged, n.cable1, n.cable2, n.host,
     });
+    noteColl(m, step, rank, "pass start");
+}
+
+/// TF_DS_COLL_TIME (coll.Timer): rank 0's collective time by kind, after the prompt pass line and at a reply's end.
+fn noteColl(m: *Model, step: u64, rank: u32, at: []const u8) void {
+    var buf: [512]u8 = undefined;
+    if (coll_mod.Timer.line(m.coll.timer, &buf, step, rank, at)) |s| std.log.info("{s}", .{s});
 }
 
 /// Prefix survivals: out[j] = the product of sigmoid(conf[i]) for i <= j, in float64 (libm's exp, as chooseK).

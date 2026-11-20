@@ -138,6 +138,7 @@ pub const Model = struct {
     fan: fan_mod.Fan,
     nccl: Nccl, // CUDA: the communicator behind `coll`
     coll: coll.Coll, // the TP collectives the engine calls
+    coll_timer: coll.Timer, // TF_DS_COLL_TIME on rank 0: coll.timer points here (off: coll.timer null, this unused)
     staging: gpu.Staging, // host bytes to the device (prompt.upload)
     kit: HipKit, // HIP: the AMD kit every kernel comes from
     aux_which: tri_aux.Which = tri_aux.Which.triton, // HIP: TF_DS_AUX, which Triton launches take w-tri's HIP kernels
@@ -356,6 +357,14 @@ pub const Model = struct {
         } else return error.NoCollective;
         errdefer m.coll.close();
         if (o.graphs and !m.coll.capturable) return error.GraphsNeedCapturableCollective;
+        // TF_DS_COLL_TIME (coll.Timer): every rank checks the value, rank 0 times its calls (lanes logs them)
+        if (try coll.Timer.parseMode(if (std.c.getenv("TF_DS_COLL_TIME")) |v| std.mem.span(v) else null)) |mode| {
+            if (o.graphs) return error.CollTimeNeedsEagerRounds; // a replayed graph makes no host call to time
+            if (o.rank == 0) {
+                m.coll_timer = .{ .mode = mode };
+                m.coll.timer = &m.coll_timer;
+            }
+        }
         // TP2: the decode gathers' RDMA ring (both ranks connect before either returns)
         if (gpu.features.verbs_rdma and sp.pair == null and o.rdma_devices != null) {
             const list = o.rdma_devices.?;

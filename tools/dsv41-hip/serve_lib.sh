@@ -192,6 +192,8 @@ serve_env() {
   [ -n "${COLL_GPU_WAIT_S:-}" ] && SERVE_ENV+=(TF_COLL_GPU_WAIT_S="$COLL_GPU_WAIT_S")  # (a conf without them: the engine's)
   [ -n "${MEMORY_RESERVE_GIB:-}" ] && SERVE_ENV+=(TENSORFOLD_MEMORY_RESERVE_GIB="$MEMORY_RESERVE_GIB")
   [ -n "${COLL_GPU_WARN_S:-}" ] && SERVE_ENV+=(TF_COLL_GPU_WARN_S="$COLL_GPU_WARN_S")
+  # COLL_TIME (1 or sync; empty: off): TF_DS_COLL_TIME, rank 0's collective time by kind on its lanes lines
+  [ -n "${COLL_TIME:-}" ] && SERVE_ENV+=(TF_DS_COLL_TIME="$COLL_TIME")
   [ -n "$TP_DATA_PORT" ] && SERVE_ENV+=(TF_TP_DATA_PORT="$TP_DATA_PORT")
   [ -n "$TP_STRIPE" ] && SERVE_ENV+=(TF_TP_STRIPE="$TP_STRIPE")
   [ -n "$ROUND_MS" ] && SERVE_ENV+=(TF_DS_ROUND_MS="$ROUND_MS")
