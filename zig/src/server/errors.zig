@@ -9,6 +9,8 @@ pub const Kind = enum {
     context_length,
     /// CapacityError: 503, retry shortly.
     capacity,
+    /// The queue cap (queue_cap.zig): 429 with a Retry-After.
+    queue_full,
     /// Any other exception (ValueError, KeyError...): 400 with ``{"message"}`` only.
     other,
     /// An exception while the reply runs: 500 with ``{"message"}``, or a stream's server_error event.
@@ -46,6 +48,7 @@ pub const Cx = struct {
     pub fn status(cx: *const Cx) u16 {
         return switch (cx.kind) {
             .capacity => 503,
+            .queue_full => 429,
             .server => 500,
             else => 400,
         };

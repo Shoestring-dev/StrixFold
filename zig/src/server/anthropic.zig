@@ -30,6 +30,7 @@ fn errorValue(a: Allocator, message: []const u8, status: u16) Allocator.Error!Va
     const kind = switch (status) {
         400 => "invalid_request_error",
         404 => "not_found_error",
+        429 => "rate_limit_error",
         503 => "overloaded_error",
         else => "api_error",
     };

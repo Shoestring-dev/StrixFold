@@ -49,4 +49,6 @@ test {
     _ = @import("decisions.zig");
     _ = @import("decisions_test.zig");
     _ = @import("server_recovery_test.zig");
+    _ = @import("queue_cap.zig");
+    _ = @import("queue_cap_test.zig");
 }

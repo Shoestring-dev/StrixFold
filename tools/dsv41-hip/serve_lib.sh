@@ -70,6 +70,9 @@ serve_load() {
   [[ $DRAFT_BYPASS_AT =~ ^(0|[2-8])$ ]] || die "DRAFT_BYPASS_AT must be 0 or 2..8"
   FILL_SLICE_MS=${FILL_SLICE_MS:-0}
   [[ $FILL_SLICE_MS =~ ^[0-9]{1,6}$ ]] || die "FILL_SLICE_MS must be a whole number of ms up to 999999 (0: whole prompt passes)"
+  [[ ${QUEUE_MAX:-} =~ ^([0-9]{1,6}|off)?$ ]] || die "QUEUE_MAX must be empty, a whole number of requests up to 999999, or off"
+  [[ ${QUEUE_MIB:-} =~ ^([0-9]{1,7}|off)?$ ]] || die "QUEUE_MIB must be empty, a whole number of MiB up to 9999999, or off"
+  [[ ${QUEUE_RETRY_S:-} =~ ^[0-9]{0,4}$ ]] || die "QUEUE_RETRY_S must be empty or a whole number of seconds up to 9999"
   # the switch acts only on drafted TP2 shared rounds that can hold that many streams; elsewhere it is off
   if [ "$DRAFTS" != 1 ] || [ "$WORLD" != 2 ] || [ "$DRAFT_BYPASS_AT" -gt "$STREAMS" ]; then DRAFT_BYPASS_AT=0; fi
   for v in REPLAY_FLOOR HC_SIDE ENGRAM_AIO SEED_RANDOM L2_PREFETCH LOOP_GUARD; do case ${!v} in 0|1) ;; *) die "$v must be 0 or 1, not ${!v}";; esac; done
@@ -200,6 +203,9 @@ serve_env() {
   [ -n "${FROZEN_TIMING:-}" ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_LANES_FROZEN_TIMING="$FROZEN_TIMING")
   [ "$RANK" = 0 ] && SERVE_ENV+=(TF_DS_DRAFT_BYPASS_AT="$DRAFT_BYPASS_AT")
   [ "$RANK" = 0 ] && SERVE_ENV+=(TF_FILL_SLICE_MS="$FILL_SLICE_MS")
+  [ -n "${QUEUE_MAX:-}" ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_QUEUE_MAX="$QUEUE_MAX")
+  [ -n "${QUEUE_MIB:-}" ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_QUEUE_MIB="$QUEUE_MIB")
+  [ -n "${QUEUE_RETRY_S:-}" ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_QUEUE_RETRY_S="$QUEUE_RETRY_S")
   [ -n "${TRACE_ROUNDS:-}" ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_DS_TRACE_ROUNDS="$TRACE_ROUNDS")
   [ -n "${GRAPHS_EAGER:-}" ] && SERVE_ENV+=(TF_DS_GRAPHS_EAGER="$GRAPHS_EAGER")
   # the prefetch's forked stream overlaps the graph's main branch only with HIP's segment scheduling (a debug variable)
