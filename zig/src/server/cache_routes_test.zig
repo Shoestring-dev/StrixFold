@@ -89,11 +89,16 @@ const Reply = struct { status: u16, head: []u8, body: []u8 };
 
 /// One request over a socket pair, straight into the routes (the API-key gate runs before them; auth.zig tests it).
 fn exchange(srv: *server.Server, path: []const u8, headers: []const u8, body: []const u8) !Reply {
+    return exchangeClaiming(srv, path, headers, body.len, body, null);
+}
+
+/// As exchange, the head claiming ``claimed`` body bytes; ``unread``: bytes the server left unread (it must close).
+fn exchangeClaiming(srv: *server.Server, path: []const u8, headers: []const u8, claimed: usize, body: []const u8, unread: ?*usize) !Reply {
     var pair: [2]std.c.fd_t = undefined;
     if (std.c.socketpair(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0, &pair) != 0) return error.SocketPair;
     defer _ = std.c.close(pair[0]);
     defer _ = std.c.close(pair[1]);
-    const head = try std.fmt.allocPrint(gpa, "POST {s} HTTP/1.1\r\nHost: t\r\n{s}Content-Length: {d}\r\n\r\n", .{ path, headers, body.len });
+    const head = try std.fmt.allocPrint(gpa, "POST {s} HTTP/1.1\r\nHost: t\r\n{s}Content-Length: {d}\r\n\r\n", .{ path, headers, claimed });
     defer gpa.free(head);
     try writeAll(pair[0], head);
     try writeAll(pair[0], body);
@@ -105,6 +110,12 @@ fn exchange(srv: *server.Server, path: []const u8, headers: []const u8, body: []
     const a = arena.allocator();
     if (try conn.readRequest(a, false) != .ready) return error.BadRequest;
     routes.dispatch(srv, &conn, a);
+    if (unread) |u| {
+        const left = try readReady(pair[1]);
+        defer gpa.free(left);
+        u.* = conn.end - conn.start + left.len;
+        if (!conn.close) return error.KeptOpen;
+    }
     const raw = try readReady(pair[0]);
     defer gpa.free(raw);
     const split = std.mem.indexOf(u8, raw, "\r\n\r\n") orelse return error.BadReply;
@@ -148,7 +159,7 @@ fn expectStatus(r: Reply, code: u16, text: []const u8) !void {
 
 const bearer = "Authorization: Bearer sk-move\r\n";
 
-test "the routes are absent without the key; with it they answer only to its bearer, before any body is read" {
+test "the routes are absent without the key; with it they answer only to its bearer, a 401 sent with the body unread" {
     var text: DropLate = .{};
     var backend: Mover = .{};
     defer gpa.free(backend.prompt);
@@ -163,6 +174,14 @@ test "the routes are absent without the key; with it they answer only to its bea
     try expectStatus(try exchange(on, "/cache/probe", "", probe_body), 401, "cache transfer key is required");
     try expectStatus(try exchange(on, "/cache/probe", "Authorization: Bearer sk-api\r\n", probe_body), 401, "cache transfer key is required");
     try expectStatus(try exchange(on, "/cache/import", "x-api-key: sk-api\r\n", "junk"), 401, "cache transfer key is required");
+    // headers only, or a body still on its way: the 401 does not wait for it, and the connection closes
+    var unread: usize = 99;
+    try expectStatus(try exchangeClaiming(on, "/cache/import", "", 10 << 20, "", &unread), 401, "cache transfer key is required");
+    try std.testing.expectEqual(@as(usize, 0), unread);
+    try expectStatus(try exchangeClaiming(on, "/cache/import", "Authorization: Bearer not-the-bearer\r\n", 10 << 20, "0123456789", &unread), 401, "cache transfer key is required");
+    try std.testing.expectEqual(@as(usize, 10), unread);
+    try expectStatus(try exchangeClaiming(on, "/cache/probe", "", probe_body.len, probe_body, &unread), 401, "cache transfer key is required");
+    try std.testing.expectEqual(probe_body.len, unread);
     try std.testing.expectEqual(@as(usize, 0), backend.prompt.len); // nothing reached the engine
     try expectStatus(try exchange(on, "/cache/probe", "x-cache-transfer-key: sk-move\r\n", probe_body), 200, "\"tokens\": 0");
     try expectStatus(try exchange(on, "/v1/cache/probe", "x-api-key: sk-api\r\n" ++ bearer, probe_body), 200, "\"tokens\": 0");
