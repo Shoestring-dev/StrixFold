@@ -197,6 +197,8 @@ serve_env() {
   [ -n "${COLL_GPU_WARN_S:-}" ] && SERVE_ENV+=(TF_COLL_GPU_WARN_S="$COLL_GPU_WARN_S")
   # rank 0's Pillow child runs python3 -I, which ignores PYTHONPATH: a Pillow the box lacks comes by TF_PIL_PATH
   [ -n "${PIL_PATH:-}" ] && [ "$MODALITIES" = text_image ] && [ "$RANK" = 0 ] && SERVE_ENV+=(TF_PIL_PATH="$PIL_PATH")
+  # COLL_TIME (1 or sync; empty: off): TF_DS_COLL_TIME, rank 0's collective time by kind on its lanes lines
+  [ -n "${COLL_TIME:-}" ] && SERVE_ENV+=(TF_DS_COLL_TIME="$COLL_TIME")
   [ -n "$TP_DATA_PORT" ] && SERVE_ENV+=(TF_TP_DATA_PORT="$TP_DATA_PORT")
   [ -n "$TP_STRIPE" ] && SERVE_ENV+=(TF_TP_STRIPE="$TP_STRIPE")
   [ -n "$ROUND_MS" ] && SERVE_ENV+=(TF_DS_ROUND_MS="$ROUND_MS")

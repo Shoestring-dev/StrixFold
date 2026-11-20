@@ -95,6 +95,8 @@ pub const Coll = struct {
     /// Its all-gather may be captured into a graph (NCCL, or a device-proxy transport); a host-staged transport is not,
     /// so the rounds run eagerly with it (TF_DS_GRAPHS=1 is refused at open).
     capturable: bool,
+    /// TF_DS_COLL_TIME's per-kind wall time (Timer; null, the default: the calls go straight to the transport).
+    timer: ?*Timer = null,
 
     pub const VTable = struct {
         /// recv[r * bytes .. (r + 1) * bytes] = rank r's send, for every rank in rank order. Stream-ordered: reads `send`
@@ -133,7 +135,10 @@ pub const Coll = struct {
 
     /// `count` elements of `dtype` from every rank into `recv`, rank after rank, at `site`.
     pub fn allGather(c: Coll, site: Site, send: u64, recv: u64, count: usize, dtype: DType, stream: gpu.Stream) Error!void {
-        return c.vtable.all_gather(c.ptr, stream, site, send, recv, count * dtype.size());
+        const t = c.timer orelse return c.vtable.all_gather(c.ptr, stream, site, send, recv, count * dtype.size());
+        const t0 = try t.start(stream);
+        try c.vtable.all_gather(c.ptr, stream, site, send, recv, count * dtype.size());
+        try t.stop(stream, .all_gather, t0);
     }
 
     /// A begun all-gather (gatherBegin), finished by gatherEnd.
@@ -147,19 +152,33 @@ pub const Coll = struct {
     /// (the same bytes, no overlap).
     pub fn gatherBegin(c: Coll, site: Site, send: u64, recv: u64, count: usize, dtype: DType, stream: gpu.Stream) Error!Pending {
         const p: Pending = .{ .site = site, .send = send, .recv = recv, .bytes = count * dtype.size() };
+        const t = c.timer orelse {
+            if (c.vtable.gather_begin) |f| try f(c.ptr, stream, site, send, recv, p.bytes);
+            return p;
+        };
+        const t0 = try t.start(stream);
         if (c.vtable.gather_begin) |f| try f(c.ptr, stream, site, send, recv, p.bytes);
+        try t.stopBegin(stream, t0);
         return p;
     }
 
     pub fn gatherEnd(c: Coll, p: Pending, stream: gpu.Stream) Error!void {
-        if (c.vtable.gather_end) |f| return f(c.ptr, stream);
-        return c.vtable.all_gather(c.ptr, stream, p.site, p.send, p.recv, p.bytes);
+        const t = c.timer orelse {
+            if (c.vtable.gather_end) |f| return f(c.ptr, stream);
+            return c.vtable.all_gather(c.ptr, stream, p.site, p.send, p.recv, p.bytes);
+        };
+        const t0 = try t.start(stream);
+        if (c.vtable.gather_end) |f| try f(c.ptr, stream) else try c.vtable.all_gather(c.ptr, stream, p.site, p.send, p.recv, p.bytes);
+        try t.stop(stream, .prompt_gather, t0);
     }
 
     /// `count` elements to rank `peer` and `rcount` from it (the four-node split's pairs).
     pub fn exchange(c: Coll, site: Site, send: u64, count: usize, recv: u64, rcount: usize, dtype: DType, peer: u32, stream: gpu.Stream) (Error || error{Unsupported})!void {
         const f = c.vtable.exchange orelse return error.Unsupported;
-        return f(c.ptr, stream, site, send, count * dtype.size(), recv, rcount * dtype.size(), peer);
+        const t = c.timer orelse return f(c.ptr, stream, site, send, count * dtype.size(), recv, rcount * dtype.size(), peer);
+        const t0 = try t.start(stream);
+        try f(c.ptr, stream, site, send, count * dtype.size(), recv, rcount * dtype.size(), peer);
+        try t.stop(stream, .exchange, t0);
     }
 
     pub fn abort(c: Coll, reason: Reason) void {
@@ -168,6 +187,95 @@ pub const Coll = struct {
 
     pub fn close(c: Coll) void {
         c.vtable.close(c.ptr);
+    }
+};
+
+/// TF_DS_COLL_TIME (off by default, rank 0 only): host wall time in each collective call, by kind, pass and rounds.
+pub const Timer = struct {
+    /// call: the time inside the call (tcp_host's wire, else the enqueue); sync: the stream drained around each call.
+    pub const Mode = enum { call, sync };
+    pub const Kind = enum { all_gather, exchange, prompt_gather };
+    pub const kinds = 3;
+    /// Calls and nanoseconds by Kind.
+    pub const Sums = struct {
+        calls: [kinds]u64 = @splat(0),
+        ns: [kinds]u64 = @splat(0),
+        pub fn totalNs(s: Sums) u64 {
+            return s.ns[0] + s.ns[1] + s.ns[2];
+        }
+    };
+
+    mode: Mode,
+    /// The drain sync mode calls (the stream's synchronize; a host test's fake).
+    drain: *const fn (stream: gpu.Stream) Error!void = drainStream,
+    /// Rank 0's lanes sets it while a prompt pass slice runs: the calls go to `pass`, else to `rounds`.
+    in_pass: bool = false,
+    pass: Sums = .{},
+    rounds: Sums = .{},
+    /// Decode rounds since the last line (rank 0's lanes counts them).
+    round_count: u64 = 0,
+    /// A begun split gather's time so far (gatherBegin's call), added at its gatherEnd.
+    begun_ns: u64 = 0,
+
+    /// TF_DS_COLL_TIME's value: null (off) for unset, "" or "0"; "1" call; "sync" sync; anything else BadSetting.
+    pub fn parseMode(v: ?[]const u8) error{BadSetting}!?Mode {
+        const s = v orelse return null;
+        if (s.len == 0 or std.mem.eql(u8, s, "0")) return null;
+        if (std.mem.eql(u8, s, "1")) return .call;
+        if (std.mem.eql(u8, s, "sync")) return .sync;
+        return error.BadSetting;
+    }
+
+    fn drainStream(stream: gpu.Stream) Error!void {
+        stream.synchronize() catch return error.CollectiveFailed;
+    }
+
+    pub fn nowNs() u64 {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    }
+
+    fn start(t: *Timer, stream: gpu.Stream) Error!u64 {
+        if (t.mode == .sync) try t.drain(stream);
+        return nowNs();
+    }
+
+    fn stop(t: *Timer, stream: gpu.Stream, kind: Kind, t0: u64) Error!void {
+        if (t.mode == .sync) try t.drain(stream);
+        const s = if (t.in_pass) &t.pass else &t.rounds;
+        s.calls[@intFromEnum(kind)] += 1;
+        s.ns[@intFromEnum(kind)] += nowNs() -| t0 + t.begun_ns;
+        t.begun_ns = 0;
+    }
+
+    fn stopBegin(t: *Timer, stream: gpu.Stream, t0: u64) Error!void {
+        if (t.mode == .sync) try t.drain(stream);
+        t.begun_ns = nowNs() -| t0;
+    }
+
+    /// The sums since the last line as rank 0's lanes line, then cleared (null with no timer: nothing is logged).
+    pub fn line(timer: ?*Timer, buf: []u8, step: u64, rank: u32, at: []const u8) ?[]const u8 {
+        const t = timer orelse return null;
+        defer {
+            t.pass = .{};
+            t.rounds = .{};
+            t.round_count = 0;
+        }
+        const p = t.pass;
+        const r = t.rounds;
+        const per = if (t.round_count == 0) 0 else ms(r.totalNs()) / @as(f64, @floatFromInt(t.round_count));
+        return std.fmt.bufPrint(buf, "lanes: step {d} rank {d} coll time ({s}, {s}): pass {d:.3} ms (all_gather {d} {d:.3}, exchange {d} {d:.3}, prompt_gather {d} {d:.3}); rounds {d} {d:.3} ms (all_gather {d} {d:.3}, exchange {d} {d:.3}, prompt_gather {d} {d:.3}), {d:.3} ms a round", .{
+            step,                     rank,       at,          if (t.mode == .sync) "sync" else "call",
+            ms(p.totalNs()),          p.calls[0], ms(p.ns[0]), p.calls[1],
+            ms(p.ns[1]),              p.calls[2], ms(p.ns[2]), t.round_count,
+            ms(r.totalNs()),          r.calls[0], ms(r.ns[0]), r.calls[1],
+            ms(r.ns[1]),              r.calls[2], ms(r.ns[2]), per,
+        }) catch buf[0..0];
+    }
+
+    fn ms(ns: u64) f64 {
+        return @as(f64, @floatFromInt(ns)) / std.time.ns_per_ms;
     }
 };
 
@@ -222,4 +330,128 @@ test "a collective counts bytes by element type, passes its site, and refuses an
     try c.gatherEnd(p, undefined);
     try std.testing.expectEqual(@as(usize, 40), f.bytes);
     try std.testing.expectEqual(Phase.prompt_moe, f.site.phase);
+}
+
+
+test "TF_DS_COLL_TIME: unset, empty or 0 is off; 1 is call, sync is sync; anything else is refused" {
+    try std.testing.expectEqual(@as(?Timer.Mode, null), try Timer.parseMode(null));
+    try std.testing.expectEqual(@as(?Timer.Mode, null), try Timer.parseMode(""));
+    try std.testing.expectEqual(@as(?Timer.Mode, null), try Timer.parseMode("0"));
+    try std.testing.expectEqual(@as(?Timer.Mode, .call), try Timer.parseMode("1"));
+    try std.testing.expectEqual(@as(?Timer.Mode, .sync), try Timer.parseMode("sync"));
+    try std.testing.expectError(error.BadSetting, Timer.parseMode("on"));
+    try std.testing.expectError(error.BadSetting, Timer.parseMode("2"));
+}
+
+/// A transport that records every vtable call (kind, site, sizes, peer) in order.
+const Recorder = struct {
+    const Rec = struct { kind: u8, phase: Phase, layer: u16, send: u64, recv: u64, bytes: usize, rbytes: usize = 0, peer: u32 = 0 };
+    log: [16]Rec = undefined,
+    n: usize = 0,
+    split: bool,
+    fn of(ptr: *anyopaque) *Recorder {
+        return @ptrCast(@alignCast(ptr));
+    }
+    fn gather(ptr: *anyopaque, _: gpu.Stream, site: Site, send: u64, recv: u64, bytes: usize) Error!void {
+        const r = of(ptr);
+        r.log[r.n] = .{ .kind = 'g', .phase = site.phase, .layer = site.layer, .send = send, .recv = recv, .bytes = bytes };
+        r.n += 1;
+    }
+    fn begin(ptr: *anyopaque, _: gpu.Stream, site: Site, send: u64, recv: u64, bytes: usize) Error!void {
+        const r = of(ptr);
+        r.log[r.n] = .{ .kind = 'b', .phase = site.phase, .layer = site.layer, .send = send, .recv = recv, .bytes = bytes };
+        r.n += 1;
+    }
+    fn end(ptr: *anyopaque, _: gpu.Stream) Error!void {
+        const r = of(ptr);
+        r.log[r.n] = .{ .kind = 'e', .phase = .test_only, .layer = 0, .send = 0, .recv = 0, .bytes = 0 };
+        r.n += 1;
+    }
+    fn exchange(ptr: *anyopaque, _: gpu.Stream, site: Site, send: u64, sb: usize, recv: u64, rb: usize, peer: u32) Error!void {
+        const r = of(ptr);
+        r.log[r.n] = .{ .kind = 'x', .phase = site.phase, .layer = site.layer, .send = send, .recv = recv, .bytes = sb, .rbytes = rb, .peer = peer };
+        r.n += 1;
+    }
+    fn abort(_: *anyopaque, _: Reason) void {}
+    fn close(_: *anyopaque) void {}
+    const split_vt: Coll.VTable = .{ .all_gather = gather, .exchange = exchange, .abort = abort, .close = close, .gather_begin = begin, .gather_end = end };
+    const whole_vt: Coll.VTable = .{ .all_gather = gather, .exchange = exchange, .abort = abort, .close = close };
+    fn coll(r: *Recorder) Coll {
+        return .{ .ptr = r, .vtable = if (r.split) &split_vt else &whole_vt, .rank = 0, .world = 4, .capturable = false };
+    }
+    /// The sequence the engine issues: a round gather, a pair exchange, a split gather (begin, end).
+    fn issue(c: Coll) !void {
+        try c.allGather(.at(.round_attn, 7), 0x1000, 0x2000, 96, .f32, undefined);
+        try c.exchange(.at(.two_pair, 1), 0x3000, 40, 0x4000, 32, .bf16, 2, undefined);
+        const p = try c.gatherBegin(.at(.prompt_moe, 3), 0x5000, 0x6000, 10, .f32, undefined);
+        try c.gatherEnd(p, undefined);
+    }
+};
+
+var fake_drains: u64 = 0;
+fn fakeDrain(_: gpu.Stream) Error!void {
+    fake_drains += 1;
+}
+
+test "TF_DS_COLL_TIME off: the transport sees exactly the calls it saw before, and no timer line is logged" {
+    // the calls with no timer, against the calls written straight to the vtable (the code before the timer)
+    for ([_]bool{ false, true }) |split| {
+        var a: Recorder = .{ .split = split };
+        try Recorder.issue(a.coll());
+        var b: Recorder = .{ .split = split };
+        const vt = b.coll().vtable;
+        try vt.all_gather(&b, undefined, .at(.round_attn, 7), 0x1000, 0x2000, 96 * 4);
+        try vt.exchange.?(&b, undefined, .at(.two_pair, 1), 0x3000, 80, 0x4000, 64, 2);
+        if (split) {
+            try vt.gather_begin.?(&b, undefined, .at(.prompt_moe, 3), 0x5000, 0x6000, 40);
+            try vt.gather_end.?(&b, undefined);
+        } else try vt.all_gather(&b, undefined, .at(.prompt_moe, 3), 0x5000, 0x6000, 40);
+        try std.testing.expectEqual(b.n, a.n);
+        for (a.log[0..a.n], b.log[0..b.n]) |x, y| try std.testing.expectEqual(y, x);
+        // and with the timer on (call mode) the transport still sees the same calls
+        var c: Recorder = .{ .split = split };
+        var t: Timer = .{ .mode = .call };
+        var cc = c.coll();
+        cc.timer = &t;
+        try Recorder.issue(cc);
+        try std.testing.expectEqual(b.n, c.n);
+        for (c.log[0..c.n], b.log[0..b.n]) |x, y| try std.testing.expectEqual(y, x);
+    }
+    var buf: [512]u8 = undefined;
+    try std.testing.expectEqual(@as(?[]const u8, null), Timer.line(null, &buf, 3, 0, "reply end"));
+    var r: Recorder = .{ .split = true };
+    try std.testing.expectEqual(@as(?*Timer, null), r.coll().timer);
+}
+
+test "TF_DS_COLL_TIME: sums by kind into the pass and the rounds, sync drains around each call, the line's shape" {
+    var r: Recorder = .{ .split = true };
+    var t: Timer = .{ .mode = .sync, .drain = fakeDrain };
+    var c = r.coll();
+    c.timer = &t;
+    fake_drains = 0;
+    try Recorder.issue(c); // rounds: a gather, an exchange, a split gather
+    try std.testing.expectEqual(@as(u64, 8), fake_drains); // before and after each of the four calls
+    t.in_pass = true;
+    try Recorder.issue(c);
+    try Recorder.issue(c);
+    t.in_pass = false;
+    t.round_count = 1;
+    try std.testing.expectEqual([3]u64{ 1, 1, 1 }, t.rounds.calls);
+    try std.testing.expectEqual([3]u64{ 2, 2, 2 }, t.pass.calls);
+    try std.testing.expectEqual(@as(u64, 0), t.begun_ns);
+    // the line's exact shape, from fixed sums
+    t.pass = .{ .calls = .{ 120, 0, 61 }, .ns = .{ 2_500_000, 0, 1_250_400 } };
+    t.rounds = .{ .calls = .{ 0, 4890, 0 }, .ns = .{ 0, 145_000_000, 0 } };
+    t.round_count = 30;
+    var buf: [512]u8 = undefined;
+    const s = Timer.line(&t, &buf, 41, 0, "reply end").?;
+    try std.testing.expectEqualStrings("lanes: step 41 rank 0 coll time (reply end, sync): pass 3.750 ms (all_gather 120 2.500, exchange 0 0.000, prompt_gather 61 1.250); rounds 30 145.000 ms (all_gather 0 0.000, exchange 4890 145.000, prompt_gather 0 0.000), 4.833 ms a round", s);
+    // a line clears the sums: the next one counts from there (no round: 0 ms a round)
+    const z = Timer.line(&t, &buf, 42, 0, "pass start").?;
+    try std.testing.expectEqualStrings("lanes: step 42 rank 0 coll time (pass start, sync): pass 0.000 ms (all_gather 0 0.000, exchange 0 0.000, prompt_gather 0 0.000); rounds 0 0.000 ms (all_gather 0 0.000, exchange 0 0.000, prompt_gather 0 0.000), 0.000 ms a round", z);
+    // call mode never drains
+    fake_drains = 0;
+    t.mode = .call;
+    try Recorder.issue(c);
+    try std.testing.expectEqual(@as(u64, 0), fake_drains);
 }
