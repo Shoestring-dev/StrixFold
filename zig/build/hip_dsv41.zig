@@ -330,6 +330,20 @@ pub fn targets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
     }) });
     host_test.dependOn(&rank1.step);
     host_test.dependOn(noNvidia(b, rank1));
+    // the server's way out after hipBLAS was opened and closed (no device): its status and its C stdio line arrive
+    const exit_check = b.addExecutable(.{ .name = "tf-dsv41-exit-check", .root_module = b.createModule(.{
+        .root_source_file = b.path("zig/tests/dsv41_hip/exit_check.zig"),
+        .target = host,
+        .optimize = .Debug,
+        .link_libc = true,
+        .imports = &.{.{ .name = "leave", .module = b.createModule(.{ .root_source_file = b.path("zig/src/server/leave.zig"), .target = host, .link_libc = true }) }},
+    }) });
+    const exit_run = b.addRunArtifact(exit_check);
+    exit_run.addArg(b.pathJoin(&.{ o.rocm, "lib", "libhipblas.so.3" }));
+    exit_run.setEnvironmentVariable("LD_LIBRARY_PATH", b.fmt("{s}/lib:{s}/lib/llvm/lib", .{ o.rocm, o.rocm }));
+    exit_run.expectExitCode(3);
+    exit_run.expectStdOutEqual("exit-check: the library was opened and closed; leaving with 3\n");
+    host_test.dependOn(&exit_run.step);
 
     const gpu_test = b.step("dsv41-hip-gpu-test", "Build tf-dsv41-hip-smoke, tf-dsv41-hip-abi-test, tf-dsv41-hip-glue-test, the test kit and the dsv41 native kit (GPU; run under the GPU lock with tools/dsv41-hip/run_gpu_tests.sh)");
     const smoke_kernels = embedded(b, o, smoke_object, "smoke.hsaco");
