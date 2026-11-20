@@ -38,10 +38,8 @@ pub fn post(srv: *Server, conn: *Conn, a: Allocator, which: Which) void {
         discard(conn, a);
         return routes.unknown(conn, a);
     };
-    if (!key.accepts(single(conn, "Authorization"), single(conn, "x-cache-transfer-key"))) {
-        discard(conn, a);
-        return unauthorized(conn);
-    }
+    // the 401 goes out with the body unread and the connection closed, so no body can reach a next request
+    if (!key.accepts(single(conn, "Authorization"), single(conn, "x-cache-transfer-key"))) return unauthorized(conn);
     const shape = srv.engine.cacheShape() orelse {
         discard(conn, a);
         return fail(conn, a, 404, "this engine moves no prompt states");
@@ -158,7 +156,7 @@ fn unauthorized(conn: *Conn) void {
     conn.finish(body) catch {};
 }
 
-/// A refused request's body is read and dropped, so it cannot reach the next request on this connection.
+/// A refused request's body is read and dropped, so it cannot reach the next request here (never for a 401).
 fn discard(conn: *Conn, a: Allocator) void {
     _ = http_body.read(conn, a, http_body.limit) catch {};
 }
