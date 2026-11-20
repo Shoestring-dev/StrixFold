@@ -6,6 +6,7 @@ const log = @import("log.zig");
 const hub = @import("hub.zig");
 const engines = @import("engines.zig");
 const serve = @import("serve.zig");
+const leave = @import("leave.zig");
 const hf_text = @import("hf_text.zig");
 const checkpoint_cli = @import("checkpoint_cli");
 
@@ -55,12 +56,16 @@ pub fn main(init: std.process.Init) !u8 {
     };
     var problem: []const u8 = "";
     const dir = try hub.resolve(a, io, init.environ_map, args.model, &problem) orelse return fail(problem);
+    // an engine with raw_exit ends the process through leave() after the teardown below (this defer runs last)
+    var code: u8 = 0;
+    var leaving = false; // only once serve.run has returned; an earlier exit (a bad flag, a failed open) is unchanged
+    defer if (leaving) leave.leave(code);
     const text = hf_text.HfText.load(gpa, io, dir, a, &problem) catch |e| return fail(if (problem.len > 0) problem else @errorName(e));
     defer text.deinit();
     const model_type = modelType(a, io, dir);
     const opened = try engines.open(a, gpa, io, dir, model_type, args, &problem) orelse return fail(problem);
     defer opened.close(opened.ctx);
-    return serve.run(gpa, io, args, .{
+    code = serve.run(gpa, io, args, .{
         .engine = opened.engine,
         .text = text.text(),
         .served = hub.servedName(args.name, args.model, dir),
@@ -68,6 +73,8 @@ pub fn main(init: std.process.Init) !u8 {
         .environ = init.environ_map,
         .started = started,
     });
+    leaving = opened.raw_exit;
+    return code;
 }
 
 fn fail(message: []const u8) u8 {

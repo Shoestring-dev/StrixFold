@@ -396,7 +396,8 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
     const served_window: i64 = if (@hasField(@TypeOf(loaded), "context_window")) (if (loaded.context_window) |w| @intCast(w) else window) else window;
     try h.serve(io, loaded.facts, loaded.rows, .{ .lanes = streams, .context_window = @intCast(served_window), .startup = h.startup, .efforts = familyEfforts(F), .vision = vision, .structures = structures, .top_k_max = if (@hasDecl(F, "top_k_max")) F.top_k_max else 0, .needs_top_k = @hasDecl(F, "needs_top_k") and F.needs_top_k }, .{ .ctx = loaded.ctx, .text = F.explain });
     opened = true;
-    return .{ .engine = h.host.engine(), .close = Host.close, .ctx = h };
+    // raw_exit: the OpenMP runtime hipBLAS brought stays loaded after the close, and its fini faults in libc exit()
+    return .{ .engine = h.host.engine(), .close = Host.close, .ctx = h, .raw_exit = true };
 }
 
 /// A family's reasoning efforts as numbers its chat template takes (F.efforts: name and value), else none.
