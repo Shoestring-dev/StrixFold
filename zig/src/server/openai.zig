@@ -95,6 +95,12 @@ pub fn errorBody(a: Allocator, cx: *const Cx, param: ?[]const u8) Allocator.Erro
     const o = try json.newObject(a);
     try o.put(a, "message", .{ .string = cx.message });
     if (cx.kind == .other or cx.kind == .server) return .{ .object = o };
+    if (cx.kind == .queue_full) { // OpenAI's rate-limit error, which its clients retry after the Retry-After
+        try o.put(a, "type", .{ .string = "requests" });
+        try o.put(a, "param", .null);
+        try o.put(a, "code", .{ .string = "rate_limit_exceeded" });
+        return .{ .object = o };
+    }
     try o.put(a, "type", .{ .string = "invalid_request_error" });
     if (cx.kind == .context_length) {
         try o.put(a, "param", if (param) |p| .{ .string = p } else .null);
@@ -339,7 +345,8 @@ const Run = struct {
         const a = r.a;
         const kind_ok = cx.kind != .other and cx.kind != .server;
         const body = (if (kind_ok) errorBody(a, cx, field) else errorOther(a, cx.message)) catch return;
-        r.out.vt.reply(r.out.ctx, if (kind_ok) 400 else 500, wrapError(a, body) catch return);
+        const code: u16 = if (!kind_ok) 500 else if (cx.kind == .queue_full) 429 else 400; // 429: the queue cap's refusal
+        r.out.vt.reply(r.out.ctx, code, wrapError(a, body) catch return);
     }
 
     /// A reply that ended before anything was sent: a refusal's 400, a failure's 500, nothing when the client left.
