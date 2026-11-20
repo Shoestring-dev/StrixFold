@@ -10,6 +10,7 @@ const anthropic = @import("anthropic.zig");
 const tokens = @import("tokens.zig");
 const decisions = @import("decisions.zig");
 const status = @import("status_routes.zig");
+const queue_cap = @import("queue_cap.zig");
 const Server = @import("server.zig").Server;
 const Conn = http_conn.Conn;
 const Allocator = std.mem.Allocator;
@@ -54,13 +55,40 @@ fn discardBody(conn: *Conn, a: Allocator) void {
 fn post(srv: *Server, conn: *Conn, a: Allocator) void {
     const route = auth.routePath(conn.path);
     if (std.mem.endsWith(u8, route, "/decisions")) return decisions.post(srv, conn, a);
-    if (anthropic.route(conn.path)) return anthropic.post(srv, conn, a);
-    if (responses.route(route)) |rid| if (rid.len == 0) return responses.post(srv, conn, a);
+    if (anthropic.route(conn.path)) return if (std.mem.endsWith(u8, route, "/count_tokens")) anthropic.post(srv, conn, a) else gated(srv, conn, a, .messages);
+    if (responses.route(route)) |rid| if (rid.len == 0) return gated(srv, conn, a, .responses);
     for (tokens.paths) |r| if (std.mem.eql(u8, route, r)) return tokens.post(srv, conn, a, std.mem.endsWith(u8, route, "/detokenize"));
     const is_chat = std.mem.endsWith(u8, route, "/chat/completions");
     if (!is_chat and !std.mem.endsWith(u8, route, "/completions")) {
         discardBody(conn, a);
         return unknown(conn, a);
     }
-    openai.post(srv, conn, a, is_chat);
+    gated(srv, conn, a, if (is_chat) .chat else .completions);
+}
+
+const Generation = enum { chat, completions, messages, responses };
+
+/// The longest body a refused request has read and dropped before its 429.
+const drain_max = 1 << 20;
+
+/// A generating route behind the queue cap: its place is held to the end of its reply; when full, 429 at the head.
+fn gated(srv: *Server, conn: *Conn, a: Allocator, which: Generation) void {
+    var ticket: queue_cap.Ticket = undefined;
+    if (!srv.queue.enter(&ticket, conn.arena)) {
+        const length = if (conn.header("Content-Length")) |v| std.fmt.parseInt(u64, std.mem.trim(u8, v, " "), 10) catch null else null;
+        // drained, not closed: a close over unread bytes resets the connection and the client may lose the 429
+        if (length != null and length.? <= drain_max and conn.header("Transfer-Encoding") == null) discardBody(conn, a) else conn.close = true;
+        const message = json.quote(a, queue_cap.fullMessage(a, &srv.queue) catch return, .{}) catch return;
+        const body = if (which == .messages)
+            std.fmt.allocPrint(a, "{{\"type\": \"error\", \"error\": {{\"type\": \"rate_limit_error\", \"message\": {s}}}}}", .{message}) catch return
+        else
+            std.fmt.allocPrint(a, "{{\"error\": {{\"message\": {s}, \"type\": \"requests\", \"param\": null, \"code\": \"rate_limit_exceeded\"}}}}", .{message}) catch return;
+        return conn.sendJson(429, body);
+    }
+    defer ticket.leave();
+    switch (which) {
+        .chat, .completions => openai.post(srv, conn, a, which == .chat),
+        .messages => anthropic.post(srv, conn, a),
+        .responses => responses.post(srv, conn, a),
+    }
 }

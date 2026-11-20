@@ -50,6 +50,10 @@ pub const Conn = struct {
     hook: ?StatusHook = null,
     broken: bool = false,
     quiet_log: bool = false,
+    /// The Retry-After a 429 sends, in seconds (the queue cap's); 0: none.
+    retry_after_s: u32 = 0,
+    /// The arena the server reads each request into, for the queue cap's byte count; null: not counted.
+    arena: ?*std.heap.ArenaAllocator = null,
 
     pub fn init(gpa: Allocator, fd: posix.socket_t, peer: []const u8) !Conn {
         return .{ .fd = fd, .peer = peer, .gpa = gpa, .buf = try gpa.alloc(u8, 2 * max_line + 8192) };
@@ -291,6 +295,7 @@ pub const Conn = struct {
         if (std.mem.eql(u8, c.version, "HTTP/0.9")) return;
         var date: [40]u8 = undefined;
         try c.out.print(c.gpa, "HTTP/1.1 {d} {s}\r\nServer: TensorFold\r\nDate: {s}\r\n", .{ code, phrase orelse reason(code), httpDate(&date) });
+        if (code == 429 and c.retry_after_s > 0) try c.out.print(c.gpa, "Retry-After: {d}\r\n", .{c.retry_after_s});
     }
 
     pub fn addHeader(c: *Conn, name: []const u8, value: []const u8) Allocator.Error!void {
@@ -393,6 +398,7 @@ pub fn reason(code: u16) []const u8 {
         401 => "Unauthorized",
         404 => "Not Found",
         414 => "URI Too Long",
+        429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",

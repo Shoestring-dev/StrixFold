@@ -19,6 +19,7 @@ const tool_specs = @import("tool_specs.zig");
 const chunk_plan = @import("chunk_plan.zig");
 const messages_mod = @import("messages.zig");
 const log = @import("log.zig");
+const queue_cap = @import("queue_cap.zig");
 const Value = json.Value;
 const Cx = errors.Cx;
 const Allocator = std.mem.Allocator;
@@ -59,6 +60,8 @@ pub const Config = struct {
     /// Directory of the stored note, or null when notes are not stored.
     compact_memory: ?[]const u8 = null,
     timeouts: http_conn.Timeouts = .{},
+    /// The queue cap (queue_cap.zig); null: TF_QUEUE_MAX, TF_QUEUE_MIB and TF_QUEUE_RETRY_S, else their defaults.
+    queue: ?queue_cap.Limits = null,
 };
 
 pub const Server = struct {
@@ -89,6 +92,8 @@ pub const Server = struct {
     /// The idle keepalive on the engine's queue, armed by --keep-warm; null when off or not Metal.
     keepalive: ?*api.keepalive.Keepalive = null,
     preparing: std.atomic.Value(i64) = .init(0),
+    /// Generation requests in flight and the bytes they hold, refused past the cap with 429 (queue_cap.zig).
+    queue: queue_cap.Gate = .{},
     arena: std.heap.ArenaAllocator,
 
     /// Reads what the template and tokenizer decide once: late system role, think markers, efforts, the forced close.
@@ -101,6 +106,12 @@ pub const Server = struct {
                 break :blk null;
             };
         };
+        srv.queue = .{ .limits = config.queue orelse queue_cap.Limits.fromEnv(), .lanes = @max(1, srv.info.lanes) };
+        if (config.queue == null) {
+            const l = srv.queue.limits;
+            if (l.waiting) |w| log.line("queue cap: {d} requests may wait past the {d} lanes", .{ w, srv.queue.lanes }) else log.line("queue cap: no count cap", .{});
+            if (l.bytes) |b| log.line("queue cap: {d} MiB held by the requests in flight when one more would wait; Retry-After {d} s", .{ b >> 20, l.retry_s }) else log.line("queue cap: no byte cap", .{});
+        }
         const a = srv.arena.allocator();
         srv.eos = try a.dupe(u32, text.eosIds());
         if (text.tokenId(reply_text.channel_markers.close) != null) srv.markers = reply_text.channel_markers;
@@ -308,6 +319,8 @@ pub const Server = struct {
         if (conn.auth_enabled) conn.hook = .{ .ctx = srv, .call = countReply };
         var arena: std.heap.ArenaAllocator = .init(srv.gpa);
         defer arena.deinit();
+        conn.arena = &arena;
+        conn.retry_after_s = srv.queue.limits.retry_s;
         while (true) {
             // an idle kept-alive connection keeps its read buffer and up to idle_keep, not its last prompt
             _ = arena.reset(.{ .retain_with_limit = idle_keep });
