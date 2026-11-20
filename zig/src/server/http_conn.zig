@@ -55,6 +55,11 @@ pub const Conn = struct {
         return .{ .fd = fd, .peer = peer, .gpa = gpa, .buf = try gpa.alloc(u8, 2 * max_line + 8192) };
     }
 
+    /// Between requests: a reply buffer grown past ``keep`` bytes goes back (an idle connection holds little else).
+    pub fn trimIdle(c: *Conn, keep: usize) void {
+        if (c.out.capacity > keep) c.out.clearAndFree(c.gpa);
+    }
+
     pub fn deinit(c: *Conn) void {
         c.gpa.free(c.buf);
         c.out.deinit(c.gpa);

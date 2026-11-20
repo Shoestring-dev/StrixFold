@@ -309,7 +309,9 @@ pub const Server = struct {
         var arena: std.heap.ArenaAllocator = .init(srv.gpa);
         defer arena.deinit();
         while (true) {
-            _ = arena.reset(.retain_capacity);
+            // an idle kept-alive connection keeps its read buffer and up to idle_keep, not its last prompt
+            _ = arena.reset(.{ .retain_with_limit = idle_keep });
+            conn.trimIdle(idle_keep);
             const a = arena.allocator();
             const outcome = conn.readRequest(a, true) catch break;
             switch (outcome) {
@@ -323,6 +325,9 @@ pub const Server = struct {
             if (conn.close or conn.broken) break;
         }
     }
+
+    /// Bytes of its request arena and of its reply buffer a connection keeps while it waits for its next request.
+    const idle_keep = 64 << 10;
 
     /// A handler that sent no whole reply (out of memory) closes the connection, so no keep-alive client waits on it.
     pub fn dispatch(srv: *Server, conn: *http_conn.Conn, a: Allocator) void {
