@@ -167,7 +167,13 @@ pub const Open = struct {
 };
 
 /// An opened engine; ``close`` stops its thread and frees its backend.
-pub const Opened = struct { engine: Engine, close: *const fn (ctx: *anyopaque) void, ctx: *anyopaque };
+pub const Opened = struct {
+    engine: Engine,
+    close: *const fn (ctx: *anyopaque) void,
+    ctx: *anyopaque,
+    /// After ``close`` the process must not run libc exit(): the server leaves through _exit (server/leave.zig).
+    raw_exit: bool = false,
+};
 
 pub const Memory = struct { active: u64 = 0, cache: u64 = 0, peak: u64 = 0 };
 
