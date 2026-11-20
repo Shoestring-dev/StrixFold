@@ -21,7 +21,17 @@ pub const Link = struct {
         const busy_us: c_int = 50;
         _ = c.setsockopt(fd, c.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&one), @sizeOf(c_int));
         _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.BUSY_POLL, std.mem.asBytes(&busy_us), @sizeOf(c_int));
+        // a peer gone without a FIN (power, hung kernel, cable) ends the idle read with PeerDown in 60 s, not never
+        _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.KEEPALIVE, std.mem.asBytes(&one), @sizeOf(c_int));
+        _ = c.setsockopt(fd, c.IPPROTO.TCP, std.posix.TCP.KEEPIDLE, std.mem.asBytes(&keep_idle_s), @sizeOf(c_int));
+        _ = c.setsockopt(fd, c.IPPROTO.TCP, std.posix.TCP.KEEPINTVL, std.mem.asBytes(&keep_interval_s), @sizeOf(c_int));
+        _ = c.setsockopt(fd, c.IPPROTO.TCP, std.posix.TCP.KEEPCNT, std.mem.asBytes(&keep_probes), @sizeOf(c_int));
     }
+
+    /// An idle link's lost-peer deadline: a probe after keep_idle_s, then keep_probes probes keep_interval_s apart.
+    pub const keep_idle_s: c_int = 30;
+    pub const keep_interval_s: c_int = 10;
+    pub const keep_probes: c_int = 3;
 
     fn addr(ip: [4]u8, port: u16) c.sockaddr.in {
         return .{ .port = std.mem.nativeToBig(u16, port), .addr = @bitCast(ip) };
@@ -186,6 +196,38 @@ test "frames cross a loopback link in order" {
     try std.testing.expectEqualStrings("polled", try l.recvSpin(&buf, 1000 * std.time.ns_per_ms));
     try std.testing.expectEqualStrings("late", try l.recvSpin(&buf, 0));
     t.join();
+}
+
+test "both ends of a link probe an idle peer: a lost one ends the wait within 60 s" {
+    const port: u16 = 30000 + @as(u16, @intCast(@mod(std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds, 400)));
+    const Peer = struct {
+        var fd: c.fd_t = -1;
+        fn run(p: u16) void {
+            const l = Link.connect(std.testing.io, .{ 127, 0, 0, 1 }, p, 10) catch return;
+            fd = l.fd;
+        }
+    };
+    const t = try std.Thread.spawn(.{}, Peer.run, .{port});
+    var l = try Link.listen(.{ 127, 0, 0, 1 }, port, 10);
+    defer l.close();
+    t.join();
+    try std.testing.expect(Peer.fd >= 0);
+    defer _ = c.close(Peer.fd);
+    for ([_]c.fd_t{ l.fd, Peer.fd }) |fd| {
+        const Opt = struct { level: i32, name: u32, want: c_int };
+        for ([_]Opt{
+            .{ .level = c.SOL.SOCKET, .name = c.SO.KEEPALIVE, .want = 1 },
+            .{ .level = c.IPPROTO.TCP, .name = std.posix.TCP.KEEPIDLE, .want = Link.keep_idle_s },
+            .{ .level = c.IPPROTO.TCP, .name = std.posix.TCP.KEEPINTVL, .want = Link.keep_interval_s },
+            .{ .level = c.IPPROTO.TCP, .name = std.posix.TCP.KEEPCNT, .want = Link.keep_probes },
+        }) |o| {
+            var got: c_int = -1;
+            var len: c.socklen_t = @sizeOf(c_int);
+            try std.testing.expectEqual(@as(c_int, 0), c.getsockopt(fd, o.level, o.name, std.mem.asBytes(&got), &len));
+            try std.testing.expectEqual(o.want, got);
+        }
+    }
+    try std.testing.expect(Link.keep_idle_s + Link.keep_probes * Link.keep_interval_s <= 60);
 }
 
 test "rank 0 stops waiting for a follower that never connects" {
