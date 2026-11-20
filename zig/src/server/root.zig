@@ -49,4 +49,5 @@ test {
     _ = @import("decisions.zig");
     _ = @import("decisions_test.zig");
     _ = @import("server_recovery_test.zig");
+    _ = @import("scratch_render_test.zig");
 }
