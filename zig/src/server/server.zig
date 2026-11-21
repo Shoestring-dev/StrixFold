@@ -20,6 +20,7 @@ const chunk_plan = @import("chunk_plan.zig");
 const messages_mod = @import("messages.zig");
 const log = @import("log.zig");
 const queue_cap = @import("queue_cap.zig");
+const image_memo = @import("image_memo.zig");
 const Value = json.Value;
 const Cx = errors.Cx;
 const Allocator = std.mem.Allocator;
@@ -96,6 +97,8 @@ pub const Server = struct {
     preparing: std.atomic.Value(i64) = .init(0),
     /// Generation requests in flight and the bytes they hold, refused past the cap with 429 (queue_cap.zig).
     queue: queue_cap.Gate = .{},
+    /// Config.image_memo > 0 and an encoder that prepares from source (Vision.source_prepare); null: the payload path.
+    memo: ?*image_memo.Memo = null,
     arena: std.heap.ArenaAllocator,
 
     /// Reads what the template and tokenizer decide once: late system role, think markers, efforts, the forced close.
@@ -115,6 +118,14 @@ pub const Server = struct {
             if (l.bytes) |b| log.line("queue cap: {d} MiB held by the requests in flight when one more would wait; Retry-After {d} s", .{ b >> 20, l.retry_s }) else log.line("queue cap: no byte cap", .{});
         }
         const a = srv.arena.allocator();
+        if (config.image_memo > 0) if (srv.info.vision) |v| {
+            if (v.source_prepare) {
+                const memo = try a.create(image_memo.Memo);
+                memo.* = .init(gpa, config.image_memo);
+                srv.memo = memo;
+                log.line("image memo: up to {d} pictures' preparations remembered by their source bytes", .{config.image_memo});
+            } else log.line("image memo off: this engine's encoder does not prepare pictures from their source", .{});
+        };
         srv.eos = try a.dupe(u32, text.eosIds());
         if (text.tokenId(reply_text.channel_markers.close) != null) srv.markers = reply_text.channel_markers;
         if (srv.info.efforts.len > 0) {
@@ -142,6 +153,7 @@ pub const Server = struct {
 
     pub fn deinit(srv: *Server) void {
         if (srv.keepalive) |k| k.stop(); // before the engine's queue goes away
+        if (srv.memo) |m| m.deinit();
         srv.arena.deinit();
         srv.store.deinit();
         srv.gpa.destroy(srv);
