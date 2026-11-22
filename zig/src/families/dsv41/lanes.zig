@@ -3825,3 +3825,15 @@ test "draftKey: a sampled stream that asks for it, at its temperature times the 
     try std.testing.expectEqual(draft.SampleKey{ .seed = 5, .position = 1234, .inv_t = 2.5 }, k);
     try std.testing.expectEqual(@as(f32, 1.0), draftKey(.{ .seed = 9, .temperature = 1.0, .draft_temperature = 1.0 }, 7).inv_t);
 }
+
+fn failedPairThenServe() noreturn {
+    ended(error.Timeout);
+    while (true) { // the HTTP threads go on as before: only the exit thread may end the process
+        const ts: std.c.timespec = .{ .sec = 60, .nsec = 0 };
+        _ = std.c.nanosleep(&ts, null);
+    }
+}
+
+test "a failed pair ends rank 0 with status 3 even when an atexit handler never returns" {
+    try std.testing.expectEqual(@as(?u8, pair_exit.code), try pair_exit.statusUnderHeldFini(failedPairThenServe, 5000));
+}

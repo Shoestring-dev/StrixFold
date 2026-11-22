@@ -19,11 +19,13 @@ fn holdForever() callconv(.c) void {
 }
 
 /// `leave`'s exit status in a forked child whose atexit handler never returns; null: alive after `wait_ms` (killed).
-fn statusUnderHeldFini(comptime leave: fn () noreturn, wait_ms: u32) !?u8 {
+pub fn statusUnderHeldFini(comptime leave: fn () noreturn, wait_ms: u32) !?u8 {
     const pid = std.c.fork();
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) {
         if (atexit(holdForever) != 0) std.c._exit(100);
+        const quiet = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
+        if (quiet >= 0) _ = std.c.dup2(quiet, 2); // the child's log lines stay out of the test runner's output
         leave();
     }
     var waited: u32 = 0;
