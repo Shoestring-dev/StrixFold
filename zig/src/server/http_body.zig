@@ -5,7 +5,7 @@ const errors = @import("errors.zig");
 const Conn = @import("http_conn.zig").Conn;
 const Allocator = std.mem.Allocator;
 
-pub const limit = 32 * 1024 * 1024;
+pub const limit = 256 * 1024 * 1024; // room for a request of many full-size base64 pictures
 const metadata_limit = 65536;
 
 /// A body, or the refusal a RequestError carries (the connection then closes).

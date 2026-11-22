@@ -43,6 +43,7 @@ test {
     _ = @import("sse_keepalive_test.zig");
     _ = @import("late_system_test.zig");
     _ = @import("shared_messages_test.zig");
+    _ = @import("http_body_test.zig");
     _ = @import("effort_values_test.zig");
     _ = @import("telemetry_reply_test.zig");
     _ = @import("compact_test.zig");
