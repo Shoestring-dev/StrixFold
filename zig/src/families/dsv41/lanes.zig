@@ -21,6 +21,7 @@ const draft = @import("draft.zig");
 const sampling = @import("sampling.zig");
 const link = @import("link.zig");
 const disk_mod = @import("disk.zig");
+const cache_move = @import("cache_move.zig");
 const pd = @import("core").prompt_disk;
 const gpu = @import("gpu");
 /// The vision tower's type (vision.zig: CUDA's vit.zig, HIP's vit_hip.zig); an empty type in a build without one.
@@ -100,8 +101,8 @@ fn topTwo(row: []const f32) [2]struct { u32, f32 } {
 /// DIR/<name>.f32 and a JSON beside it (DIR/<name>.json: rows, columns, vocab_size, sha256, the top two ids and logits).
 pub var logits_dump: ?[]const u8 = null;
 
-/// Rank 0's primitives to rank 1 (kind u8, step u64, fields little-endian); 10-15 are sf-disk's, sent with " disk=1".
-pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9, disk_sync = 10, disk_save = 11, disk_drop = 12, disk_load = 13, disk_outcome = 14, disk_rows = 15, fill_pause = 16, fill_end = 17 };
+/// Rank 0's primitives to rank 1 (kind u8, step u64, fields little-endian); 10-15 are sf-disk's, 18-19 an import's.
+pub const Kind = enum(u8) { fill_begin = 1, fill_chunk = 2, verify = 3, pass = 4, snap_save = 5, snap_restore = 6, snap_drop = 7, fill_images = 8, done = 9, disk_sync = 10, disk_save = 11, disk_drop = 12, disk_load = 13, disk_outcome = 14, disk_rows = 15, fill_pause = 16, fill_end = 17, cache_put = 18, cache_outcome = 19 };
 
 /// A frame being written.
 pub const Wire = struct {
@@ -654,14 +655,14 @@ pub const Lanes = struct {
 
     /// The frame being built goes to rank 1 (after `begin` and the fields), or to ranks 1-3 on the four-node split; the
     /// step counts it only once it went out, so a frame that failed to build or send leaves rank 0 at rank 1's step.
-    fn flush(self: *Lanes) !void {
+    pub fn flush(self: *Lanes) !void {
         if (self.peer == null) return;
         for (self.m.followers()) |l| try l.?.send(self.wire.buf.items);
         self.step += 1;
     }
 
     /// A frame of `kind` at the next step (its fields follow, then flush); false with no follower.
-    fn begin(self: *Lanes, kind: Kind) !bool {
+    pub fn begin(self: *Lanes, kind: Kind) !bool {
         if (self.peer == null) return false;
         try self.wire.begin(self.gpa, kind, self.step);
         return true;
@@ -1209,7 +1210,7 @@ pub const Lanes = struct {
     /// pool makes the next prompt evict a kept state (the 5 x 500K check with the duplicate admitted fourth). Kept
     /// states hold their stream's whole extent back while a placement still fits so (placeSoft): its tail stays free
     /// for the resume in place, which then stales nothing.
-    fn placeKept(self: *Lanes, live: []const [2]usize, size: usize, source: ?*Snap) !usize {
+    pub fn placeKept(self: *Lanes, live: []const [2]usize, size: usize, source: ?*Snap) !usize {
         const gpa = self.gpa;
         var kept: std.ArrayList([3]usize) = .empty;
         defer kept.deinit(gpa);
@@ -1262,7 +1263,7 @@ pub const Lanes = struct {
     }
 
     /// Kept states with rows in [lo, hi) go stale (a stream writes there), `except` aside.
-    fn staleOver(self: *Lanes, lo: usize, hi: usize, except: ?*Snap) void {
+    pub fn staleOver(self: *Lanes, lo: usize, hi: usize, except: ?*Snap) void {
         for (self.snaps.items) |sn| if (sn != except and sn.base < hi and lo < sn.base + sn.at) {
             sn.stale = true;
         };
@@ -1517,7 +1518,7 @@ pub const Lanes = struct {
     }
 
     /// snap_drop to rank 1 (whole or not at all, as every frame: flush counts the step).
-    fn sendDrop(self: *Lanes, id: u64) !void {
+    pub fn sendDrop(self: *Lanes, id: u64) !void {
         if (!try self.begin(.snap_drop)) return;
         try self.wire.int(self.gpa, u64, id);
         try self.flush();
@@ -1625,6 +1626,7 @@ fn inPass(kind: Kind) bool {
     return switch (kind) {
         .fill_chunk, .fill_images, .snap_save, .snap_restore, .snap_drop, .fill_pause => true,
         .disk_save, .disk_drop, .disk_load, .disk_outcome, .disk_rows => true, // (sf-disk's, sent within a pass)
+        .cache_put, .cache_outcome => true, // (an import between rounds, beside a paused pass)
         .fill_begin, .verify, .pass, .done, .disk_sync, .fill_end => false,
     };
 }
@@ -1885,7 +1887,7 @@ fn broken(err: anyerror) bool {
 /// Rank 0's side of U47: when a primitive fails because the pair is broken, the request in flight still gets its error,
 /// then the process exits (status 3) half a second later, freeing its GPU memory and telling the launcher; rank 1 sees
 /// the control link close (or its own collective fail) and exits too. Called from the backend's errdefers.
-fn ended(err: anyerror) void {
+pub fn ended(err: anyerror) void {
     if (!broken(err) or exiting.swap(true, .acq_rel)) return;
     std.log.err("dsv41: the TP pair failed ({s}); rank 0 exits", .{@errorName(err)});
     const t = std.Thread.spawn(.{}, exitSoon, .{}) catch std.process.exit(3);
@@ -1931,6 +1933,8 @@ fn followHeld(gpa: std.mem.Allocator, m: *Model, held: *Held(gpu.DeviceBuffer, d
     const kept = &held.kept;
     var sync_keys: std.ArrayList(pd.Key) = .empty;
     defer sync_keys.deinit(gpa);
+    var taker: cache_move.Taker = .{}; // an imported state's pieces (POST /cache/import), this rank's part
+    defer taker.deinit(gpa);
     var paused = false; // the prompt pass paused (fill_pause) for the other streams' rounds
     while (true) {
         // the next primitive, polled for 20 ms before the read blocks (rank 0 sends it a fraction of a millisecond
@@ -1954,6 +1958,8 @@ fn followHeld(gpa: std.mem.Allocator, m: *Model, held: *Held(gpu.DeviceBuffer, d
             15 => .disk_rows,
             16 => .fill_pause,
             17 => .fill_end,
+            18 => .cache_put,
+            19 => .cache_outcome,
             else => return error.BadFrame,
         };
         if (try r.int(u64) != step) return error.OutOfStep;
@@ -2164,6 +2170,8 @@ fn followHeld(gpa: std.mem.Allocator, m: *Model, held: *Held(gpu.DeviceBuffer, d
                 paused = true;
             },
             .fill_end => try r.end(), // (the pass ended above)
+            .cache_put => try taker.piece(gpa, m, &r, peer),
+            .cache_outcome => try taker.outcome(gpa, &r, kept),
             .done => {
                 try r.end();
                 return;
@@ -2425,8 +2433,15 @@ test "a frame is read to its end or refused; a repeated warning is logged first 
 
 test "the cache's frames between a pass's chunks leave rank 1's pass as it is; the others end it" {
     for ([_]Kind{ .fill_chunk, .fill_images, .snap_save, .snap_restore, .snap_drop, .fill_pause }) |k| try std.testing.expect(inPass(k));
-    for ([_]Kind{ .disk_save, .disk_drop, .disk_load, .disk_outcome, .disk_rows }) |k| try std.testing.expect(inPass(k));
+    for ([_]Kind{ .disk_save, .disk_drop, .disk_load, .disk_outcome, .disk_rows, .cache_put, .cache_outcome }) |k| try std.testing.expect(inPass(k));
     for ([_]Kind{ .fill_begin, .verify, .pass, .done, .disk_sync, .fill_end }) |k| try std.testing.expect(!inPass(k));
+}
+
+test "an import's frames: kinds 18 and 19 after the pause's, the stock and sf-disk kinds unchanged" {
+    try std.testing.expectEqual(@as(u8, 17), @backingInt(Kind.fill_end));
+    try std.testing.expectEqual(@as(u8, 18), @backingInt(Kind.cache_put));
+    try std.testing.expectEqual(@as(u8, 19), @backingInt(Kind.cache_outcome));
+    for ([_]Kind{ .cache_put, .cache_outcome }) |k| for ([_]bool{ false, true }) |p| try std.testing.expect(!endsPass(k, p));
 }
 
 test "a paused pass on rank 1 outlives the other streams' rounds; anything else outside a pass ends it" {

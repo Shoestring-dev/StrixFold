@@ -20,9 +20,9 @@ const misplaced_body =
     \\{"model":"m","max_tokens":4,"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"ok"},{"role":"system","content":"be brief"}]}
 ;
 
-/// Drops a system message after the first, so the late-system probe comes back as user.
-const DropLate = struct {
-    fn text(t: *@This()) model_text.Text {
+/// Drops a system message after the first, so the late-system probe comes back as user (cache_routes_test uses it too).
+pub const DropLate = struct {
+    pub fn text(t: *@This()) model_text.Text {
         return .{ .ctx = t, .vtable = &.{ .encode = encode, .decode = decode, .token_id = tokenId, .token_string = tokenString, .vocab_size = vocabSize, .eos_ids = eosIds, .render = render, .template_source = templateSource } };
     }
 

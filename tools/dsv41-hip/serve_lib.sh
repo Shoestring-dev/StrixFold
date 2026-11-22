@@ -271,6 +271,8 @@ serve_cmd() {
     [ "$DRAFTS" = 1 ] || SERVE_CMD+=(--no-drafts)
     # (empty: the flag is left out, the server's default)
     [ -z "$MAX_IMAGES" ] || SERVE_CMD+=(--vision-max-images "$MAX_IMAGES")
+    # (empty or unset: the /cache routes are absent; the key file is read once, at the server's start)
+    [ -z "${CACHE_TRANSFER_KEY:-}" ] || SERVE_CMD+=(--cache-transfer-key "$CACHE_TRANSFER_KEY")
   else
     serve_lanes_cmd
     [ -n "${LOGITS_SHA:-}" ] && SERVE_CMD+=(--logits-sha "$LOGITS_SHA")
