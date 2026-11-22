@@ -66,6 +66,7 @@ test {
     _ = @import("prompt.zig");
     _ = @import("lanes.zig");
     _ = @import("stop_marker.zig");
+    _ = @import("pair_exit.zig");
     _ = @import("disk.zig");
     _ = @import("disk_test.zig");
     _ = @import("fill_spans.zig");

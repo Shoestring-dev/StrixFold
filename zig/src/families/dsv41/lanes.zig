@@ -22,6 +22,7 @@ const draft = @import("draft.zig");
 const sampling = @import("sampling.zig");
 const link = @import("link.zig");
 const disk_mod = @import("disk.zig");
+const pair_exit = @import("pair_exit.zig");
 const pd = @import("core").prompt_disk;
 const image_key = lanes.image_key;
 const fill_spans = @import("fill_spans.zig");
@@ -2353,7 +2354,7 @@ fn broken(err: anyerror) bool {
 fn ended(err: anyerror) void {
     if (!broken(err) or exiting.swap(true, .acq_rel)) return;
     std.log.err("dsv41: the TP pair failed ({s}); rank 0 exits", .{@errorName(err)});
-    const t = std.Thread.spawn(.{}, exitSoon, .{}) catch std.process.exit(3);
+    const t = std.Thread.spawn(.{}, exitSoon, .{}) catch pair_exit.now();
     t.detach();
 }
 
@@ -2362,7 +2363,7 @@ var exiting: std.atomic.Value(bool) = .init(false);
 fn exitSoon() void {
     const ts: std.c.timespec = .{ .sec = 0, .nsec = 500 * std.time.ns_per_ms };
     _ = std.c.nanosleep(&ts, null);
-    std.process.exit(3);
+    pair_exit.now();
 }
 
 /// A follower's verify times with Model.prof (a profile on ranks 1-3: rounds, issue and wall ns summed).

@@ -53,6 +53,7 @@ pub const sampling = @import("sampling.zig");
 pub const model = @import("model.zig");
 pub const lanes = @import("lanes.zig");
 pub const stop_marker = @import("stop_marker.zig");
+pub const pair_exit = @import("pair_exit.zig");
 pub const coll = @import("coll.zig");
 pub const fan = @import("fan.zig");
 pub const tcp_wire = @import("tcp_wire.zig");
@@ -110,6 +111,7 @@ test {
     refAll(model);
     refAll(lanes);
     refAll(stop_marker);
+    refAll(pair_exit);
     refAll(coll);
     refAll(fan);
     refAll(blas);
