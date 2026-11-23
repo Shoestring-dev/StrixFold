@@ -326,6 +326,12 @@ pub const Chunk = struct {
     }
 
     pub fn init(e: *const Engine, a: *Arena, cap: usize, tokens: usize) !Chunk {
+        return initSharing(e, a, cap, tokens, null);
+    }
+
+    /// init; with `scratch` (the other half of a split chunk, the same rows) its indexer scratch serves this one too.
+    pub fn initSharing(e: *const Engine, a: *Arena, cap: usize, tokens: usize, scratch: ?*const Chunk) !Chunk {
+        if (scratch) |o| if (o.cap != cap) return error.ScratchCapDiffers;
         const c = e.c;
         const d = c.hidden;
         const hc = c.hc;
@@ -424,9 +430,10 @@ pub const Chunk = struct {
             ch.vis_blk = try a.take(cap * 8);
             // the indexer's row blocks keep rows * n_comp under 2^24 (model.py rb), so their keys under key_elems
             const ke: usize = @min(cap * ch.max_comp, key_elems); // (typed: @min with a comptime bound narrows)
-            ch.keys = try a.take(ke * 8);
-            ch.score = try a.take(ke * 4);
-            ch.tmax = try a.take((ke / tri_index.tile + cap) * 8);
+            // (one stream: a half's indexer reads its keys and scores before the next half's indexer writes them)
+            ch.keys = if (scratch) |o| o.keys else try a.take(ke * 8);
+            ch.score = if (scratch) |o| o.score else try a.take(ke * 4);
+            ch.tmax = if (scratch) |o| o.tmax else try a.take((ke / tri_index.tile + cap) * 8);
             ch.cidx = try a.take(cap * c.index_topk * 8);
             ch.ktop = try a.take(cap * c.index_topk * 8);
             ch.cidxp = try a.take(cap * (c.index_topk + 16) * 8);
@@ -447,7 +454,7 @@ pub const Chunk = struct {
                 try e.s.synchronize(); // (the host copy is freed next)
             }
             if (tri_index.prunes(ch.max_comp, c.index_topk)) {
-                ch.pbufs = .{ .tpos = try a.take(pruned_rows * c.index_topk * 8), .cand = try a.take(pruned_rows * c.index_topk * tri_index.tile * 8), .every = ch.every };
+                ch.pbufs = if (scratch) |o| .{ .tpos = o.pbufs.tpos, .cand = o.pbufs.cand, .every = ch.every } else .{ .tpos = try a.take(pruned_rows * c.index_topk * 8), .cand = try a.take(pruned_rows * c.index_topk * tri_index.tile * 8), .every = ch.every };
             }
         }
         for (e.w.layers) |lay| {
