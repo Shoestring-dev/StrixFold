@@ -214,7 +214,7 @@ test "after a long prompt pass, a stream near its max_tokens ends before the nex
     try std.testing.expect(seq.a_done.? < seq.b_first.?);
 }
 
-/// Each request's tokens and end, and each prompt pass's round count at every one of its chunks (in order of passes).
+/// Each request's tokens and end, and at every chunk of each prompt pass the tokens request 1 has (in order of passes).
 const Slices = struct {
     mutex: std.Io.Mutex = .init,
     target: *lanes.fake.Fake,
@@ -230,7 +230,7 @@ const Slices = struct {
         defer q.mutex.unlock(std.testing.io);
         const k: usize = if (q.streams[0] == null or q.streams[0] == s) 0 else 1;
         q.streams[k] = s;
-        if (q.chunks[k] < 8) q.rounds[k][q.chunks[k]] = q.target.rounds;
+        if (q.chunks[k] < 8) q.rounds[k][q.chunks[k]] = q.tokens[1].items.len; // (a draftless round calls no verify)
         q.chunks[k] += 1;
     }
     fn event(ctx: *anyopaque, id: Id, e: *const Event) void {
