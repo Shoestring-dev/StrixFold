@@ -380,7 +380,8 @@ fn spawnServer(a: std.mem.Allocator, io: Io, binary: []const u8, fixtures: []con
     var rbuf: [4096]u8 = undefined;
     var reader = child.stdout.?.reader(io, &rbuf);
     while (true) {
-        const line = reader.interface.takeDelimiterExclusive('\n') catch return error.NoPortLine;
+        // takeDelimiter steps past the newline (takeDelimiterExclusive does not: a second line read again as "")
+        const line = (reader.interface.takeDelimiter('\n') catch return error.NoPortLine) orelse return error.NoPortLine;
         if (std.mem.startsWith(u8, line, "PORT ")) {
             const port = try std.fmt.parseInt(u16, std.mem.trim(u8, line[5..], " \r"), 10);
             return .{ .child = child, .port = port, .log_path = log_path, .key_path = key_path };
