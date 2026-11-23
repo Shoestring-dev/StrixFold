@@ -504,7 +504,7 @@ pub const Chunk = struct {
             }
         }
         ch.ws = .{ .xh = try a.take(cap * max_xk * 2), .w = try a.take(max_kn * 2), .h = try a.take(128 * 128 * 2) };
-        ch.blas_ws = try a.take(blas.Blas.workspace_bytes);
+        ch.blas_ws = if (scratch) |o| o.blas_ws else try a.take(blas.Blas.workspace_bytes); // (Model opens BLAS on the first)
         // grouped linears: every layer's counters (int32 [8 N / 128], zeros, left zero by each launch), the largest
         // group's rotated rows and partials at 128 rows
         var max_gk: usize = 0;
