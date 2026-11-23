@@ -163,13 +163,9 @@ test "a request forgotten while its picture encodes is freed by the thread, unwo
     const b = [_]Image{.{ .at = 0, .tokens = 1, .bytes = &.{ 1, 2 } }};
     try e.submit(&a, 0, woken.wake());
     try e.submit(&b, 0, woken.wake());
-    while (true) { // the thread has taken a
-        e.lock();
-        const running = e.jobs.items[0].state == .running;
-        e.unlock();
-        if (running) break;
-        sleepMs(1);
-    }
+    // a's picture is in the tower (the fake holds it there): a job marked running still checks for a forget before
+    // its first picture, and a forget there cancels it unencoded
+    while (fake.entered.load(.acquire) == 0) sleepMs(1);
     try std.testing.expect(!e.ready(&a) and !e.ready(&b));
     e.forget(&a);
     e.forget(&b);

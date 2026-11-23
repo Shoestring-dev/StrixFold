@@ -3168,6 +3168,7 @@ fn passModel(m: *Model, cfg: anytype, w: anytype, rings: []u64, ring_view: []u64
     m.img_buf = .{ .d = undefined, .ptr = 0x7000_0000, .len = 1 << 20 }; // (no device: setSpans only reads ptr)
     m.ch.spans = &.{};
     m.ch.img_rows = 0;
+    m.coll.timer = null; // (prefillSlice reads TF_DS_COLL_TIME's timer)
 }
 
 /// Whether the model stands on `slot` and the extent at `base`, its fill ids `ids`, no read-ahead planned.
