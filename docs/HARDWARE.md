@@ -15,7 +15,7 @@ for on each.
 | Framework Desktop + Minisforum MS-S1 Max | Measured by a user, in a container on Fedora | [FEDORA-PODMAN.md](FEDORA-PODMAN.md) | Cable the Framework to the MS-S1 Max's rear USB4 v2 ports |
 | 2 × Framework Desktop | Measured by a user, with 1M-token context | [FRAMEWORK-DESKTOP.md](FRAMEWORK-DESKTOP.md) | BIOS 3.06 and `amd_iommu=pt` before the link comes up; rear USB-C ports only; a load-wedge workaround on the stock Ubuntu kernel (guide §9) |
 | 2 × Minisforum MS-S1 Max | Reported working, with 1M-token context | | |
-| 2 × GMKtec EVO-X2 | Reported working | | One USB4 port on the front and one on the back: cable front to front and back to back |
+| 2 × GMKtec EVO-X2 | Measured by a user, with the links at Gen 2 | | One USB4 port on the front and one on the back: cable front to front and back to back |
 | 2 × Beelink GTR9 Pro | Reported working, two USB4 cables | | |
 | Minisforum MS-S1 Max + GMKtec EVO-X2 | Reported working | | 40 Gb/s through the MS-S1 Max's USB4 v2 ports, 20 Gb/s through its other USB4 ports |
 
