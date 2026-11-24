@@ -450,13 +450,13 @@ pub const LaneHost = struct {
         return false;
     }
 
-    /// Between two slices of the paused pass, the first queued prompt of at most fill_cut_in tokens reads whole.
+    /// Between two slices of the paused pass, the first queued prompt with at most fill_cut_in tokens to read, whole.
     fn cutIn(h: *LaneHost) void {
         const most = h.info_.fill_cut_in;
         if (most == 0) return;
         h.lock();
         const at = for (h.queued.items, 0..) |job, i| {
-            if (job.request.images.len == 0 and job.request.prompt.len <= most) break i;
+            if (job.request.images.len == 0 and h.cutInSize(job.request) <= most) break i;
         } else h.queued.items.len;
         if (at == h.queued.items.len or h.admitted.items.len >= h.info_.lanes or h.waitsForRoom()) return h.unlock();
         const job = h.queued.orderedRemove(at);
@@ -467,6 +467,19 @@ pub const LaneHost = struct {
         h.unlock();
         h.filling.?.reported(); // the paused pass restored at its start: this lookup or its keeps may evict that entry
         _ = h.admit(job, std.math.maxInt(u64));
+    }
+
+    /// A text cut-in's read: the prompt past the longest state it would resume (peeked: no family call).
+    fn cutInSize(h: *LaneHost, r: *const Request) usize {
+        const store = h.cache orelse return r.prompt.len;
+        h.cache_lock.lockUncancelable(h.io);
+        defer h.cache_lock.unlock(h.io);
+        return readSize(store, r);
+    }
+
+    /// The prompt past the longest state `store` keeps that the request would resume.
+    pub fn readSize(store: *const pc.Store, r: *const Request) usize {
+        return r.prompt.len - store.peekSealed(r.prompt, &.{}, r.chunks);
     }
 
     /// An admitted job's stream and its prompt pass for budget_ns (a whole pass for a cut-in).
