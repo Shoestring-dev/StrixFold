@@ -46,6 +46,7 @@ test {
     _ = @import("shared_messages_test.zig");
     _ = @import("effort_values_test.zig");
     _ = @import("telemetry_reply_test.zig");
+    _ = @import("health_failed_test.zig");
     _ = @import("compact_test.zig");
     _ = @import("decisions.zig");
     _ = @import("decisions_test.zig");
