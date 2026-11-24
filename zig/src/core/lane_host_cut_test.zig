@@ -437,3 +437,25 @@ test "a cut-in whose keep evicts the state the paused pass resumed from leaves t
     try cutInEvictsSource(false);
     try cutInEvictsSource(true);
 }
+
+test "a cut-in's size is the prompt past the longest state it would resume" {
+    const gpa = std.testing.allocator;
+    const Kept = struct { // a family whose kept states are nothing but their entries
+        var held: u8 = 0;
+        fn bytes(_: *anyopaque, at: u32) u64 {
+            return 64 + 4 * @as(u64, at);
+        }
+        fn save(_: *anyopaque, _: ?*anyopaque, _: u32) anyerror!pc.Saved {
+            return @ptrCast(&held);
+        }
+        fn restore(_: *anyopaque, _: ?*anyopaque, _: pc.Saved) anyerror!void {}
+        fn drop(_: *anyopaque, _: pc.Saved) void {}
+    };
+    const vt: pc.Snapshots = .{ .ptr = &Kept.held, .vtable = &.{ .bytes = Kept.bytes, .save = Kept.save, .restore = Kept.restore, .drop = Kept.drop } };
+    var store = pc.Store.init(gpa, vt, .{ .min_gap = 4, .min_prompt = 0 }, 1 << 20);
+    defer store.deinit();
+    try std.testing.expect(store.keep(&long, 8, null, &.{}));
+    const next = long ++ [_]u32{ 4, 4, 4 }; // the kept conversation's next turn: 15 tokens, 8 of them kept
+    try std.testing.expectEqual(@as(usize, next.len - 8), LaneHost.readSize(&store, &.{ .prompt = &next, .max_tokens = 1 }));
+    try std.testing.expectEqual(@as(usize, short.len), LaneHost.readSize(&store, &.{ .prompt = &short, .max_tokens = 1 }));
+}
