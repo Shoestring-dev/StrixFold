@@ -11,6 +11,9 @@ const Allocator = std.mem.Allocator;
 
 /// With keys on, health names nothing about the model.
 pub fn health(srv: *Server, conn: *Conn, a: Allocator) !void {
+    var status: api.Status = .{};
+    srv.engine.status(&status, &.{});
+    if (status.failed) return conn.sendJson(503, "{\"status\": \"failed\"}"); // (the process is leaving)
     if (srv.keys) |k| if (k.enabled()) return conn.sendJson(200, "{\"status\": \"ok\"}");
     const o = try json.newObject(a);
     try o.put(a, "status", .{ .string = "ok" });
@@ -21,8 +24,6 @@ pub fn health(srv: *Server, conn: *Conn, a: Allocator) !void {
     try o.put(a, "max_batch_size", try json.intValue(a, srv.info.lanes));
     // the prompt plus reply tokens one request may use: a client sizes its windows from it, not a copied number
     if (srv.info.context_window > 0) try o.put(a, "context_length", try json.intValue(a, srv.info.context_window));
-    var status: api.Status = .{};
-    srv.engine.status(&status, &.{});
     try o.put(a, "warming", .{ .bool = status.warming });
     const memory = try json.newObject(a);
     if (srv.engine.memory(std.mem.indexOf(u8, conn.path, "reset_peak=1") != null)) |mem| {

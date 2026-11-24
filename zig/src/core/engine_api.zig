@@ -202,6 +202,8 @@ pub const Status = struct {
     /// Requests that gave a lane up to a later one; null when the engine does not count them.
     preemptions: ?u64 = null,
     warming: bool = false,
+    /// The engine failed for good and its process is leaving (a TP pair that broke): /health answers 503.
+    failed: bool = false,
     /// Live streams written to the caller's buffer: tokens each holds.
     streams: usize = 0,
     /// Generated tokens held by live streams, excluding their prompts.

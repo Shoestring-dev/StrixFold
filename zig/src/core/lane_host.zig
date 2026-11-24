@@ -43,6 +43,7 @@ pub const LaneHost = struct {
     cache_images: bool = false, // the backend keeps prompts with images, keyed by each picture (false: they skip the cache)
     memory: ?api.MemorySource = null, // the backend's memory counts; null: Engine.memory reports none
     explain: ?api.Explain = null, // the backend's words for a request it refuses; null: the error's name
+    failed: ?*const fn () bool = null, // whether the family failed for good (its process leaving); null: never
     // the request at the queue's front waits for room in the backend's pool (its prompt pass refused ContextFull while
     // other streams ran): admitted again once fewer than this many streams are active, or at full_retry (a backend
     // may refuse for a while to keep its kept states, waiting for one stream, and then place it)
@@ -298,6 +299,7 @@ pub const LaneHost = struct {
             .preemptions = 0,
             .streams = n,
             .generation_tokens = h.live_generated,
+            .failed = if (h.failed) |f| f() else false,
         };
     }
 
@@ -893,3 +895,4 @@ test { _ = @import("lane_host_end_test.zig"); }
 test { _ = @import("lane_host_hint_test.zig"); }
 test { _ = @import("lane_host_cut_test.zig"); }
 test { _ = @import("lane_host_gate_test.zig"); }
+test { _ = @import("lane_host_failed_test.zig"); }

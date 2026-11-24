@@ -312,6 +312,11 @@ fn deinitFn(ptr: *anyopaque) void {
     st.gpa.destroy(st);
 }
 
+/// Whether the TP pair failed and this rank 0 is leaving (the server's /health answers 503 meanwhile).
+pub fn failed() bool {
+    return lanes_mod.pairFailed();
+}
+
 /// A request or a start this engine refuses, in words; null: none of its own.
 pub fn explain(_: ?*anyopaque, err: anyerror) ?[]const u8 {
     return switch (err) {

@@ -184,7 +184,7 @@ const Host = struct {
     }
 
     /// The round loop and the lane host over the family's backend, its thread started.
-    fn serve(h: *Host, io: std.Io, facts: lanes.Model, rows: u32, info: api.Info, explain: ?api.Explain) !void {
+    fn serve(h: *Host, io: std.Io, facts: lanes.Model, rows: u32, info: api.Info, explain: ?api.Explain, failed: ?*const fn () bool) !void {
         h.cfg = try lanes.Config.init(h.gpa, facts, rows, rows - 1);
         errdefer h.cfg.deinit(h.gpa);
         // TF_LANES_FROZEN_TIMING=1: widths from the tables only, never from measured round times (repeatable runs)
@@ -205,6 +205,7 @@ const Host = struct {
         h.host = api.LaneHost.init(h.gpa, io, &h.core, served);
         h.host.memory = if (h.gpu != null) .{ .read = readMemory } else null;
         h.host.explain = explain;
+        h.host.failed = failed;
         if (h.cache) |*store| h.host.cache = store;
         h.host.cache_images = h.cache != null and h.cache_images;
         if (h.lone != null) h.host.lone = .{ .ctx = h, .run = loneRun, .sampled = true };
@@ -403,7 +404,7 @@ fn openWith(comptime F: type, a: Allocator, gpa: Allocator, io: std.Io, o: api.O
     const structures = if (@hasField(@TypeOf(loaded), "structures")) loaded.structures else false;
     // the window the family can actually hold (a request's extent is rounded up past its tokens), else --context
     const served_window: i64 = if (@hasField(@TypeOf(loaded), "context_window")) (if (loaded.context_window) |w| @intCast(w) else window) else window;
-    try h.serve(io, loaded.facts, loaded.rows, .{ .lanes = streams, .context_window = @intCast(served_window), .startup = h.startup, .efforts = familyEfforts(F), .vision = vision, .structures = structures, .top_k_max = if (@hasDecl(F, "top_k_max")) F.top_k_max else 0, .needs_top_k = @hasDecl(F, "needs_top_k") and F.needs_top_k }, .{ .ctx = loaded.ctx, .text = F.explain });
+    try h.serve(io, loaded.facts, loaded.rows, .{ .lanes = streams, .context_window = @intCast(served_window), .startup = h.startup, .efforts = familyEfforts(F), .vision = vision, .structures = structures, .top_k_max = if (@hasDecl(F, "top_k_max")) F.top_k_max else 0, .needs_top_k = @hasDecl(F, "needs_top_k") and F.needs_top_k }, .{ .ctx = loaded.ctx, .text = F.explain }, if (@hasDecl(F, "failed")) &F.failed else null);
     opened = true;
     // raw_exit: the OpenMP runtime hipBLAS brought stays loaded after the close, and its fini faults in libc exit()
     return .{ .engine = h.host.engine(), .close = Host.close, .ctx = h, .raw_exit = true };

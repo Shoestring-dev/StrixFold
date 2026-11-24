@@ -2360,6 +2360,11 @@ fn ended(err: anyerror) void {
 
 var exiting: std.atomic.Value(bool) = .init(false);
 
+/// Whether ended() saw the pair fail: rank 0 exits within half a second.
+pub fn pairFailed() bool {
+    return exiting.load(.acquire);
+}
+
 fn exitSoon() void {
     const ts: std.c.timespec = .{ .sec = 0, .nsec = 500 * std.time.ns_per_ms };
     _ = std.c.nanosleep(&ts, null);
