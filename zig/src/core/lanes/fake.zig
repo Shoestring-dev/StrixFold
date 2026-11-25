@@ -48,6 +48,8 @@ pub const Fake = struct {
     refuse_sampled: bool = false, // prefill refuses a sampled stream with error.SamplingRefused
     refuse_full: usize = 0, // prefill refuses this many times with error.ContextFull while another lane is live
     refuse_hook: ?*const fn (ctx: *anyopaque, s: *Stream) void = null, // called as it refuses one for room
+    lose_kept: usize = 0, // prefill refuses this many passes that would resume a kept state, while another lane is live,
+    // with error.KeptStateLost (a cut-in whose state went at its placement; a family refuses it before any frame)
     slice_chunks: usize = 0, // prefill_slice reads this many chunks a call short of a whole pass (0: all)
     fail_round: std.atomic.Value(bool) = .init(false), // set (any thread): the next round fails with error.RoundFailed
 
@@ -122,6 +124,10 @@ pub const Fake = struct {
                 x.refuse_full -= 1;
                 if (x.refuse_hook) |hook| hook(x.prefill_hook_ctx.?, s);
                 return error.ContextFull;
+            }
+            if (x.lose_kept > 0 and s.reuse.saved != null and x.lanes.count() > 0 and !x.lanes.contains(s)) {
+                x.lose_kept -= 1;
+                return error.KeptStateLost;
             }
             const got = try x.lanes.getOrPut(x.gpa, s);
             if (got.found_existing) freeLane(x.gpa, got.value_ptr);

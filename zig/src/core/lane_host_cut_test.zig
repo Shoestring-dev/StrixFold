@@ -460,21 +460,41 @@ test "a cut-in's size is the prompt past the longest state it would resume" {
     try std.testing.expectEqual(@as(usize, short.len), LaneHost.readSize(&store, &.{ .prompt = &short, .max_tokens = 1 }));
 }
 
+/// The turn's kept state: there, none, stale before the turn (its rows gone), or lost at the cut-in's placement.
+const Turn = enum { kept, none, stale, lost };
+
+/// A family whose kept states stop resuming once `stale` is set (findSealed then drops them).
+const StaleSnaps = struct {
+    var stale = std.atomic.Value(bool).init(false);
+    fn resumes(_: *anyopaque, _: pc.Saved, _: u32) bool {
+        return !stale.load(.acquire);
+    }
+    fn live(_: *anyopaque, _: pc.Saved) bool {
+        return !stale.load(.acquire);
+    }
+};
+
 /// A paused pass (a stream decoding beside it); a 15-token turn arrives in its second chunk, its first 8 kept or not.
-fn warmTurnCutsIn(kept: bool) !void {
+fn warmTurnCutsIn(turn: Turn) !void {
+    const kept = turn != .none;
     const gpa = std.testing.allocator;
     const warm1 = [_]u32{ 13, 12, 11, 10, 13, 12, 11, 10, 2, 3 }; // the conversation's first turn: keeps its state at 8
     const warm2 = warm1[0..8].* ++ [_]u32{ 4, 5, 6, 7, 8, 9, 1 }; // its next turn: 15 tokens, 7 to read when kept
     const Ctx = struct {
         q: Seen,
         turn: Request,
+        mode: Turn,
         long_seen: std.atomic.Value(usize) = .init(0),
         long_at_turn: std.atomic.Value(usize) = .init(0),
         fn hook(ptr: *anyopaque, s: *lanes.stream.Stream, chunk: usize) void {
             const c: *@This() = @ptrCast(@alignCast(ptr));
             if (s.prompt_len == long.len) {
                 _ = c.long_seen.fetchAdd(1, .acq_rel);
-                if (chunk == 1) c.q.e.submit(3, &c.turn, .{ .ctx = &c.q, .event = Seen.event }) catch unreachable;
+                if (chunk == 1) {
+                    if (c.mode == .stale) StaleSnaps.stale.store(true, .release);
+                    if (c.mode == .lost) c.q.target.lose_kept = 1;
+                    c.q.e.submit(3, &c.turn, .{ .ctx = &c.q, .event = Seen.event }) catch unreachable;
+                }
             } else if (s.prompt_len == warm2.len and chunk == 0) c.long_at_turn.store(c.long_seen.load(.acquire), .release);
         }
     };
@@ -482,14 +502,15 @@ fn warmTurnCutsIn(kept: bool) !void {
     defer cfg.deinit(gpa);
     var target: lanes.fake.Fake = .{ .gpa = gpa, .prefill_chunks = 4, .slice_chunks = 1 };
     defer target.deinit();
-    var ctx: Ctx = .{ .q = .{ .target = &target }, .turn = .{ .prompt = &warm2, .max_tokens = 4 } };
+    var ctx: Ctx = .{ .q = .{ .target = &target }, .turn = .{ .prompt = &warm2, .max_tokens = 4 }, .mode = turn };
+    StaleSnaps.stale.store(false, .release);
     defer for (&ctx.q.tokens) |*t| t.deinit(gpa);
     target.prefill_hook = Ctx.hook;
     target.prefill_hook_ctx = &ctx;
     var clock: lanes.fake.FixedClock = .{};
     var core = lanes.Engine.init(gpa, &cfg, target.backend(), clock.clock());
     defer core.deinit();
-    var store = pc.Store.init(gpa, .{ .ptr = &target, .vtable = &.{ .bytes = Snaps.bytes, .save = Snaps.save, .restore = Snaps.restore, .drop = Snaps.drop } }, .{ .min_gap = 4, .min_prompt = 0 }, 1 << 20);
+    var store = pc.Store.init(gpa, .{ .ptr = &target, .vtable = &.{ .bytes = Snaps.bytes, .save = Snaps.save, .restore = Snaps.restore, .drop = Snaps.drop, .resumes = StaleSnaps.resumes, .live = StaleSnaps.live } }, .{ .min_gap = 4, .min_prompt = 0 }, 1 << 20);
     defer store.deinit();
     var host = LaneHost.init(gpa, std.testing.io, &core, .{ .lanes = 3, .fill_slice_ns = std.time.ns_per_s, .fill_cut_in = 8 });
     host.cache = &store;
@@ -509,15 +530,32 @@ fn warmTurnCutsIn(kept: bool) !void {
     try std.testing.expectEqual(@as(?Reason, Reason.length), q.waitDone(2));
     try std.testing.expectEqualSlices(u32, &fakeReply(&warm2, 4), q.tokens[3].items);
     try std.testing.expectEqualSlices(u32, &fakeReply(&long, 6), q.tokens[2].items);
-    if (kept) {
-        try std.testing.expectEqual(@as(?u32, 8), q.cached[3]); // resumed, and read between the paused pass's slices
-        try std.testing.expectEqual(@as(usize, 2), ctx.long_at_turn.load(.acquire));
-    } else try std.testing.expectEqual(@as(usize, 4), ctx.long_at_turn.load(.acquire)); // 15 to read: it waited
+    switch (turn) {
+        .kept => {
+            try std.testing.expectEqual(@as(?u32, 8), q.cached[3]); // resumed, and read between the paused pass's slices
+            try std.testing.expectEqual(@as(usize, 2), ctx.long_at_turn.load(.acquire));
+        },
+        .none => try std.testing.expectEqual(@as(usize, 4), ctx.long_at_turn.load(.acquire)), // 15 to read: it waited
+        .stale => { // it waited, the paused pass read on in slices, and it read from 0 (its state left the store)
+            try std.testing.expectEqual(@as(usize, 4), ctx.long_at_turn.load(.acquire));
+            try std.testing.expectEqual(@as(?u32, 0), q.cached[3]);
+        },
+        .lost => { // refused at its placement, it waited for the pass and then resumed its state
+            try std.testing.expectEqual(@as(usize, 4), ctx.long_at_turn.load(.acquire));
+            try std.testing.expectEqual(@as(?u32, 8), q.cached[3]);
+            try std.testing.expectEqual(@as(usize, 0), target.lose_kept);
+        },
+    }
     q.e.cancel(1);
     try std.testing.expectEqual(@as(?Reason, Reason.cancelled), q.waitDone(1));
 }
 
 test "a turn whose long start is kept cuts in on the tokens it reads; with nothing kept it waits for the paused pass" {
-    try warmTurnCutsIn(true);
-    try warmTurnCutsIn(false);
+    try warmTurnCutsIn(.kept);
+    try warmTurnCutsIn(.none);
+}
+
+test "a turn whose kept state went stale, or is lost at its placement, waits for the paused pass, which reads on" {
+    try warmTurnCutsIn(.stale);
+    try warmTurnCutsIn(.lost);
 }

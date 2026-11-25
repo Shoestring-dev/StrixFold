@@ -976,6 +976,8 @@ pub const Lanes = struct {
             const sn: *Snap = @ptrCast(@alignCast(p));
             // (a prompt with images and no cache key from the host: it runs whole and keeps nothing)
             const refusing: ?Refusal = if (!keyed) .images else self.refusal(sn, len);
+            // a cut-in reads what the host counted, or waits for the paused pass (sf-disk's): no frame sent yet
+            if (refusing != null and self.held != null) return error.KeptStateLost;
             if (refusing) |r| {
                 noteRefusal(sn, len, r, if (self.disk != null) "it runs from 0 or from a state on disk" else "it runs from 0");
                 s.reuse_failed = true;
@@ -999,6 +1001,7 @@ pub const Lanes = struct {
         };
         const base = placed.base;
         const moved = placed.moved;
+        if (kept != null and placed.kept == null and cut) return error.KeptStateLost; // (as above: before any frame)
         if (kept != null and placed.kept == null) { // the kept state went stale: the prompt runs from 0
             s.reuse_failed = true;
             why = placed.why;
