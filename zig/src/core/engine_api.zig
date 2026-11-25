@@ -133,7 +133,7 @@ pub const Info = struct {
     prefill_step: u32 = 0,
     /// A prompt pass reads this long between rounds while other streams decode (0: a whole pass at once).
     fill_slice_ns: u64 = 0,
-    /// Between a paused pass's slices a queued prompt with at most this many tokens to read, no images, reads whole.
+    /// A prompt with at most this many tokens to read, no images, reads whole between a paused pass's slices (0: none).
     fill_cut_in: u32 = 0,
     /// While streams decode, an off-thread tower (Encode.hold/slice/release) runs this long between rounds (0: free).
     tower_slice_ns: u64 = 0,
