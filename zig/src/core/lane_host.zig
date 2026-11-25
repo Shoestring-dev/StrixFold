@@ -55,6 +55,7 @@ pub const LaneHost = struct {
     // Python lane's fills leave decoding its share
     finish_until: ?i96 = null,
     filling: ?*Job = null, // the one request whose prompt pass paused for the other streams' rounds (and a cut-in)
+    passes: u64 = 0, // prompt passes that paused so far: a cut-in refused behind one waits until another (filling) began
     arrivals: u64 = 0, // requests submitted so far (the lock held): a job's place among its queue class
 
     const Mark = struct { at: i96, tokens: u64 };
@@ -82,6 +83,7 @@ pub const LaneHost = struct {
         kept0: u64 = 0, // the store's kept count when the job looked it up
         key: ?[]u32 = null, // a prompt with images: the ids the cache keys it by (pc.keyIds; gpa-owned)
         spans: []pc.KeySpan = &.{}, // with its key: each picture's span and whole digest (gpa-owned)
+        waits_pass: ?u64 = null, // refused as a cut-in behind that paused pass (LaneHost.passes): not one again during it
 
         /// The ids the cache finds and keeps this request's states by: the prompt's, or with images its key.
         fn ids(job: *const Job) []const u32 {
@@ -454,19 +456,30 @@ pub const LaneHost = struct {
     fn cutIn(h: *LaneHost) void {
         const most = h.info_.fill_cut_in;
         if (most == 0) return;
-        h.lock();
-        const at = for (h.queued.items, 0..) |job, i| {
-            if (job.request.images.len == 0 and h.cutInSize(job.request) <= most) break i;
-        } else h.queued.items.len;
-        if (at == h.queued.items.len or h.admitted.items.len >= h.info_.lanes or h.waitsForRoom()) return h.unlock();
-        const job = h.queued.orderedRemove(at);
-        h.admitted.append(h.gpa, job) catch {
+        while (true) {
+            h.lock();
+            const at = for (h.queued.items, 0..) |job, i| {
+                if (job.waits_pass == h.passes) continue;
+                if (job.request.images.len == 0 and h.cutInSize(job.request) <= most) break i;
+            } else h.queued.items.len;
+            if (at == h.queued.items.len or h.admitted.items.len >= h.info_.lanes or h.waitsForRoom()) return h.unlock();
+            const job = h.queued.items[at];
+            // the peek picked it; the state the family resumes decides (stale or refused: it reads more, so it waits)
+            if (h.cutInRead(job) > most) {
+                job.waits_pass = h.passes;
+                h.unlock();
+                continue;
+            }
+            _ = h.queued.orderedRemove(at);
+            h.admitted.append(h.gpa, job) catch {
+                h.unlock();
+                return h.finish(job, .failed, "out of memory");
+            };
             h.unlock();
-            return h.finish(job, .failed, "out of memory");
-        };
-        h.unlock();
-        h.filling.?.reported(); // the paused pass restored at its start: this lookup or its keeps may evict that entry
-        _ = h.admit(job, std.math.maxInt(u64));
+            h.filling.?.reported(); // the paused pass restored at its start: this lookup or its keeps may evict that entry
+            _ = h.admit(job, std.math.maxInt(u64));
+            return;
+        }
     }
 
     /// A text cut-in's read: the prompt past the longest state it would resume (peeked: no family call).
@@ -475,6 +488,16 @@ pub const LaneHost = struct {
         h.cache_lock.lockUncancelable(h.io);
         defer h.cache_lock.unlock(h.io);
         return readSize(store, r);
+    }
+
+    /// The same past the state the family resumes (findSealed: a stale one leaves the store), on the engine thread.
+    fn cutInRead(h: *LaneHost, job: *const Job) usize {
+        const r = job.request;
+        const store = h.cache orelse return r.prompt.len;
+        h.cache_lock.lockUncancelable(h.io);
+        defer h.cache_lock.unlock(h.io);
+        const e = store.findSealed(r.prompt, &.{}, r.chunks) orelse return r.prompt.len;
+        return r.prompt.len - e.at;
     }
 
     /// The prompt past the longest state `store` keeps that the request would resume.
@@ -527,6 +550,7 @@ pub const LaneHost = struct {
         if (!done) {
             if (cut) return h.drop(job, "a cut-in's prompt pass paused");
             h.filling = job;
+            h.passes += 1;
             if (h.encoder(r)) |x| x.forget(x.ctx, r.images); // its first slice took the rows (FILL_IMAGES)
             return false;
         }
@@ -555,6 +579,11 @@ pub const LaneHost = struct {
     fn failedPass(h: *LaneHost, job: *Job, e: anyerror) bool {
         if (e == error.Cancelled) return h.cancel(job);
         if (e == error.ContextFull and (h.core.activeCount() > 0 or h.filling != null)) return h.requeue(job);
+        // a cut-in whose kept state went at its placement (the family refused before any frame): it waits for the pass
+        if (e == error.KeptStateLost and h.filling != null and h.filling != job) {
+            job.waits_pass = h.passes;
+            return h.putBack(job);
+        }
         return h.drop(job, h.words(e));
     }
 
@@ -659,6 +688,16 @@ pub const LaneHost = struct {
     /// lane's window waits, instead of failing, or a second at most (the backend may place it by then). Returns
     /// false: nothing more is admitted now. A cut-in goes back to its place by class and arrival, not to the front.
     fn requeue(h: *LaneHost, job: *Job) bool {
+        if (h.putBack(job)) return true;
+        h.lock();
+        h.full_wait = h.core.activeCount();
+        h.full_retry = std.Io.Clock.awake.now(h.io).toNanoseconds() + full_retry_ns;
+        h.unlock();
+        return false;
+    }
+
+    /// An admitted job not begun back to the queue (front, or its place beside a paused pass); true: it ended (memory).
+    fn putBack(h: *LaneHost, job: *Job) bool {
         h.remove(job);
         h.core.discard(&job.stream);
         job.entry = null; // nothing was restored: the store keeps the entry for the next lookup
@@ -677,8 +716,6 @@ pub const LaneHost = struct {
             h.finish(job, .failed, "out of memory");
             return true;
         };
-        h.full_wait = h.core.activeCount();
-        h.full_retry = std.Io.Clock.awake.now(h.io).toNanoseconds() + full_retry_ns;
         h.unlock();
         return false;
     }
