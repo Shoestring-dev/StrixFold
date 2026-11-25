@@ -465,6 +465,7 @@ pub const LaneHost = struct {
             if (at == h.queued.items.len or h.admitted.items.len >= h.info_.lanes or h.waitsForRoom()) return h.unlock();
             const job = h.queued.items[at];
             h.unlock();
+            h.filling.?.reported(); // the paused pass restored at its start: this lookup or its keeps may evict that entry
             // the peek picked it; the state the family resumes decides (stale or refused: it reads more, so it waits)
             const read = h.cutInRead(job); // (the family asked without the host lock, as admit's lookup asks it)
             h.lock();
@@ -483,7 +484,6 @@ pub const LaneHost = struct {
                 return h.finish(job, .failed, "out of memory");
             };
             h.unlock();
-            h.filling.?.reported(); // the paused pass restored at its start: this lookup or its keeps may evict that entry
             _ = h.admit(job, std.math.maxInt(u64));
             return;
         }

@@ -1554,6 +1554,7 @@ pub const Lanes = struct {
             if (!held) return self.resumed(sn, sn.base, size, false); // only the sibling in the way: it goes stale, nothing else
         }
         if (moved and !movable) {
+            if (self.held != null) return error.KeptStateLost; // a cut-in waits for the paused pass: nothing goes stale
             // the extent leaves the pool, or the wait ran out: the source goes stale first (before 0.1: it last)
             noteStale(sn, "its prompt's extent fits neither in place nor beside it; the prompt runs from 0 or from a state on disk");
             sn.stale = true;
@@ -2969,7 +2970,7 @@ test "a cut-in whose kept state is refused, or lost at its placement, is refused
     for ([_]*Snap{ &other, &source }) |sn| try ln.snaps.append(gpa, sn);
     s.reuse.saved = @ptrCast(&source);
     try std.testing.expectError(error.KeptStateLost, ln.fillStart(&s));
-    try std.testing.expect(source.stale and !other.stale);
+    try std.testing.expect(!source.stale and !other.stale); // refused before anything went stale
     try std.testing.expectEqual(@as(usize, 0), ln.streams.count()); // nothing of it placed
 }
 
