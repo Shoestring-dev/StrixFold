@@ -462,13 +462,20 @@ pub const LaneHost = struct {
             } else h.queued.items.len;
             if (at == h.queued.items.len or h.admitted.items.len >= h.info_.lanes or h.waitsForRoom()) return h.unlock();
             const job = h.queued.items[at];
+            h.unlock();
             // the peek picked it; the state the family resumes decides (stale or refused: it reads more, so it waits)
-            if (h.cutInRead(job) > most) {
+            const read = h.cutInRead(job); // (the family asked without the host lock, as admit's lookup asks it)
+            h.lock();
+            const i = std.mem.indexOfScalar(*Job, h.queued.items, job) orelse {
+                h.unlock();
+                continue;
+            };
+            if (read > most) {
                 job.waits_pass = h.passes;
                 h.unlock();
                 continue;
             }
-            _ = h.queued.orderedRemove(at);
+            _ = h.queued.orderedRemove(i);
             h.admitted.append(h.gpa, job) catch {
                 h.unlock();
                 return h.finish(job, .failed, "out of memory");
