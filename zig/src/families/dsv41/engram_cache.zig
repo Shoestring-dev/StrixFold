@@ -1,4 +1,4 @@
-//! The prompt chunks' Engram rows kept dense (row_w + row_s bytes a row, not a 4 KiB page): 8-way sets, round robin.
+//! The prompt chunks' Engram rows kept dense (row_w + row_s bytes a row, not a 4 KiB page): 8-way sets, random ways.
 const std = @import("std");
 const engram_io = @import("engram_io.zig");
 
@@ -12,7 +12,7 @@ pub const RowCache = struct {
     slot: usize, // bytes a row: the widest table's row_w + row_s
     keys: []u64, // [sets * ways]; 0 = empty
     data: []u8, // [sets * ways * slot]
-    hand: []u8, // [sets]: the next way to replace
+    rng: u64 = 0x9e3779b97f4a7c15, // a full set's way to replace: random, so a text longer than the cache keeps a share
     // a gather's misses: their ids and places, read into miss_w / miss_s
     miss_ids: []i64,
     miss_at: []u32,
@@ -29,13 +29,11 @@ pub const RowCache = struct {
         const sets = @max(1, bytes / (slot + 8) / ways);
         const c = try gpa.create(RowCache);
         errdefer gpa.destroy(c);
-        c.* = .{ .gpa = gpa, .io = io, .sets = sets, .slot = slot, .row_w = row_w, .row_s = row_s, .keys = &.{}, .data = &.{}, .hand = &.{}, .miss_ids = &.{}, .miss_at = &.{}, .miss_w = &.{}, .miss_s = &.{} };
+        c.* = .{ .gpa = gpa, .io = io, .sets = sets, .slot = slot, .row_w = row_w, .row_s = row_s, .keys = &.{}, .data = &.{}, .miss_ids = &.{}, .miss_at = &.{}, .miss_w = &.{}, .miss_s = &.{} };
         errdefer c.free();
         c.keys = try gpa.alloc(u64, sets * ways);
         @memset(c.keys, 0);
         c.data = try gpa.alloc(u8, sets * ways * slot);
-        c.hand = try gpa.alloc(u8, sets);
-        @memset(c.hand, 0);
         c.miss_ids = try gpa.alloc(i64, cap);
         c.miss_at = try gpa.alloc(u32, cap);
         c.miss_w = try gpa.alloc(u8, cap * row_w);
@@ -46,7 +44,6 @@ pub const RowCache = struct {
     fn free(c: *RowCache) void {
         c.gpa.free(c.keys);
         c.gpa.free(c.data);
-        c.gpa.free(c.hand);
         c.gpa.free(c.miss_ids);
         c.gpa.free(c.miss_at);
         c.gpa.free(c.miss_w);
@@ -60,7 +57,7 @@ pub const RowCache = struct {
 
     /// The bytes this cache holds (its rows and keys).
     pub fn held(c: *const RowCache) usize {
-        return c.data.len + c.keys.len * 8 + c.hand.len;
+        return c.data.len + c.keys.len * 8;
     }
 
     fn key(layer: usize, id: u64) u64 {
@@ -79,10 +76,12 @@ pub const RowCache = struct {
 
     fn put(c: *RowCache, k: u64, w: []const u8, s: []const u8) void {
         const i = c.find(k) orelse blk: {
-            const set = c.setOf(k);
-            const h = c.hand[set];
-            c.hand[set] = (h + 1) % ways;
-            break :blk set * ways + h;
+            const s0 = c.setOf(k) * ways;
+            for (s0..s0 + ways) |j| if (c.keys[j] == 0) break :blk j;
+            c.rng ^= c.rng << 13;
+            c.rng ^= c.rng >> 7;
+            c.rng ^= c.rng << 17;
+            break :blk s0 + @as(usize, @intCast(c.rng % ways));
         };
         c.keys[i] = k;
         const d = c.data[i * c.slot ..][0..c.slot];
@@ -180,4 +179,47 @@ test "cached rows equal the table's reads, through misses, hits and evictions" {
     // a row id past the table fails as the pool's read does
     ids[0] = 64;
     try std.testing.expectError(error.ReadFailed, c.gather(pool, 1, tab, ids[0..1], w1[0..4], s1[0..1]));
+}
+
+test "a text cycled through more rows than the cache holds still hits (random ways, not first in first out)" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const json = "{\"layers.14.engram.embed.weight\":{\"dtype\":\"U8\",\"shape\":[64,4],\"data_offsets\":[0,256]}," ++
+        "\"layers.14.engram.embed.scale\":{\"dtype\":\"U8\",\"shape\":[64,1],\"data_offsets\":[256,320]}}";
+    var file: std.ArrayList(u8) = .empty;
+    defer file.deinit(a);
+    var len: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len, json.len, .little);
+    try file.appendSlice(a, &len);
+    try file.appendSlice(a, json);
+    for (0..320) |i| try file.append(a, @truncate(i * 5 + 1));
+    try tmp.dir.writeFile(io, .{ .sub_path = "engram.safetensors", .data = file.items });
+    const dir = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer a.free(dir);
+    var tables = try engram_io.Tables.open(a, io, dir);
+    defer tables.close();
+    const tab = tables.layers.get(14).?;
+    const pool = try engram_io.Pool.init(a, io, 2);
+    defer pool.deinit(a);
+    // one set of 8 ways; 16 rows read in order, 2 a gather, 10 times: first in first out would never hit
+    const c = try RowCache.init(a, io, ways * (4 + 1 + 8), 4, 1, 2);
+    defer c.deinit();
+    try std.testing.expectEqual(@as(usize, 1), c.sets);
+    var w: [8]u8 = undefined;
+    var sc: [2]u8 = undefined;
+    var w0: [8]u8 = undefined;
+    var s0: [2]u8 = undefined;
+    for (0..10) |_| {
+        var id: i64 = 0;
+        while (id < 16) : (id += 2) {
+            const ids = [_]i64{ id, id + 1 };
+            try c.gather(pool, 1, tab, &ids, &w, &sc);
+            try pool.gather(tab, &ids, &w0, &s0);
+            try std.testing.expectEqualSlices(u8, &w0, &w);
+            try std.testing.expectEqualSlices(u8, &s0, &sc);
+        }
+    }
+    try std.testing.expect(c.hits >= 16); // a share of the 144 reads after the first pass
 }
