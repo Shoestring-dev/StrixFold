@@ -5,9 +5,14 @@ const std = @import("std");
 pub const code: u8 = 3;
 
 extern "c" fn fflush(stream: ?*anyopaque) c_int;
+extern "c" fn alarm(seconds: c_uint) c_uint;
+
+/// Seconds the flush may take before SIGALRM's default action ends the process instead.
+pub const flush_backstop_s: c_uint = 2;
 
 /// Ends the process now with C stdio flushed, skipping exit()'s atexit handlers and library fini (they can block).
 pub fn now() noreturn {
+    _ = alarm(flush_backstop_s); // a thread holding a stdio lock cannot keep the flush, and so the process, alive
     _ = fflush(null);
     std.c._exit(code);
 }
@@ -101,4 +106,47 @@ test "a failed pair's exit flushes C stdio first, so its last log line is not lo
 test "a bare _exit drops a buffered C stdio line (what the flush is for)" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("", try pipedLine(bareExit, &buf));
+}
+
+extern "c" fn flockfile(stream: ?*anyopaque) void;
+
+fn holdStdout(locked: *std.atomic.Value(bool)) void {
+    flockfile(stdout);
+    locked.store(true, .release);
+    while (true) {
+        const ts: std.c.timespec = .{ .sec = 60, .nsec = 0 };
+        _ = std.c.nanosleep(&ts, null);
+    }
+}
+
+/// The signal that ends a forked child running `now` while another thread holds stdout's lock; null: alive (killed).
+fn signalUnderHeldStdio(wait_ms: u32) !?u32 {
+    const pid = std.c.fork();
+    if (pid < 0) return error.ForkFailed;
+    if (pid == 0) {
+        var locked = std.atomic.Value(bool).init(false);
+        _ = std.Thread.spawn(.{}, holdStdout, .{&locked}) catch std.c._exit(100);
+        while (!locked.load(.acquire)) std.Thread.yield() catch {};
+        now();
+    }
+    var waited: u32 = 0;
+    while (waited < wait_ms) : (waited += 10) {
+        var st: c_int = 0;
+        if (std.c.waitpid(pid, &st, std.c.W.NOHANG) == pid) {
+            const s: u32 = @bitCast(st);
+            if (!std.c.W.IFSIGNALED(s)) return error.ChildExited;
+            return @backingInt(std.c.W.TERMSIG(s));
+        }
+        const ts: std.c.timespec = .{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
+        _ = std.c.nanosleep(&ts, null);
+    }
+    _ = std.c.kill(pid, std.c.SIG.KILL);
+    var st: c_int = 0;
+    _ = std.c.waitpid(pid, &st, 0);
+    return null;
+}
+
+test "a failed pair's exit still ends the process when another thread holds a stdio lock through the flush" {
+    const wait_ms: u32 = (flush_backstop_s + 3) * 1000;
+    try std.testing.expectEqual(@as(?u32, @backingInt(std.c.SIG.ALRM)), try signalUnderHeldStdio(wait_ms));
 }
