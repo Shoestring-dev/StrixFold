@@ -2941,6 +2941,38 @@ test "a resume whose extent leaves the pool and cannot move: its source goes sta
     try std.testing.expectEqual(@as(u32, 4), diskLongest(&d, key.len, 128, 0));
 }
 
+test "a cut-in whose kept state is refused, or lost at its placement, is refused before any frame (KeptStateLost)" {
+    const c = model.chunk_rows;
+    const gpa = std.testing.allocator;
+    var m: Model = undefined;
+    m.pool_cap = 16 * c;
+    m.context_cap = 16 * c;
+    m.eng.round_rows = 16;
+    m.image_rows = 0;
+    m.streams = 2;
+    m.cfg.window = 128;
+    var ln: Lanes = .{ .gpa = gpa, .m = &m, .peer = null };
+    defer ln.snaps.deinit(gpa);
+    defer ln.streams.deinit(gpa);
+    ln.held = @as(Fill, undefined); // a pass set aside: this pass is a cut-in
+    const ids = try gpa.alloc(u32, 10 * c);
+    defer gpa.free(ids);
+    for (ids, 0..) |*t, i| t.* = @intCast(i % 1000);
+    // the state it was looked up with is no longer the family's: refused
+    var gone: Snap = .{ .id = 3, .at = 4 * c, .base = 6 * c, .end = 12 * c, .path = 0, .buf = undefined };
+    var s = try lanes.Stream.init(gpa, .{ .id = "turn", .prompt = ids, .max_new = 8, .reuse = .{ .saved = @ptrCast(&gone), .at = 4 * c } });
+    defer s.deinit(gpa);
+    try std.testing.expectError(error.KeptStateLost, ln.fillStart(&s));
+    // a state its extent of 11c cannot resume (in place past the pool, nor moved): lost at the placement
+    var other: Snap = .{ .id = 1, .at = 2 * c, .base = 13 * c, .end = 15 * c, .path = 5, .buf = undefined };
+    var source: Snap = .{ .id = 2, .at = 4 * c, .base = 6 * c, .end = 12 * c, .path = pathKey(ids[0 .. 4 * c], &.{}), .buf = undefined };
+    for ([_]*Snap{ &other, &source }) |sn| try ln.snaps.append(gpa, sn);
+    s.reuse.saved = @ptrCast(&source);
+    try std.testing.expectError(error.KeptStateLost, ln.fillStart(&s));
+    try std.testing.expect(source.stale and !other.stale);
+    try std.testing.expectEqual(@as(usize, 0), ln.streams.count()); // nothing of it placed
+}
+
 test "a resume whose extent a live stream holds waits for it (ContextFull), then its source goes stale and it runs as new" {
     const c = model.chunk_rows;
     const gpa = std.testing.allocator;
