@@ -36,8 +36,9 @@ machines it runs DeepSeek-V4.1-Flash at about 72% of the speed of two NVIDIA DGX
 - How each number was measured, with the raw tables: [docs/RESULTS.md](docs/RESULTS.md).
 - Numbers from other people's boxes: [docs/COMMUNITY-RESULTS.md](docs/COMMUNITY-RESULTS.md). Add yours.
 
-Setting up with an AI coding tool? Point it at [docs/AI-SETUP.md](docs/AI-SETUP.md). **New (November 2026):** tested on made-up
-boxes and on our own pair of Bosgame M5s, not yet on a fresh pair. Tell us where it gets stuck.
+Setting up with an AI coding tool? Read [docs/AI-SETUP.md](docs/AI-SETUP.md) yourself first: it says what changes on your boxes and
+has the lines to give the tool. **New (November 2026):** tested on made-up boxes and on our own pair of Bosgame M5s, not yet on a
+fresh pair. Tell us where it gets stuck.
 
 New boxes? [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) goes step by step from two AMD Ryzen AI Halo boxes
 or two Bosgame M5s to a first answer and a benchmark. Owners also run it on Framework Desktops, Minisforum MS-S1 Maxes,

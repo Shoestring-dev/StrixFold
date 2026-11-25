@@ -118,14 +118,21 @@ still close to the published pairs'.
 
 ## 3. The container
 
+**A key for node0**, on node1, used for nothing else (the scripts use it with nobody there to type a passphrase):
+
+```bash
+[ -f ~/.ssh/strixfold ] || ssh-keygen -t ed25519 -N '' -C strixfold -f ~/.ssh/strixfold
+ssh-copy-id -i ~/.ssh/strixfold.pub -o PreferredAuthentications=keyboard-interactive,password 10.40.0.1   # USER@10.40.0.1 if the names differ
+```
+
 **Build** the image on node1 and copy it to node0, so both boxes run the same bytes:
 
 ```bash
 cd TensorFold    # your checkout
 packaging/podman/strixfold-ct.sh build
-podman save localhost/strixfold-rocm:latest | ssh 10.40.0.1 podman load
+podman save localhost/strixfold-rocm:latest | ssh -o IdentitiesOnly=yes -i ~/.ssh/strixfold 10.40.0.1 podman load
 podman image inspect --format '{{.Id}}' localhost/strixfold-rocm:latest
-ssh 10.40.0.1 "podman image inspect --format '{{.Id}}' localhost/strixfold-rocm:latest"   # the same
+ssh -o IdentitiesOnly=yes -i ~/.ssh/strixfold 10.40.0.1 "podman image inspect --format '{{.Id}}' localhost/strixfold-rocm:latest"   # the same
 ```
 
 The [Containerfile](../packaging/podman/Containerfile) pins AMD's ROCm image and uv by digest and Python by version.
@@ -165,15 +172,19 @@ cp packaging/podman/strixfold-sshd.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now strixfold-sshd
 ```
 
-It accepts the keys in node0's `~/.ssh/authorized_keys`, so the key you copied in GETTING-STARTED step 3 works. On
+It accepts the keys in node0's `~/.ssh/authorized_keys`, so the key you copied above works. On
 node1, point the name `node0` at that port:
 
 ```bash
 cat >> ~/.ssh/config <<'EOF'
+
 Host node0
     HostName 10.40.0.1
     Port 2222
+    IdentityFile ~/.ssh/strixfold
+    IdentitiesOnly yes
 EOF
+chmod 600 ~/.ssh/config
 packaging/podman/strixfold-ct.sh shell   # then, inside: ssh node0 hostname
 ```
 

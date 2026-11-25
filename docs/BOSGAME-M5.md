@@ -132,12 +132,14 @@ openssl pkcs7 -inform DER -in sig.p7 -print_certs -out certs.pem
 csplit -s -z -f cert- certs.pem '/-----BEGIN CERTIFICATE-----/' '{*}'
 for c in cert-*; do openssl x509 -in "$c" -noout -subject 2>/dev/null | grep -q "CA 2026" \
   && openssl x509 -in "$c" -outform DER -out rex-ca.der; done
-openssl x509 -inform DER -in rex-ca.der -noout -subject -fingerprint -sha1
+openssl x509 -inform DER -in rex-ca.der -noout -subject -fingerprint -sha256
+echo "301f7c933d86c0d0dd684c2824f589c89bb366e359870798ba3665b361ee36b0  rex-ca.der" | sha256sum -c
 ```
 
 It must print `subject=CN=Collabora Rex secure boot - CA 2026` and
-`sha1 Fingerprint=BC:B9:A9:01:15:AA:84:DE:F1:51:AB:0C:1A:97:84:DC:AA:11:DF:0D`, the same certificate the Ryzen AI
-Halo's firmware holds. If it doesn't, stop. Otherwise:
+`sha256 Fingerprint=30:1F:7C:93:3D:86:C0:D0:DD:68:4C:28:24:F5:89:C8:9B:B3:66:E3:59:87:07:98:BA:36:65:B3:61:EE:36:B0`,
+the same certificate the Ryzen AI Halo's firmware holds, and `rex-ca.der: OK` (the same hash, of the file). If it doesn't,
+stop. Otherwise:
 
 ```bash
 sudo mokutil --import rex-ca.der   # asks you to make up a one-time password

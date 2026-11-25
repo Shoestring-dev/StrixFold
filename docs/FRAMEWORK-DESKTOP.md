@@ -149,13 +149,13 @@ node1 reaches node0 by the SSH name `node0`, no password prompt (the deploy, `fi
 run from node1). On node1:
 
 ```bash
-ssh-keygen -t ed25519               # only if you have no key yet
-ssh-copy-id 10.40.0.1
-printf 'Host node0\n    HostName 10.40.0.1\n' >> ~/.ssh/config
+[ -f ~/.ssh/strixfold ] || ssh-keygen -t ed25519 -N '' -C strixfold -f ~/.ssh/strixfold   # for node0 only, no passphrase
+ssh-copy-id -i ~/.ssh/strixfold.pub -o PreferredAuthentications=keyboard-interactive,password 10.40.0.1   # USER@10.40.0.1 if the names differ
+printf '\nHost node0\n    HostName 10.40.0.1\n    IdentityFile ~/.ssh/strixfold\n    IdentitiesOnly yes\n' >> ~/.ssh/config && chmod 600 ~/.ssh/config
 ssh node0 true
 ```
 
-Add a `User` line under `Host node0` if the user names differ. Large copies to node0 then go over USB4.
+The key is for node0 only: your other keys keep their passphrases. Add a `User` line under `Host node0` if the user names differ. Large copies to node0 then go over USB4.
 
 On both boxes, add your user to the GPU groups and log out/in (or open a new SSH session):
 
@@ -166,11 +166,20 @@ sudo usermod -aG render,video "$USER"
 ## 5. ROCm 10.1 from AMD's Ubuntu repo, gfx1151 only
 
 The rex packages (debs.ryai.dev) are Debian-13 builds; do not add that repo on Ubuntu. AMD's own stable repo has
-an ubuntu2604 suite that works on 26.10. On both boxes:
+an ubuntu2604 suite that works on 26.10. Its key is checked against the one that address gave us on 25 November 2026
+("AMD MLSE DevOps", made in January 2026; we found no second source for it). On both boxes:
 
 ```bash
 sudo install -d /etc/apt/keyrings
-curl -fsSL https://stable.repo.amd.com/rocm/gpg/packages.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/amdrocm.gpg
+curl -fsSL https://stable.repo.amd.com/rocm/gpg/packages.gpg -o /tmp/amdrocm.asc
+K=$(gpg --show-keys --with-colons /tmp/amdrocm.asc | awk -F: '$1=="pub"{p=1} $1=="fpr"&&p{print $10;p=0}')
+[ "$K" = D0F004A0025A1145C7807FCD0701EAC4D5E02107 ] && sudo gpg --yes --dearmor -o /etc/apt/keyrings/amdrocm.gpg /tmp/amdrocm.asc \
+  && echo "the key is in" || echo "not the key we saw"
+```
+
+It must print `the key is in`. If it doesn't, stop. Otherwise:
+
+```bash
 sudo tee /etc/apt/sources.list.d/amdrocm-stable.sources >/dev/null <<'EOF'
 Types: deb
 URIs: https://stable.repo.amd.com/rocm/core/packages/ubuntu2604/

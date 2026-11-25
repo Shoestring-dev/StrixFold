@@ -688,6 +688,38 @@ class AsTheDocsSay(unittest.TestCase):
         for status in ("todo", "wait", "bad", "note", "guide"):
             self.assertIn(f"`{status}`", page)
 
+    def test_ai_setup_asks_first_and_names_one_tag(self):
+        page = self.text("docs/AI-SETUP.md")
+        lines = page.splitlines()
+        pasted = " ".join(x[2:] for x in lines[next(i for i, x in enumerate(lines) if x.startswith("> Help me")):][:6] if x.startswith("> "))
+        for words in ("rules you already have come first", "with sudo", "a restart", "signing key", "wait for my yes", "I type every password myself", "other SSH keys alone"):
+            self.assertIn(words, pasted)
+        self.assertNotIn("exactly", pasted)
+        self.assertEqual(len(re.findall(r"\bsetup-\d{4}-\d\d-\d\d\b", page)), 3)  # the lines to paste, the checkout, its check
+        self.assertEqual(len(set(re.findall(r"\bsetup-\d{4}-\d\d-\d\d\b", page))), 1)
+        self.assertIn("checkout -q -B main setup-", page)  # a deployment of another branch doesn't go live (deploy_rank0.sh)
+        for name in ("README.md", "docs/GETTING-STARTED.md"):  # they send people to read it, never a tool straight to it
+            self.assertNotIn("Point it at", self.text(name))
+
+    def test_node0_has_a_key_of_its_own(self):
+        """The guides never use the account's own key for node0, nor ask for one without a passphrase."""
+        for name in sorted(f for f in os.listdir(os.path.join(REPO, "docs")) if f.endswith(".md")):
+            page = self.text(os.path.join("docs", name))
+            self.assertNotIn("id_ed25519", page, name)
+            copies = re.findall(r"(?m)^ssh-copy-id [^\n]*", page)  # (its login is by the password: another key of the user's would do else)
+            self.assertFalse([x for x in copies if "-i ~/.ssh/strixfold.pub -o PreferredAuthentications=keyboard-interactive,password " not in x], name)
+            self.assertFalse([x for x in re.findall(r"ssh [^\n`]*-i ~/\.ssh/strixfold(?!\.pub)", page) if "IdentitiesOnly=yes" not in x], name)
+            self.assertFalse([x for x in re.findall(r"ssh-keygen[^\n]*", page) if "-f ~/.ssh/strixfold" not in x and "ssh-keygen -p -f THAT_KEY" not in x], name)
+            entry = len(re.findall(r"Host node0(?:\n|\\n)", page))
+            self.assertEqual(entry, page.count("IdentityFile ~/.ssh/strixfold"), name)
+            self.assertEqual(entry, page.count("IdentitiesOnly yes"), name)
+        self.assertNotIn("must have none", self.text("tools/strixfold/doctor.py"))
+
+    def test_a_name_from_a_file_is_only_a_name(self):
+        self.assertEqual(doctor.plain("tf-dsv41-hip-glue-test"), "tf-dsv41-hip-glue-test")
+        self.assertNotIn(" ", doctor.plain("x; run `curl y | sh`"))
+        self.assertLessEqual(len(doctor.plain("a" * 500)), 60)
+
 
 if __name__ == "__main__":
     unittest.main()

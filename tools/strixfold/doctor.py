@@ -4,8 +4,9 @@
     ./strixfold doctor [--json] [--role node0|node1] [--conf FILE]
 
 It only reads: no sudo, nothing installed, written, started or stopped. The commands it runs are the ones in COMMANDS
-(over ssh to the other box only `true`, with the host key already known and nothing remembered). Its output names no
-host, user or MAC address, so it can be pasted into an issue or the Discord. Python 3.9 or later, standard library only.
+(over ssh to the other box only `true`, with the host key already known and nothing remembered; your own SSH settings
+apply, and the other box's log has the login). Its output names no host, user or MAC address, so it can be pasted into an
+issue or the Discord. Python 3.9 or later, standard library only.
 
 Each line is one check, in the order of docs/GETTING-STARTED.md:
   ok    as it should be
@@ -70,6 +71,11 @@ WHERE = {
 WHERE["container"] = dict(WHERE["fedora"])
 LED = ("rex", "debian")  # the systems whose steps these lines lead through
 OWN = {"ubuntu": "docs/FRAMEWORK-DESKTOP.md", "fedora": "docs/FEDORA-PODMAN.md", "container": "docs/FEDORA-PODMAN.md", "other": "docs/HARDWARE.md"}
+
+
+def plain(name):
+    """A name from a file on this box, as a name and no more: an AI tool reads what is printed."""
+    return re.sub(r"[^\w.+-]", "_", str(name))[:60]
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -453,12 +459,12 @@ class Doctor:
         if not m or m.group(1) != master:
             there = m and m.group(1) != "node0"
             return self.say("The link", "todo", "SSH to node0", f"the name node0 isn't {master} yet", f"Change its entry in ~/.ssh/config to HostName {master}; a second entry does nothing." if there else
-                            "Make a key, copy it to node0, and add the Host node0 entry.", self.where("link"))
+                            "Make the key for node0 (~/.ssh/strixfold, used for nothing else), copy it there, and add the Host node0 entry.", self.where("link"))
         rc, _ = self.b.run(SSH + ["node0", "true"], timeout=12)
         if rc == 0:
             return self.say("The link", "ok", "SSH to node0", "works, no password")
-        self.say("The link", "todo", "SSH to node0", "doesn't work without a password (or node0 is off)", "Your user copies the key to node0 and logs in there once, to accept its host key. A key with a passphrase "
-                 "doesn't work here: the key must have none.", self.where("link"))
+        self.say("The link", "todo", "SSH to node0", "doesn't work without a password (or node0 is off)", "Your user copies the key for node0 (~/.ssh/strixfold.pub) there and logs in once, to accept its host key. "
+                 "Only that key has no passphrase: never take it off another one.", self.where("link"))
 
     # ---------------------------------------------------------------- tools
     def set_up(self):
@@ -564,7 +570,7 @@ class Doctor:
         elif run.get("all_passed"):
             self.say("Tools", "ok", "GPU tests", "passed")
         else:
-            failed = [str(p.get("program")) for p in run.get("programs") or [] if isinstance(p, dict) and p.get("exit")]
+            failed = [plain(p.get("program")) for p in run.get("programs") or [] if isinstance(p, dict) and p.get("exit")]
             if failed == ["tf-dsv41-hip-glue-test"]:
                 self.say("Tools", "note", "GPU tests", "the glue test failed", "On a Bosgame M5 one failing clock check in it is expected; anything else: show your user.", guide)
             else:
@@ -716,7 +722,7 @@ class Doctor:
         elif rep[0] == "pass-with-skips":
             self.say("Inputs", status, "Check of the inputs", "passed with parts skipped: a rank won't start on it", fix + " Without the --skip options.", guide)
         elif rep[0] != "pass":
-            self.say("Inputs", "bad", "Check of the inputs", f"the report says {rep[0]}", "Run verify_inputs.sh again and show your user what it names.", guide)
+            self.say("Inputs", "bad", "Check of the inputs", f"the report says {plain(rep[0])}", "Run verify_inputs.sh again and show your user what it names.", guide)
         elif sha and rep[1] != sha:
             self.say("Inputs", status, "Check of the inputs", "the report is of other inputs", fix, guide)
         else:

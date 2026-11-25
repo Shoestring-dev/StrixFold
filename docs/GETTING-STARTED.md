@@ -4,8 +4,9 @@ This page gives the order of the steps, from two new boxes to a first answer and
 types we use. The long parts already have their own guides. This page links to the right section of each and lists the
 commands to run in order.
 
-Using an AI coding tool to do it? Point it at [AI-SETUP.md](AI-SETUP.md). Either way, `./strixfold doctor` in a clone of this
-repository says what a box still needs at any point. It only reads.
+Using an AI coding tool to do it? Read [AI-SETUP.md](AI-SETUP.md) yourself first: it says what changes on your boxes and has the
+lines to give the tool. Either way, `./strixfold doctor` in a clone of this repository says what a box still needs at any point. It
+only reads.
 
 The two boxes play different parts. **node0** is rank 0 and serves the API. **node1** is rank 1, and it is also where
 you build and run the scripts. Pick which box is which before you start.
@@ -81,7 +82,7 @@ Then go to step 3.
 
 ## 2b. Bosgame M5
 
-Follow [BOSGAME-M5.md](BOSGAME-M5.md) to its end on both boxes. It sets up the BIOS and installs Debian 13. It
+Follow steps 1 to 7 of [BOSGAME-M5.md](BOSGAME-M5.md) on both boxes. It sets up the BIOS and installs Debian 13. It
 installs the 7.2.7 kernel with Secure Boot on, gives the GPU 124 GiB, and installs ROCm 10.0. That is the same stack
 as the Ryzen AI Halo. Then go to step 3.
 
@@ -151,16 +152,21 @@ node1 reaches node0 over SSH by the name `node0`, with no password prompt. The b
 checks all run from node1. On node1:
 
 ```bash
-ssh-keygen -t ed25519               # only if you have no key yet
-ssh-copy-id 10.40.0.1
+[ -f ~/.ssh/strixfold ] || ssh-keygen -t ed25519 -N '' -C strixfold -f ~/.ssh/strixfold   # for node0 only, no passphrase
+ssh-copy-id -i ~/.ssh/strixfold.pub -o PreferredAuthentications=keyboard-interactive,password 10.40.0.1   # USER@10.40.0.1 if the names differ
 cat >> ~/.ssh/config <<'EOF'
+
 Host node0
     HostName 10.40.0.1
+    IdentityFile ~/.ssh/strixfold
+    IdentitiesOnly yes
 EOF
+chmod 600 ~/.ssh/config
 ssh node0 true
 ```
 
-Add a `User` line under `Host node0` if your user name on node0 is different. Large copies to node0 then go over the
+The scripts use this key with nobody there to type a passphrase, so it is a key of its own: your other keys keep theirs.
+Anything that runs as you on node1 can use it to run commands as you on node0. Add a `User` line under `Host node0` if your user name on node0 is different. Large copies to node0 then go over the
 USB4 link.
 
 ## 4. Toolchain and source
