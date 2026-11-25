@@ -4,6 +4,9 @@ This page gives the order of the steps, from two new boxes to a first answer and
 types we use. The long parts already have their own guides. This page links to the right section of each and lists the
 commands to run in order.
 
+Using an AI coding tool to do it? Point it at [AI-SETUP.md](AI-SETUP.md). Either way, `./strixfold doctor` in a clone of this
+repository says what a box still needs at any point. It only reads.
+
 The two boxes play different parts. **node0** is rank 0 and serves the API. **node1** is rank 1, and it is also where
 you build and run the scripts. Pick which box is which before you start.
 
@@ -20,8 +23,9 @@ StrixFold's userspace in a rootless Podman container on Fedora instead, see [FED
 - **For a Bosgame M5:** a USB stick of 1 GB or more, a monitor and a USB keyboard
   ([BOSGAME-M5.md](BOSGAME-M5.md)).
 - **Internet on both boxes,** for packages and for about 400 GB of model files (on node1; it copies them to node0).
-- **Free disk space:** about 620 GB on node1 and 510 GB on node0. Each box holds the checkpoint (197 GB) and the
-  Engram shards (203 GB). node1 also holds both ranks' caches (106 GB each), and node0 holds its own
+- **Free disk space:** about 660 GB on node1 and 550 GB on node0. Each box holds the checkpoint (211 GB) and the
+  Engram shards (203 GB). node1 also holds both ranks' caches (106 GB each), and node0 holds its own. The rest is room
+  to work in
   ([BUILD_AND_RUN.md §1](../tools/dsv41-hip/BUILD_AND_RUN.md#1-what-you-need)).
 - **Time:** about 30 minutes per box for the Bosgame setup, plus the downloads. Preparing the inputs reads about 1 TB
   and writes 212 GB, and checking them takes about 15 minutes per box.
@@ -161,10 +165,10 @@ USB4 link.
 
 ## 4. Toolchain and source
 
-On both boxes:
+On both boxes (`first_light.sh` asks the server's `/health` with `curl`):
 
 ```bash
-sudo apt install git rsync python3-venv
+sudo apt install git rsync wget curl python3-venv
 ```
 
 On node1, install Zig 0.17.0 so that `~/opt/zig/zig` is the zig binary (`zig_build.sh` looks there; set `ZIG` to

@@ -16,7 +16,7 @@ addresses.
 | Link | two USB4 cables (thunderbolt_net): `thunderbolt0` 10.40.0.1/2 carries the engine's control and data links, `thunderbolt1` 10.40.1.1/2 the stripe and bulk copies; MTU **1500** on both. Setup and tuning: [docs/TUNING.md](../../docs/TUNING.md) |
 | Toolchain | Zig 0.17.0 (`~/opt/zig/zig`); Python 3.13; a venv for the input tools (`~/venvs/tfp-inputs`) pinned by `requirements-inputs.lock.txt` (numpy 2.3.5, tokenizers 0.22.1, torch 2.9.0+cpu); for the Triton kit, the pinned AMD Triton build in [tri/README.md](tri/README.md) |
 | Memory | per rank: 98.1 GiB of weights (GTT 98.8 GiB measured) plus the KV arena (2.5-2.8 GiB at 8K context and one stream); keep at least 8 GiB MemAvailable while serving |
-| Disk, each box | the checkpoint `~/models/tf-port/libertai-2.9bpw` (LibertAI EXL3 2.9 bpw @ c178a012, 197 GB), the Engram shards 47/48 of DeepSeek-V4.1-Flash-1017 @ 1bae0e10 in `~/models/tf-port/ds1017-1bae0e10` (203 GB), and the input bundle `~/models/tf-port/inputs-tp2-c178a012` (that rank's 106 GB rank cache plus 0.1 GB of tables) |
+| Disk, each box | the checkpoint `~/models/tf-port/libertai-2.9bpw` (LibertAI EXL3 2.9 bpw @ c178a012, 211 GB), the Engram shards 47/48 of DeepSeek-V4.1-Flash-1017 @ 1bae0e10 in `~/models/tf-port/ds1017-1bae0e10` (203 GB), and the input bundle `~/models/tf-port/inputs-tp2-c178a012` (that rank's 106 GB rank cache plus 0.1 GB of tables) |
 
 No NVIDIA driver, CUDA, NCCL or NVIDIA container is used or needed anywhere below. The configuration below serves
 text; image input (`MODALITIES=text_image`, the vision tower on rank 0) needs the tower's sidecar and image routing

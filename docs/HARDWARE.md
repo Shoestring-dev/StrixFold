@@ -82,7 +82,7 @@ The published numbers use Debian 13 with AMD's kernel 7.2.7 and ROCm 10.0.0-4 (H
 
 ## What doesn't work yet
 
-- **Boxes with less than 128 GB.** Each box holds half of the 197 GB model plus its caches, with the GPU given 124 GiB.
+- **Boxes with less than 128 GB.** Each box holds half of the 211 GB model plus its caches, with the GPU given 124 GiB.
 - **Three or more boxes.** StrixFold splits the model across exactly two.
 - **Other Ryzen AI Max chips and laptops** with the 395 haven't been reported.
 

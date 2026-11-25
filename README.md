@@ -36,6 +36,9 @@ machines it runs DeepSeek-V4.1-Flash at about 72% of the speed of two NVIDIA DGX
 - How each number was measured, with the raw tables: [docs/RESULTS.md](docs/RESULTS.md).
 - Numbers from other people's boxes: [docs/COMMUNITY-RESULTS.md](docs/COMMUNITY-RESULTS.md). Add yours.
 
+Setting up with an AI coding tool? Point it at [docs/AI-SETUP.md](docs/AI-SETUP.md). **New (November 2026):** tested on made-up
+boxes and on our own pair of Bosgame M5s, not yet on a fresh pair. Tell us where it gets stuck.
+
 New boxes? [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) goes step by step from two AMD Ryzen AI Halo boxes
 or two Bosgame M5s to a first answer and a benchmark. Owners also run it on Framework Desktops, Minisforum MS-S1 Maxes,
 GMKtec EVO-X2s and Beelink GTR9 Pros: [docs/HARDWARE.md](docs/HARDWARE.md) lists each and what to watch for.
@@ -48,7 +51,7 @@ GMKtec EVO-X2s and Beelink GTR9 Pros: [docs/HARDWARE.md](docs/HARDWARE.md) lists
 | Link | two USB4 cables (thunderbolt_net), MTU 1500 on both |
 | GPU stack | ROCm 10.0.0-4 (HIP 7.15, clang 23), Linux kernel 7.2.7 |
 | Toolchain | Zig 0.17.0, Python 3.13 |
-| Model | DeepSeek-V4.1-Flash-1017 as an EXL3 2.9 bpw pack (197 GB), plus its Engram shards (203 GB). Not included: download them yourself. |
+| Model | DeepSeek-V4.1-Flash-1017 as an EXL3 2.9 bpw pack (211 GB), plus its Engram shards (203 GB). Not included: download them yourself. |
 
 No NVIDIA driver, CUDA or NCCL is used. Text is the default; image input runs on the GPU with `MODALITIES=text_image`
 (the model's vision tower on the first box; setup and limits in

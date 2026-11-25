@@ -19,7 +19,7 @@ staggered start with a cooldown (§9).
 
 - Two Framework Desktops, Ryzen AI Max+ 395, 128 GB each, and two USB4 cables rated 40 Gb/s or more.
 - Ubuntu 26.10 on both (Server or Desktop; the IP-configuration step differs, §4).
-- Free disk: about 620 GB on node1 and 510 GB on node0 ([GETTING-STARTED §1](GETTING-STARTED.md#1-what-you-need)).
+- Free disk: about 660 GB on node1 and 550 GB on node0 ([GETTING-STARTED §1](GETTING-STARTED.md#1-what-you-need)).
 - Internet on both; about 400 GB of model files download on node1 and copy to node0.
 - Roles, picked before you start: **node0** is rank 0 and serves the API; **node1** is rank 1 and is the build
   box where every script runs.
@@ -244,7 +244,7 @@ Everything from [GETTING-STARTED §5](GETTING-STARTED.md#5-build-prepare-deploy-
 | 2 | Build | `tools/dsv41-hip/zig_build.sh install` | `Build Summary: N/N steps succeeded` |
 | 3 | Test build | `zig_build.sh test … -Dhip-triton-kit=$HOME/tfp/tri/kit/gfx1151` | green |
 | 4 | GPU tests | `tools/dsv41-hip/run_gpu_tests.sh` (no EXTRA_KIT) | smoke, ABI, glue all exit 0 |
-| 5 | Model files | the two `hf download` commands (§5), pinned revisions | checkpoint 197 GB + Engram shards 203 GB |
+| 5 | Model files | the two `hf download` commands (§5), pinned revisions | checkpoint 211 GB + Engram shards 203 GB |
 | 6 | Copy models | `rsync -a … node0:models/tf-port/` | both boxes hold both downloads |
 | 7 | Inputs | `prepare_inputs.sh … ~/models/tf-port/inputs-tp2-c178a012`; note `$H` | bundle + manifest |
 | 8 | Copy bundle | `rsync -a --exclude rank1/ … node0:models/tf-port/` | |

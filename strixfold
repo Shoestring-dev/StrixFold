@@ -1,0 +1,13 @@
+#!/bin/sh
+# strixfold doctor [...]: is this box ready for StrixFold, and what comes next? Reads only (tools/strixfold/doctor.py).
+self=$(readlink -f -- "$0") || exit 1
+here=$(dirname -- "$self")
+cmd=${1:-help}
+[ $# -gt 0 ] && shift
+case $cmd in
+  doctor)
+    command -v python3 >/dev/null 2>&1 || { echo "strixfold doctor needs python3: install it first" >&2; exit 1; }
+    PYTHONDONTWRITEBYTECODE=1 exec python3 "$here/tools/strixfold/doctor.py" "$@";;
+  help|-h|--help) echo "usage: ./strixfold doctor [--json] [--role node0|node1] [--conf FILE]   check this box; changes nothing";;
+  *) echo "strixfold: no command '$cmd' (try: ./strixfold doctor)" >&2; exit 2;;
+esac
