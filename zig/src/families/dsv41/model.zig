@@ -560,7 +560,10 @@ pub const Model = struct {
             m.tables = try engram_io.Tables.open(gpa, io, edir);
             m.epool = try engram_io.Pool.init(gpa, io, 64);
             m.eh = try prompt.EngramHost.init(a, c, engram.Hasher.init(c.*, map, mult), &m.tables.?, m.epool.?, sp.rank, sp.world, chunk_rows);
-            if (try rowCacheMib()) |mib| m.ecache = try engramCache(gpa, io, &m.tables.?, c, mib, chunk_rows * (m.eh.?.hi - m.eh.?.lo));
+            if (try rowCacheMib()) |mib| {
+                m.ecache = try engramCache(gpa, io, &m.tables.?, c, mib, chunk_rows * (m.eh.?.hi - m.eh.?.lo));
+                std.log.info("engram row cache: {d} MiB, {d} rows of {d} bytes", .{ mib, m.ecache.?.sets * 8, m.ecache.?.slot });
+            }
             m.eh.?.rcache = m.ecache;
             if (o.engram_aio) {
                 // a round's reads, 2 x 12 x its rows at most: 1,024 slots for each 16 rows of the round-row setting
