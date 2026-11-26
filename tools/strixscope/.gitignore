@@ -1,0 +1,25 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# TypeScript incremental build cache + accidental Vite config compile outputs
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# Rust / Tauri
+src-tauri/target
+src-tauri/gen
+
+# Local data
+*.db
+# Real-data snapshot for browser-only `npm run dev` (private: never commit,
+# never ship; vite.config.ts serves it in dev only)
+dev-data/
