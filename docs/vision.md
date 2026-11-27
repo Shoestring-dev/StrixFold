@@ -83,7 +83,7 @@ Frames are sampled as Qwen3-VL's processor does: two a second spread over the wh
 256, each pair of frames one block that the prompt prefixes with its time (`<1.5 seconds>`). Frames are sized so a
 video takes at most 768 tokens a block and 16,384 in all (`TENSORFOLD_VIDEO_TOKENS`). The tower encodes a run of
 blocks of at most 16,384 patches at a time, the scratch one full-size image needs, and blocks never attend to one
-another. A request takes up to two videos of 16 MiB each, 20 MiB in all, so the base64 still fits the 32 MiB
+another. A request takes up to two videos of 16 MiB each, 20 MiB in all, so the base64 still fits the
 request body, and up to an hour of footage. Videos and images can share a message; the image limits count images
 only.
 
@@ -120,7 +120,7 @@ tensorfold serve Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP --parallel 2 --vision \
   --vision-max-images 50 --vision-image-tokens 16384
 ```
 
-Changing the count does not change the other limits: 10 MiB encoded per image and 20 MiB total, within a 32 MiB HTTP body.
+Changing the count does not change the other limits: 10 MiB encoded per image and 20 MiB total, within the 256 MiB request body.
 Decoded images are bounded to 8,192 pixels per dimension, 16 million pixels per image and 32 million total.
 EXIF orientation is applied and transparency is composited onto white; animated and multipage inputs are refused.
 Up to 16 requests decode and process images at once; more wait up to a minute, and past 128 waiting the server answers 503 so the client retries.
