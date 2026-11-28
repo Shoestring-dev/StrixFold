@@ -241,6 +241,8 @@ fn f(s: &str) -> f64 {
 }
 
 pub fn parse(line: &str) -> Option<Line> {
+    // Journal lines keep their TF_LOG_TIME stamp; the journal timestamp is the time axis, so drop it.
+    let line = crate::runlog::split_stamp(line).map_or(line, |(_, rest)| rest);
     // Cheap prefix dispatch first: most lines are access logs and the lanes/cache/done trio.
     if line.starts_with("[tensorfold] ") {
         if let Some(c) = DONE.captures(line) {
@@ -693,5 +695,28 @@ mod tests {
         let l = r#"info: lanes: step 5 rank 0 prompt pass: 300 tokens, slot 1, extent at [tensorfold] 1.2.3.4 "POST /v1/completions HTTP/1.1" 200 -"#;
         // The access part wins only if the pass pattern cannot match; here the pass is cut, so it is dropped.
         assert!(!matches!(parse(l), Some(Line::PromptPass { .. })));
+    }
+
+    #[test]
+    fn log_time_stamp_is_skipped() {
+        let done = "2026-11-28T00:22:39.363059Z [tensorfold] done chatcmpl-59719d177decfce826bd8a4b212f1f07 prompt=196100 cached=194560 thinking=True effort=none tokens=134 sha=7ecec64e58f3 finish=stop rounds=28 accepted=106/128";
+        assert!(matches!(
+            parse(done),
+            Some(Line::Done { prompt: 196100, .. })
+        ));
+        let pass = "2026-11-28T00:22:36.041564Z info: lanes: step 99285 rank 0 prompt pass: 196100 tokens, slot 0, extent at 149504, 262144 rows; resumes state 99 at 194560 in place; 0 other stream(s) live; collectives (stream idle): staged 4663230, cable1 4663230, cable2 4441249, host 115889";
+        assert!(matches!(
+            parse(pass),
+            Some(Line::PromptPass {
+                tokens: 196100,
+                resume: Resume::Ram,
+                ..
+            })
+        ));
+        let access = r#"2026-11-28T00:22:36.018587Z [tensorfold] 1.2.3.4 "POST /v1/chat/completions HTTP/1.1" 200 -"#;
+        assert!(matches!(
+            parse(access),
+            Some(Line::Access { status: 200, .. })
+        ));
     }
 }
