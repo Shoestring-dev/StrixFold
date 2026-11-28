@@ -86,6 +86,9 @@ On a Bosgame M5 (same chip, ships with Windows), first follow [docs/BOSGAME-M5.m
 Driving it from an agent harness (tool calls, and keeping agents out of repeat loops):
 [docs/AGENTS.md](docs/AGENTS.md).
 
+What the pair did (requests, speed, caches, memory and restarts, by day and hour), on a desktop that reads its logs over
+ssh without writing to the boxes: [tools/strixscope/](tools/strixscope/README.md).
+
 Images: natively with `MODALITIES=text_image` (tools/dsv41-hip/ADAPTER.md 8.1), or for a text-only server through a
 small local vision model that describes them and answers follow-up questions:
 [docs/LOOK-AT-IMAGE.md](docs/LOOK-AT-IMAGE.md).

@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+/* Tokens: dark-first, light follows the system setting. Series colors come
+   from lib/theme.ts (validated); keep the two in sync. */
+:root {
+  color-scheme: dark;
+  --page: #07090d;
+  --surface: #10141c;
+  --surface-2: #151a24;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --ink: #eef1f6;
+  --ink-2: #b9c1cf;
+  --muted: #7d8696;
+  --prefill: #508dff;
+  --decode: #e86333;
+  --cache: #00ae7e;
+  --memory: #be8800;
+  --rank1: #e65695;
+  --rank0: #8e7ef0;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --shadow: 0 24px 48px -28px rgba(0, 0, 0, 0.75);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --page: #f3f5f8;
+    --surface: #ffffff;
+    --surface-2: #f7f8fb;
+    --line: rgba(13, 17, 23, 0.08);
+    --line-strong: rgba(13, 17, 23, 0.14);
+    --ink: #0d1117;
+    --ink-2: #4a5260;
+    --muted: #7a8291;
+    --prefill: #3e7aeb;
+    --decode: #d3501c;
+    --cache: #009b6c;
+    --memory: #ab7500;
+    --rank1: #d04283;
+    --rank0: #7d6cdb;
+    --shadow: 0 18px 40px -30px rgba(20, 30, 60, 0.35);
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Ubuntu, "DejaVu Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* A fixed aurora behind everything: three soft washes in the concept hues.
+   Static (no animation, no blur filter): cheap on WebKitGTK. */
+.aurora {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 520px at 12% -10%, color-mix(in srgb, var(--prefill) 16%, transparent), transparent 70%),
+    radial-gradient(900px 480px at 95% 0%, color-mix(in srgb, var(--rank0) 14%, transparent), transparent 70%),
+    radial-gradient(1000px 600px at 60% 115%, color-mix(in srgb, var(--decode) 9%, transparent), transparent 70%);
+}
+
+.card {
+  position: relative;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 100%, transparent), var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+.card::before {
+  /* top highlight edge */
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 30%);
+}
+
+.chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  transition: background 160ms, color 160ms, border-color 160ms;
+}
+.chip:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.chip[data-on="true"] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--prefill) 22%, transparent);
+  border-color: color-mix(in srgb, var(--prefill) 55%, transparent);
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+.label {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.scroll-area {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

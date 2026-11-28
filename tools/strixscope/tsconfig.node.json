@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    // Keep tsc's output away from vite.config.ts: Vite loads a
+    // vite.config.js first, so an emitted copy there would go stale.
+    "outDir": "./node_modules/.tmp/tsconfig.node",
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts"]
+}
